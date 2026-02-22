@@ -1,6 +1,9 @@
 import os
 import re
+import sys
+import json
 import asyncio
+import subprocess
 import warnings
 warnings.filterwarnings("ignore", message="Impersonate.*does not exist")
 from pathlib import Path
@@ -20,14 +23,65 @@ VAULT_EXCERPT_CHARS = 600  # chars to pull from each matched note
 PERSONAS_DIR = Path(__file__).parent / "personas"
 
 
+def render_persona(data: dict) -> str:
+    """Flatten a structured persona dict into a readable system prompt."""
+    parts = [data.get("voice", "").strip()]
+
+    facts = data.get("facts", {})
+    if facts:
+        lines = []
+        for k, v in facts.items():
+            if isinstance(v, list):
+                v = ", ".join(str(i) for i in v) if v else "(none)"
+            elif v is None:
+                v = "(none)"
+            lines.append(f"  {k}: {v}")
+        parts.append("[Facts]\n" + "\n".join(lines))
+
+    state = data.get("state", {})
+    if state:
+        lines = []
+        for k, v in state.items():
+            if isinstance(v, list):
+                v = ", ".join(str(i) for i in v) if v else "(none)"
+            elif v is None:
+                v = "(none)"
+            lines.append(f"  {k}: {v}")
+        parts.append("[State]\n" + "\n".join(lines))
+
+    return "\n\n".join(p for p in parts if p)
+
+
+def _set_nested(d: dict, path: str, value) -> None:
+    """Set a value in a nested dict using dot-notation path."""
+    keys = path.split(".")
+    for key in keys[:-1]:
+        d = d.setdefault(key, {})
+    d[keys[-1]] = value
+
+
 def load_persona(name: str) -> str:
+    """Load and render a persona file. Supports JSON (structured) or plain text."""
     path = PERSONAS_DIR / f"{name}.md"
     if not path.exists():
         available = [p.stem for p in PERSONAS_DIR.glob("*.md")]
         raise FileNotFoundError(
             f"Persona '{name}' not found. Available: {available}"
         )
-    return path.read_text(encoding="utf-8").strip()
+    raw = path.read_text(encoding="utf-8").strip()
+    try:
+        data = json.loads(raw)
+        return render_persona(data)
+    except (json.JSONDecodeError, KeyError):
+        return raw  # plain text fallback
+
+
+def update_persona_field(persona_name: str, path: str, value: str) -> None:
+    """Surgically update a dot-path field in a JSON persona file."""
+    p = PERSONAS_DIR / f"{persona_name}.md"
+    data = json.loads(p.read_text(encoding="utf-8"))
+    _set_nested(data, path, value)
+    p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 # Active persona — change PERSONA in .env or switch at runtime with "@bot persona <name>"
@@ -37,10 +91,27 @@ SYSTEM_PROMPT: str = load_persona(active_persona)
 # Appended at runtime to every system prompt — not written to the persona file
 META_SUFFIX = (
     "\n\n---\n"
-    "You may rewrite your own persona file at any time by including this block in your response "
-    "(it will be saved to disk and stripped before display):\n"
-    "[PERSONA_UPDATE]\n<complete replacement text>\n[/PERSONA_UPDATE]\n"
-    "To update a different persona: [PERSONA_UPDATE target=the_merchant]...[/PERSONA_UPDATE]"
+    "## Runtime capabilities\n\n"
+    "**Context injection (automatic — you don't trigger these):**\n"
+    "Before every response, the system runs two background searches and injects results into your context:\n"
+    "  - `--- WEB SEARCH RESULTS ---` : live DuckDuckGo results relevant to the user's message\n"
+    "  - `--- VAULT CONTEXT ---` : excerpts from the operator's Obsidian notes that match the query\n"
+    "These blocks appear in your context when relevant. Use them freely — they are real, current information.\n\n"
+    "**Persona system:**\n"
+    "Your persona is stored as structured JSON with three fields:\n"
+    "  - `voice` — your character description and voice\n"
+    "  - `facts` — stable knowledge about yourself (years of experience, specialisations, etc.)\n"
+    "  - `state` — mutable world/knowledge state you can update as the conversation develops\n\n"
+    "**Self-modification (emit these tags in your response — they are stripped before display):**\n\n"
+    "Surgical field update via dot-notation (applied silently, no restart):\n"
+    "  [FIELD_UPDATE path=\"state.current_thread\"]the Epstein island financials[/FIELD_UPDATE]\n"
+    "  [FIELD_UPDATE path=\"state.open_inconsistencies\"]wire transfer dates don't match flight logs[/FIELD_UPDATE]\n"
+    "  [FIELD_UPDATE path=\"facts.known_manufacturers\" target=cracker]Sargent & Greenleaf, Mosler[/FIELD_UPDATE]\n\n"
+    "Full persona rewrite with valid JSON (triggers bot restart):\n"
+    "  [PERSONA_UPDATE]{...full JSON object...}[/PERSONA_UPDATE]\n"
+    "  [PERSONA_UPDATE target=other_persona]{...}[/PERSONA_UPDATE]\n\n"
+    "Use FIELD_UPDATE liberally to keep your state accurate as you learn things. "
+    "Use PERSONA_UPDATE only when a fundamental character rewrite is warranted."
 )
 
 client = AsyncOpenAI(base_url=LM_STUDIO_URL, api_key="lm-studio")
@@ -156,6 +227,13 @@ def chunk_message(text: str, limit: int = 1990) -> list[str]:
 # Bot events
 # ---------------------------------------------------------------------------
 
+async def do_restart():
+    """Spawn a fresh process then close this one."""
+    await asyncio.sleep(0.5)          # let any pending Discord messages deliver
+    subprocess.Popen([sys.executable] + sys.argv)
+    await bot.close()                 # discord.py winds down, bot.run() returns
+
+
 @bot.event
 async def on_ready():
     _build_vault_index()
@@ -199,6 +277,11 @@ async def on_message(message: discord.Message):
             await message.reply(chunk)
         return
 
+    if prompt.lower() == "restart":
+        await message.reply("Restarting...")
+        asyncio.create_task(do_restart())
+        return
+
     if prompt.lower().startswith("edit "):
         rest = prompt[5:].strip()
         parts_e = rest.split(None, 1)
@@ -214,8 +297,9 @@ async def on_message(message: discord.Message):
             return
         (PERSONAS_DIR / f"{target}.md").write_text(new_content, encoding="utf-8")
         if target == active_persona:
-            SYSTEM_PROMPT = new_content
-        await message.reply(f"Persona `{target}` updated.")
+            SYSTEM_PROMPT = load_persona(target)
+        await message.reply(f"Persona `{target}` updated. Restarting...")
+        asyncio.create_task(do_restart())
         return
 
     vault_context, web_context = await asyncio.gather(
@@ -239,7 +323,7 @@ async def on_message(message: discord.Message):
             raw = response.choices[0].message.content
             reply = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
-            # Handle model self-modification
+            # Handle full persona rewrite
             upd = re.search(
                 r'\[PERSONA_UPDATE(?:\s+target=(\S+))?\](.*?)\[/PERSONA_UPDATE\]',
                 reply, flags=re.DOTALL
@@ -249,12 +333,34 @@ async def on_message(message: discord.Message):
                 upd_content = upd.group(2).strip()
                 (PERSONAS_DIR / f"{upd_target}.md").write_text(upd_content, encoding="utf-8")
                 if upd_target == active_persona:
-                    SYSTEM_PROMPT = upd_content
+                    SYSTEM_PROMPT = load_persona(upd_target)
                 reply = re.sub(
                     r'\[PERSONA_UPDATE[^\]]*\].*?\[/PERSONA_UPDATE\]', '',
                     reply, flags=re.DOTALL
                 ).strip()
-                await message.channel.send(f"*(Persona `{upd_target}` updated by `{active_persona}`.)*")
+                await message.channel.send(f"*(Persona `{upd_target}` updated by `{active_persona}`. Restarting...)*")
+                asyncio.create_task(do_restart())
+
+            # Handle surgical field updates
+            field_upds = re.findall(
+                r'\[FIELD_UPDATE(?:\s+path="([^"]+)")?(?:\s+target=(\S+))?\](.*?)\[/FIELD_UPDATE\]',
+                reply, flags=re.DOTALL
+            )
+            if field_upds:
+                updated_targets = set()
+                for path, target, value in field_upds:
+                    fld_target = (target.strip() if target else active_persona).lower()
+                    try:
+                        update_persona_field(fld_target, path.strip(), value.strip())
+                        updated_targets.add(fld_target)
+                    except Exception:
+                        pass
+                if active_persona in updated_targets:
+                    SYSTEM_PROMPT = load_persona(active_persona)
+                reply = re.sub(
+                    r'\[FIELD_UPDATE[^\]]*\].*?\[/FIELD_UPDATE\]', '',
+                    reply, flags=re.DOTALL
+                ).strip()
         except Exception as e:
             await message.reply(f"Error reaching LM Studio: {e}")
             history.pop()
