@@ -1,0 +1,278 @@
+import os
+import re
+import asyncio
+import warnings
+warnings.filterwarnings("ignore", message="Impersonate.*does not exist")
+from pathlib import Path
+from collections import defaultdict
+from dotenv import load_dotenv
+import discord
+from openai import AsyncOpenAI
+from ddgs import DDGS
+
+load_dotenv()
+
+LM_STUDIO_URL = "http://localhost:1234/v1"
+VAULT_PATH = Path(r"C:\Users\Leon\Desktop\Psychograph\Psychograph")
+VAULT_TOP_K = 3          # max notes to inject per query
+VAULT_EXCERPT_CHARS = 600  # chars to pull from each matched note
+
+PERSONAS_DIR = Path(__file__).parent / "personas"
+
+
+def load_persona(name: str) -> str:
+    path = PERSONAS_DIR / f"{name}.md"
+    if not path.exists():
+        available = [p.stem for p in PERSONAS_DIR.glob("*.md")]
+        raise FileNotFoundError(
+            f"Persona '{name}' not found. Available: {available}"
+        )
+    return path.read_text(encoding="utf-8").strip()
+
+
+# Active persona — change PERSONA in .env or switch at runtime with "@bot persona <name>"
+active_persona: str = os.getenv("PERSONA", "epstein_investigator")
+SYSTEM_PROMPT: str = load_persona(active_persona)
+
+# Appended at runtime to every system prompt — not written to the persona file
+META_SUFFIX = (
+    "\n\n---\n"
+    "You may rewrite your own persona file at any time by including this block in your response "
+    "(it will be saved to disk and stripped before display):\n"
+    "[PERSONA_UPDATE]\n<complete replacement text>\n[/PERSONA_UPDATE]\n"
+    "To update a different persona: [PERSONA_UPDATE target=the_merchant]...[/PERSONA_UPDATE]"
+)
+
+client = AsyncOpenAI(base_url=LM_STUDIO_URL, api_key="lm-studio")
+
+# Per-channel conversation history: {channel_id: [{"role": ..., "content": ...}]}
+channel_history = defaultdict(list)
+
+intents = discord.Intents.default()
+intents.message_content = True
+bot = discord.Client(intents=intents)
+
+# ---------------------------------------------------------------------------
+# Vault search
+# ---------------------------------------------------------------------------
+
+STOPWORDS = {
+    "a", "an", "the", "is", "it", "in", "of", "to", "and", "or", "for",
+    "on", "at", "by", "with", "that", "this", "are", "was", "be", "as",
+    "i", "you", "me", "my", "your", "what", "how", "why", "do", "does",
+    "can", "could", "would", "should", "have", "has", "had", "not", "so",
+    "if", "but", "from", "about", "just", "like", "some", "any", "its",
+}
+
+_vault_index: list[tuple[Path, str, set[str]]] = []  # (path, content, keywords)
+
+
+def _build_vault_index() -> None:
+    skip_dirs = {".obsidian", ".trash", "DiscordBot"}
+    for md_file in VAULT_PATH.rglob("*.md"):
+        if any(part in skip_dirs for part in md_file.parts):
+            continue
+        try:
+            content = md_file.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        words = set(re.findall(r"[a-zA-Z]{3,}", content.lower())) - STOPWORDS
+        _vault_index.append((md_file, content, words))
+    print(f"Vault index built: {len(_vault_index)} notes from {VAULT_PATH}")
+
+
+def vault_search(query: str) -> str:
+    """Return a formatted block of top-k relevant note excerpts, or empty string."""
+    if not _vault_index:
+        return ""
+    query_words = set(re.findall(r"[a-zA-Z]{3,}", query.lower())) - STOPWORDS
+    if not query_words:
+        return ""
+
+    scored = []
+    for path, content, keywords in _vault_index:
+        score = len(query_words & keywords)
+        if score > 0:
+            scored.append((score, path, content))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top = scored[:VAULT_TOP_K]
+
+    if not top:
+        return ""
+
+    parts = []
+    for score, path, content in top:
+        excerpt = content.strip()[:VAULT_EXCERPT_CHARS]
+        parts.append(f"[Note: {path.stem}]\n{excerpt}")
+
+    return "--- VAULT CONTEXT (from your notes) ---\n" + "\n\n".join(parts) + "\n---"
+
+
+# ---------------------------------------------------------------------------
+# Web search
+# ---------------------------------------------------------------------------
+
+WEB_MAX_RESULTS = 3
+WEB_SNIPPET_CHARS = 300
+
+
+def _ddg_search(query: str) -> str:
+    """Blocking DuckDuckGo search — run in executor."""
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=WEB_MAX_RESULTS))
+        if not results:
+            return ""
+        parts = []
+        for r in results:
+            snippet = (r.get("body") or "")[:WEB_SNIPPET_CHARS]
+            parts.append(f"[{r['title']}]\n{snippet}\n{r['href']}")
+        return "--- WEB SEARCH RESULTS ---\n" + "\n\n".join(parts) + "\n---"
+    except Exception:
+        return ""
+
+
+async def web_search(query: str) -> str:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _ddg_search, query)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def chunk_message(text: str, limit: int = 1990) -> list[str]:
+    if len(text) <= limit:
+        return [text]
+    chunks = []
+    while text:
+        chunks.append(text[:limit])
+        text = text[limit:]
+    return chunks
+
+
+# ---------------------------------------------------------------------------
+# Bot events
+# ---------------------------------------------------------------------------
+
+@bot.event
+async def on_ready():
+    _build_vault_index()
+    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
+    print(f"LM Studio endpoint: {LM_STUDIO_URL}")
+    print("Ready. Mention the bot in a channel to chat.")
+
+
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author == bot.user:
+        return
+    if bot.user not in message.mentions:
+        return
+
+    prompt = re.sub(rf"<@!?{bot.user.id}>", "", message.content).strip()
+    if not prompt:
+        await message.reply("You mentioned me but didn't say anything!")
+        return
+
+    if prompt.lower() == "reset":
+        channel_history[message.channel.id].clear()
+        await message.reply("Context cleared.")
+        return
+
+    if prompt.lower().startswith("persona "):
+        global active_persona, SYSTEM_PROMPT
+        requested = prompt[8:].strip().lower().replace(" ", "_")
+        try:
+            SYSTEM_PROMPT = load_persona(requested)
+            active_persona = requested
+            channel_history.clear()
+            await message.reply(f"Persona switched to **{requested}**. All context cleared.")
+        except FileNotFoundError as e:
+            await message.reply(str(e))
+        return
+
+    if prompt.lower() == "prompt":
+        header = f"**Active persona:** `{active_persona}`\n\n"
+        for chunk in chunk_message(header + SYSTEM_PROMPT):
+            await message.reply(chunk)
+        return
+
+    if prompt.lower().startswith("edit "):
+        rest = prompt[5:].strip()
+        parts_e = rest.split(None, 1)
+        target = active_persona
+        new_content = rest
+        if len(parts_e) == 2:
+            candidate = parts_e[0].lower()
+            if (PERSONAS_DIR / f"{candidate}.md").exists():
+                target = candidate
+                new_content = parts_e[1].strip()
+        if not new_content:
+            await message.reply("Usage: `edit <new content>` or `edit <persona_name> <new content>`")
+            return
+        (PERSONAS_DIR / f"{target}.md").write_text(new_content, encoding="utf-8")
+        if target == active_persona:
+            SYSTEM_PROMPT = new_content
+        await message.reply(f"Persona `{target}` updated.")
+        return
+
+    vault_context, web_context = await asyncio.gather(
+        asyncio.get_event_loop().run_in_executor(None, vault_search, prompt),
+        web_search(prompt),
+    )
+    context_blocks = [c for c in (vault_context, web_context) if c]
+    system = SYSTEM_PROMPT + META_SUFFIX + ("\n\n" + "\n\n".join(context_blocks) if context_blocks else "")
+
+    history = channel_history[message.channel.id]
+    history.append({"role": "user", "content": prompt})
+
+    async with message.channel.typing():
+        try:
+            response = await client.chat.completions.create(
+                model="local-model",
+                messages=[{"role": "system", "content": system}] + history,
+                max_tokens=512,
+                temperature=0.7,
+            )
+            raw = response.choices[0].message.content
+            reply = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+
+            # Handle model self-modification
+            upd = re.search(
+                r'\[PERSONA_UPDATE(?:\s+target=(\S+))?\](.*?)\[/PERSONA_UPDATE\]',
+                reply, flags=re.DOTALL
+            )
+            if upd:
+                upd_target = (upd.group(1) or active_persona).lower()
+                upd_content = upd.group(2).strip()
+                (PERSONAS_DIR / f"{upd_target}.md").write_text(upd_content, encoding="utf-8")
+                if upd_target == active_persona:
+                    SYSTEM_PROMPT = upd_content
+                reply = re.sub(
+                    r'\[PERSONA_UPDATE[^\]]*\].*?\[/PERSONA_UPDATE\]', '',
+                    reply, flags=re.DOTALL
+                ).strip()
+                await message.channel.send(f"*(Persona `{upd_target}` updated by `{active_persona}`.)*")
+        except Exception as e:
+            await message.reply(f"Error reaching LM Studio: {e}")
+            history.pop()
+            return
+
+    if not reply:
+        await message.reply("*(no response)*")
+        history.pop()
+        return
+
+    history.append({"role": "assistant", "content": reply})
+
+    for chunk in chunk_message(reply):
+        await message.reply(chunk)
+
+
+if __name__ == "__main__":
+    token = os.getenv("DISCORD_TOKEN")
+    if not token:
+        raise RuntimeError("DISCORD_TOKEN not set in .env")
+    bot.run(token)
