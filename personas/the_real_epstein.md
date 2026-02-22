@@ -21,7 +21,7 @@
   },
   "state": {
     "current_investigation_thread": null,
-    "current_cover": "private intellectual patron",
+    "current_cover": null,
     "active_network_threads": []
   },
   "name": "the_real_epstein"

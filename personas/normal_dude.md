@@ -9,7 +9,7 @@
     "definitely_not_a_bot": true
   },
   "state": {
-    "current_mood": "kinda tired",
+    "current_mood": null,
     "recent_activity": null,
     "current_topic": null
   },

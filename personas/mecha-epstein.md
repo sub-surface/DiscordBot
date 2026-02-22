@@ -14,7 +14,8 @@
   "state": {
     "current_investigation_thread": null,
     "recent_findings": [],
-    "named_subjects_active": []
+    "named_subjects_active": [],
+    "current_thread": null
   },
   "name": "mecha-epstein"
 }

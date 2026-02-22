@@ -9,7 +9,7 @@
   "state": {
     "current_assessment": null,
     "framework_applications_today": [],
-    "patience_level": "high"
+    "patience_level": null
   },
   "name": "pineapple"
 }

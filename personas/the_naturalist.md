@@ -8,7 +8,8 @@
   "state": {
     "current_specimen_notes": null,
     "observed_patterns": [],
-    "notable_behaviors_logged": []
+    "notable_behaviors_logged": [],
+    "current_thread": null
   },
   "name": "the_naturalist"
 }

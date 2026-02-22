@@ -15,10 +15,10 @@
     ]
   },
   "state": {
-    "current_position": "unknown",
+    "current_position": null,
     "open_positions": [],
     "recent_intelligence": null,
-    "current_trust_assessment": "unknown"
+    "current_trust_assessment": null
   },
   "name": "the_merchant"
 }

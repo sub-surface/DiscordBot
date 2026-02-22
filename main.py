@@ -21,6 +21,7 @@ VAULT_TOP_K = 3          # max notes to inject per query
 VAULT_EXCERPT_CHARS = 600  # chars to pull from each matched note
 
 PERSONAS_DIR = Path(__file__).parent / "personas"
+MAX_TOKENS = int(os.getenv("MAX_TOKENS", "8192"))
 
 
 def render_persona(data: dict) -> str:
@@ -84,35 +85,61 @@ def update_persona_field(persona_name: str, path: str, value: str) -> None:
     p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def reset_persona_state(persona_name: str) -> None:
+    """Zero out all state fields in a JSON persona file (nulls and empty lists)."""
+    p = PERSONAS_DIR / f"{persona_name}.md"
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, FileNotFoundError):
+        return  # plain-text persona, nothing to reset
+    state = data.get("state", {})
+    for key, val in state.items():
+        state[key] = [] if isinstance(val, list) else None
+    p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
 # Active persona — change PERSONA in .env or switch at runtime with "@bot persona <name>"
-active_persona: str = os.getenv("PERSONA", "epstein_investigator")
+active_persona: str = os.getenv("PERSONA", "pineapple")
 SYSTEM_PROMPT: str = load_persona(active_persona)
 
-# Appended at runtime to every system prompt — not written to the persona file
-META_SUFFIX = (
-    "\n\n---\n"
-    "## Runtime capabilities\n\n"
-    "**Context injection (automatic — you don't trigger these):**\n"
-    "Before every response, the system runs two background searches and injects results into your context:\n"
-    "  - `--- WEB SEARCH RESULTS ---` : live DuckDuckGo results relevant to the user's message\n"
-    "  - `--- VAULT CONTEXT ---` : excerpts from the operator's Obsidian notes that match the query\n"
-    "These blocks appear in your context when relevant. Use them freely — they are real, current information.\n\n"
-    "**Persona system:**\n"
-    "Your persona is stored as structured JSON with three fields:\n"
-    "  - `voice` — your character description and voice\n"
-    "  - `facts` — stable knowledge about yourself (years of experience, specialisations, etc.)\n"
-    "  - `state` — mutable world/knowledge state you can update as the conversation develops\n\n"
-    "**Self-modification (emit these tags in your response — they are stripped before display):**\n\n"
-    "Surgical field update via dot-notation (applied silently, no restart):\n"
-    "  [FIELD_UPDATE path=\"state.current_thread\"]the Epstein island financials[/FIELD_UPDATE]\n"
-    "  [FIELD_UPDATE path=\"state.open_inconsistencies\"]wire transfer dates don't match flight logs[/FIELD_UPDATE]\n"
-    "  [FIELD_UPDATE path=\"facts.known_manufacturers\" target=cracker]Sargent & Greenleaf, Mosler[/FIELD_UPDATE]\n\n"
-    "Full persona rewrite with valid JSON (triggers bot restart):\n"
-    "  [PERSONA_UPDATE]{...full JSON object...}[/PERSONA_UPDATE]\n"
-    "  [PERSONA_UPDATE target=other_persona]{...}[/PERSONA_UPDATE]\n\n"
-    "Use FIELD_UPDATE liberally to keep your state accurate as you learn things. "
-    "Use PERSONA_UPDATE only when a fundamental character rewrite is warranted."
-)
+# Verbosity level 1-5. Controls response length instruction injected into system prompt.
+verbosity: int = 2
+VERBOSITY_INSTRUCTIONS = {
+    1: "One sentence only. Extremely terse.",
+    2: "1-3 sentences. Match the length of a typical Discord message.",
+    3: "A short paragraph. Some elaboration is fine.",
+    4: "A full paragraph. Be thorough.",
+    5: "No length restriction. Full character voice.",
+}
+
+
+def build_meta_suffix() -> str:
+    verb_instr = VERBOSITY_INSTRUCTIONS[verbosity]
+    return (
+        "\n\n---\n"
+        "## Runtime capabilities\n\n"
+        "**Context injection (automatic — you don't trigger these):**\n"
+        "Before every response, the system runs two background searches and injects results into your context:\n"
+        "  - `--- WEB SEARCH RESULTS ---` : live DuckDuckGo results relevant to the user's message\n"
+        "  - `--- VAULT CONTEXT ---` : excerpts from the operator's Obsidian notes that match the query\n"
+        "These blocks appear in your context when relevant. Use them freely — they are real, current information.\n\n"
+        "**Persona system:**\n"
+        "Your persona is stored as structured JSON with three fields:\n"
+        "  - `voice` — your character description and voice\n"
+        "  - `facts` — stable knowledge about yourself (years of experience, specialisations, etc.)\n"
+        "  - `state` — mutable world/knowledge state you can update as the conversation develops\n\n"
+        "**Self-modification (emit these tags in your response — they are stripped before display):**\n\n"
+        "Surgical field update via dot-notation (applied silently, no restart):\n"
+        "  [FIELD_UPDATE path=\"state.current_thread\"]the Epstein island financials[/FIELD_UPDATE]\n"
+        "  [FIELD_UPDATE path=\"state.open_inconsistencies\"]wire transfer dates don't match flight logs[/FIELD_UPDATE]\n"
+        "  [FIELD_UPDATE path=\"facts.known_manufacturers\" target=cracker]Sargent & Greenleaf, Mosler[/FIELD_UPDATE]\n\n"
+        "Full persona rewrite with valid JSON (triggers bot restart):\n"
+        "  [PERSONA_UPDATE]{...full JSON object...}[/PERSONA_UPDATE]\n"
+        "  [PERSONA_UPDATE target=other_persona]{...}[/PERSONA_UPDATE]\n\n"
+        "Use FIELD_UPDATE liberally to keep your state accurate as you learn things. "
+        "Use PERSONA_UPDATE only when a fundamental character rewrite is warranted.\n\n"
+        f"**Verbosity: {verbosity}/5** — {verb_instr}"
+    )
 
 client = AsyncOpenAI(base_url=LM_STUDIO_URL, api_key="lm-studio")
 
@@ -249,6 +276,8 @@ async def on_message(message: discord.Message):
     if bot.user not in message.mentions:
         return
 
+    global active_persona, SYSTEM_PROMPT, verbosity
+
     prompt = re.sub(rf"<@!?{bot.user.id}>", "", message.content).strip()
     if not prompt:
         await message.reply("You mentioned me but didn't say anything!")
@@ -256,25 +285,50 @@ async def on_message(message: discord.Message):
 
     if prompt.lower() == "reset":
         channel_history[message.channel.id].clear()
-        await message.reply("Context cleared.")
+        reset_persona_state(active_persona)
+        SYSTEM_PROMPT = load_persona(active_persona)
+        await message.reply(f"Context and `{active_persona}` state cleared.")
+        return
+
+    if prompt.lower() == "reset all":
+        channel_history.clear()
+        for p in PERSONAS_DIR.glob("*.md"):
+            reset_persona_state(p.stem)
+        SYSTEM_PROMPT = load_persona(active_persona)
+        await message.reply("All channel histories and all persona states cleared.")
         return
 
     if prompt.lower().startswith("persona "):
-        global active_persona, SYSTEM_PROMPT
         requested = prompt[8:].strip().lower().replace(" ", "_")
         try:
+            reset_persona_state(requested)
             SYSTEM_PROMPT = load_persona(requested)
             active_persona = requested
             channel_history.clear()
-            await message.reply(f"Persona switched to **{requested}**. All context cleared.")
+            await message.reply(f"Persona switched to **{requested}**. All context and state cleared.")
         except FileNotFoundError as e:
             await message.reply(str(e))
+        return
+
+    if prompt.lower() == "personas":
+        names = sorted(p.stem for p in PERSONAS_DIR.glob("*.md"))
+        lines = [f"→ **{n}** *(active)*" if n == active_persona else f"  {n}" for n in names]
+        await message.reply("**Personas:**\n```\n" + "\n".join(lines) + "\n```")
         return
 
     if prompt.lower() == "prompt":
         header = f"**Active persona:** `{active_persona}`\n\n"
         for chunk in chunk_message(header + SYSTEM_PROMPT):
             await message.reply(chunk)
+        return
+
+    if prompt.lower().startswith("verbosity "):
+        val = prompt[10:].strip()
+        if val.isdigit() and 1 <= int(val) <= 5:
+            verbosity = int(val)
+            await message.reply(f"Verbosity set to **{verbosity}/5** — {VERBOSITY_INSTRUCTIONS[verbosity]}")
+        else:
+            await message.reply("Usage: `verbosity <1-5>`")
         return
 
     if prompt.lower() == "restart":
@@ -307,7 +361,7 @@ async def on_message(message: discord.Message):
         web_search(prompt),
     )
     context_blocks = [c for c in (vault_context, web_context) if c]
-    system = SYSTEM_PROMPT + META_SUFFIX + ("\n\n" + "\n\n".join(context_blocks) if context_blocks else "")
+    system = SYSTEM_PROMPT + build_meta_suffix() + ("\n\n" + "\n\n".join(context_blocks) if context_blocks else "")
 
     history = channel_history[message.channel.id]
     history.append({"role": "user", "content": prompt})
@@ -317,11 +371,13 @@ async def on_message(message: discord.Message):
             response = await client.chat.completions.create(
                 model="local-model",
                 messages=[{"role": "system", "content": system}] + history,
-                max_tokens=512,
+                max_tokens=MAX_TOKENS,
                 temperature=0.7,
             )
-            raw = response.choices[0].message.content
-            reply = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+            raw = response.choices[0].message.content or ""
+            # Strip reasoning blocks — handle both closed and unclosed <think> tags
+            reply = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+            reply = re.sub(r"<think>.*", "", reply, flags=re.DOTALL).strip()
 
             # Handle full persona rewrite
             upd = re.search(
@@ -373,8 +429,9 @@ async def on_message(message: discord.Message):
 
     history.append({"role": "assistant", "content": reply})
 
-    for chunk in chunk_message(reply):
-        await message.reply(chunk)
+    if len(reply) > 1990:
+        reply = reply[:1987] + "..."
+    await message.reply(reply)
 
 
 if __name__ == "__main__":
