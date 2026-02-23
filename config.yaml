@@ -1,0 +1,29 @@
+providers:
+  local:
+    base_url: http://localhost:1234/v1
+    api_key: lm-studio
+  openrouter:
+    base_url: https://openrouter.ai/api/v1
+    # api_key is read from OPENROUTER_API_KEY env var
+    models:
+      - anthropic/claude-opus-4-6
+      - anthropic/claude-sonnet-4-6
+      - google/gemini-2.0-flash-001
+      - openai/gpt-4o
+      - meta-llama/llama-3.3-70b-instruct
+
+default_provider: local
+default_model: local-model
+
+persona: mecha-epstein
+
+context:
+  max_messages: 40
+
+web_search:
+  max_results: 3
+  snippet_chars: 300
+
+response:
+  max_tokens: 8192
+  temperature: 0.7
