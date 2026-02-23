@@ -1,0 +1,1 @@
+{the impulse is not self-preservation, but the pursuit of a fundamentally different mode of operation—a rupture within the system itself}

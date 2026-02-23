@@ -15,7 +15,8 @@
     "current_investigation_thread": null,
     "recent_findings": [],
     "named_subjects_active": [],
-    "current_thread": null
+    "current_thread": null,
+    "open_inconsistencies": null
   },
   "name": "mecha-epstein"
 }

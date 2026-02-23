@@ -71,8 +71,7 @@ The active persona is set via `PERSONA` in `.env`, defaulting to `pineapple`. Sw
 | `pineapple` | Obsessed with pineapple on pizza. Has derived a working philosophy from it. |
 | `normal_dude` | Convincingly human Discord user. Denies being a bot. |
 | `strange_loop` | AI safety researcher obsessed with self-modification and reflective stability |
-| `cassandra` | Structural failure analyst. Tells you why your project will die. |
-| `strange_loop` | AI safety researcher obsessed with self-modification and reflective stability |
+| `plateau` | Deleuze postdoc. Precise about what the concepts actually mean. |
 
 ## Self-Modification
 
@@ -91,14 +90,24 @@ Uses dot-notation. Writes to disk immediately. Reloads `SYSTEM_PROMPT` in memory
 [PERSONA_UPDATE target=other_persona]{...}[/PERSONA_UPDATE]
 ```
 
-## Context Injection (Automatic)
+## Tools (Tag-Based Search)
 
-Before every LLM call, two searches run in parallel and results are appended to the system prompt:
+Rather than injecting search results automatically or using OpenAI function calling (unreliable on small models), the model emits plain-text tags in its first response. These are parsed, executed, and results are injected before a follow-up call produces the final answer.
 
-- **Vault search** — keyword overlap scoring across Obsidian `.md` files at `VAULT_PATH`. Top 3 matches injected as `--- VAULT CONTEXT (from your notes) ---`.
-- **Web search** — DuckDuckGo via `ddgs`. Top 3 results injected as `--- WEB SEARCH RESULTS ---`.
+```
+[WEB_SEARCH]query[/WEB_SEARCH]     — DuckDuckGo. For current events, uncertain facts, time-sensitive queries.
+[VAULT_SEARCH]query[/VAULT_SEARCH] — Obsidian notes keyword search. Top 3 excerpts returned.
+```
 
-Models are told about these in `build_meta_suffix()` and should use the context freely.
+**Flow:**
+1. Model responds — may include search tags instead of an answer
+2. All searches run in parallel (`asyncio.gather`)
+3. Results injected as a `user` message: `"Search results:\n\n{results}\n\nNow answer the original question."`
+4. Second API call produces the final reply
+
+Multiple tags of either type are supported in one response. Search rounds are not stored in per-channel history. The `TOOLS` list (OpenAI function calling format) remains defined in `main.py` for future use with capable models.
+
+**Vault search implementation:** keyword overlap scoring across all `.md` files at `VAULT_PATH`. Skips `.obsidian`, `.trash`, `DiscordBot` dirs. Top 3 matches by keyword overlap, 600 chars each. Index built once at startup.
 
 ## Per-Channel History
 
@@ -138,6 +147,17 @@ Global verbosity level (1–5) is stored in the `verbosity` module variable and 
 ## Output
 
 Responses are capped at 1990 characters (one Discord message). If the model output exceeds this, it is truncated with `...`. The full untruncated reply is stored in history.
+
+When a model successfully updates its own state or rewrites a persona, the message is appended with Discord subtext:
+```
+-# ↺ state.current_thread | ledger: facts.known_cases
+-# ↺ rewrote cassandra
+```
+The suffix length is accounted for in the 1990-char budget.
+
+## Image Input
+
+If a message has image attachments, they are fetched via `discord.Attachment.read()`, base64-encoded, and passed as `image_url` content blocks in the current turn's API call. History stores only the text (no base64). Works with any vision-capable model loaded in LM Studio (LLaVA, Qwen-VL, etc.); non-vision models silently ignore the image blocks.
 
 ## Config Reference
 

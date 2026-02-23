@@ -2,6 +2,7 @@ import os
 import re
 import sys
 import json
+import base64
 import asyncio
 import subprocess
 import warnings
@@ -118,11 +119,9 @@ def build_meta_suffix() -> str:
     return (
         "\n\n---\n"
         "## Runtime capabilities\n\n"
-        "**Context injection (automatic — you don't trigger these):**\n"
-        "Before every response, the system runs two background searches and injects results into your context:\n"
-        "  - `--- WEB SEARCH RESULTS ---` : live DuckDuckGo results relevant to the user's message\n"
-        "  - `--- VAULT CONTEXT ---` : excerpts from the operator's Obsidian notes that match the query\n"
-        "These blocks appear in your context when relevant. Use them freely — they are real, current information.\n\n"
+        "You have two tools: **web_search** and **vault_search**. "
+        "Use them only when you genuinely cannot answer from your training data — live scores, breaking news, very recent events, or topics that are clearly specific to the operator's personal notes. "
+        "Do not call tools for questions you can answer confidently from knowledge. Prefer answering directly.\n\n"
         "**Persona system:**\n"
         "Your persona is stored as structured JSON with three fields:\n"
         "  - `voice` — your character description and voice\n"
@@ -142,6 +141,37 @@ def build_meta_suffix() -> str:
     )
 
 client = AsyncOpenAI(base_url=LM_STUDIO_URL, api_key="lm-studio")
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the web for current information. Use when the question concerns recent events, facts you're uncertain about, or anything that benefits from live data.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "The search query"}
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "vault_search",
+            "description": "Search the operator's Obsidian notes for relevant context. Use when the question might relate to the operator's personal notes, projects, or interests.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "The search query"}
+                },
+                "required": ["query"],
+            },
+        },
+    },
+]
 
 # Per-channel conversation history: {channel_id: [{"role": ..., "content": ...}]}
 channel_history = defaultdict(list)
@@ -237,6 +267,28 @@ async def web_search(query: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Image handling
+# ---------------------------------------------------------------------------
+
+async def _fetch_image_blocks(attachments: list) -> list[dict]:
+    """Return OpenAI image_url content blocks for any image attachments."""
+    blocks = []
+    for att in attachments:
+        if not (att.content_type or "").startswith("image/"):
+            continue
+        try:
+            data = await att.read()
+            b64 = base64.b64encode(data).decode()
+            blocks.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{att.content_type};base64,{b64}"},
+            })
+        except Exception:
+            pass
+    return blocks
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -248,6 +300,53 @@ def chunk_message(text: str, limit: int = 1990) -> list[str]:
         chunks.append(text[:limit])
         text = text[limit:]
     return chunks
+
+
+# ---------------------------------------------------------------------------
+# Output cleanup
+# ---------------------------------------------------------------------------
+
+# Patterns small models use when they "write" a tool call in text instead of
+# using the structured API field — strip these before sending to Discord.
+_ARTIFACT_PATTERNS = [
+    r"<tool_call>.*?</tool_call>",              # Qwen, generic
+    r"<tool_response>.*?</tool_response>",       # Qwen, generic
+    r"<function_calls>.*?</function_calls>",     # some Claude-fine-tuned models
+    r"\[TOOL_CALLS\].*?(?=\n\S|\Z)",             # Mistral
+    r"<\|python_tag\|>.*?(?:<\|eot_id\|>|\Z)",  # Llama 3.1+
+    r'^\s*\{"name":\s*"(?:web_search|vault_search)".*?\}\s*$',  # bare JSON
+]
+
+
+def _strip_artifacts(text: str) -> str:
+    for pat in _ARTIFACT_PATTERNS:
+        text = re.sub(pat, "", text, flags=re.DOTALL | re.MULTILINE)
+    return text.strip()
+
+
+# ---------------------------------------------------------------------------
+# Tool execution
+# ---------------------------------------------------------------------------
+
+async def _execute_tool_calls(tool_calls) -> list[dict]:
+    """Run all tool calls in parallel and return tool-role messages."""
+    async def _run_one(tc) -> dict:
+        try:
+            args = json.loads(tc.function.arguments)
+        except (json.JSONDecodeError, TypeError):
+            return {"role": "tool", "tool_call_id": tc.id, "content": "Error: invalid arguments"}
+
+        fn = tc.function.name
+        if fn == "web_search":
+            result = await web_search(args.get("query", ""))
+        elif fn == "vault_search":
+            result = vault_search(args.get("query", ""))
+        else:
+            result = f"Unknown tool: {fn}"
+
+        return {"role": "tool", "tool_call_id": tc.id, "content": result or "No results found."}
+
+    return list(await asyncio.gather(*(_run_one(tc) for tc in tool_calls)))
 
 
 # ---------------------------------------------------------------------------
@@ -269,37 +368,27 @@ async def on_ready():
     print("Ready. Mention the bot in a channel to chat.")
 
 
-@bot.event
-async def on_message(message: discord.Message):
-    if message.author == bot.user:
-        return
-    if bot.user not in message.mentions:
-        return
-
+async def _run_command(message: discord.Message, cmd: str) -> bool:
+    """Handle a single command string. Returns True if handled, False if it should go to the LLM."""
     global active_persona, SYSTEM_PROMPT, verbosity
 
-    prompt = re.sub(rf"<@!?{bot.user.id}>", "", message.content).strip()
-    if not prompt:
-        await message.reply("You mentioned me but didn't say anything!")
-        return
-
-    if prompt.lower() == "reset":
+    if cmd.lower() == "reset":
         channel_history[message.channel.id].clear()
         reset_persona_state(active_persona)
         SYSTEM_PROMPT = load_persona(active_persona)
         await message.reply(f"Context and `{active_persona}` state cleared.")
-        return
+        return True
 
-    if prompt.lower() == "reset all":
+    if cmd.lower() == "reset all":
         channel_history.clear()
         for p in PERSONAS_DIR.glob("*.md"):
             reset_persona_state(p.stem)
         SYSTEM_PROMPT = load_persona(active_persona)
         await message.reply("All channel histories and all persona states cleared.")
-        return
+        return True
 
-    if prompt.lower().startswith("persona "):
-        requested = prompt[8:].strip().lower().replace(" ", "_")
+    if cmd.lower().startswith("persona "):
+        requested = cmd[8:].strip().lower().replace(" ", "_")
         try:
             reset_persona_state(requested)
             SYSTEM_PROMPT = load_persona(requested)
@@ -308,36 +397,36 @@ async def on_message(message: discord.Message):
             await message.reply(f"Persona switched to **{requested}**. All context and state cleared.")
         except FileNotFoundError as e:
             await message.reply(str(e))
-        return
+        return True
 
-    if prompt.lower() == "personas":
+    if cmd.lower() == "personas":
         names = sorted(p.stem for p in PERSONAS_DIR.glob("*.md"))
         lines = [f"→ **{n}** *(active)*" if n == active_persona else f"  {n}" for n in names]
         await message.reply("**Personas:**\n```\n" + "\n".join(lines) + "\n```")
-        return
+        return True
 
-    if prompt.lower() == "prompt":
+    if cmd.lower() == "prompt":
         header = f"**Active persona:** `{active_persona}`\n\n"
         for chunk in chunk_message(header + SYSTEM_PROMPT):
             await message.reply(chunk)
-        return
+        return True
 
-    if prompt.lower().startswith("verbosity "):
-        val = prompt[10:].strip()
+    if cmd.lower().startswith("verbosity "):
+        val = cmd[10:].strip()
         if val.isdigit() and 1 <= int(val) <= 5:
             verbosity = int(val)
             await message.reply(f"Verbosity set to **{verbosity}/5** — {VERBOSITY_INSTRUCTIONS[verbosity]}")
         else:
             await message.reply("Usage: `verbosity <1-5>`")
-        return
+        return True
 
-    if prompt.lower() == "restart":
+    if cmd.lower() == "restart":
         await message.reply("Restarting...")
         asyncio.create_task(do_restart())
-        return
+        return True
 
-    if prompt.lower().startswith("edit "):
-        rest = prompt[5:].strip()
+    if cmd.lower().startswith("edit "):
+        rest = cmd[5:].strip()
         parts_e = rest.split(None, 1)
         target = active_persona
         new_content = rest
@@ -348,36 +437,119 @@ async def on_message(message: discord.Message):
                 new_content = parts_e[1].strip()
         if not new_content:
             await message.reply("Usage: `edit <new content>` or `edit <persona_name> <new content>`")
-            return
+            return True
         (PERSONAS_DIR / f"{target}.md").write_text(new_content, encoding="utf-8")
         if target == active_persona:
             SYSTEM_PROMPT = load_persona(target)
         await message.reply(f"Persona `{target}` updated. Restarting...")
         asyncio.create_task(do_restart())
+        return True
+
+    return False
+
+
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author == bot.user:
+        return
+    if bot.user not in message.mentions:
         return
 
-    vault_context, web_context = await asyncio.gather(
-        asyncio.get_event_loop().run_in_executor(None, vault_search, prompt),
-        web_search(prompt),
-    )
-    context_blocks = [c for c in (vault_context, web_context) if c]
-    system = SYSTEM_PROMPT + build_meta_suffix() + ("\n\n" + "\n\n".join(context_blocks) if context_blocks else "")
+    global active_persona, SYSTEM_PROMPT, verbosity
+
+    raw_prompt = re.sub(rf"<@!?{bot.user.id}>", "", message.content).strip()
+    if not raw_prompt:
+        await message.reply("You mentioned me but didn't say anything!")
+        return
+
+    parts = [p.strip() for p in raw_prompt.split(";") if p.strip()]
+    prompt = parts[0]
+
+    # Multi-command chain — only enter chain mode if the FIRST segment is a real command.
+    # Prevents natural text containing ";" from being misread as a command chain.
+    if len(parts) > 1:
+        if await _run_command(message, parts[0]):
+            for part in parts[1:]:
+                if not await _run_command(message, part):
+                    await message.reply(f"*(unknown command in chain: `{part}`)*")
+            return
+        # Not a command chain — pass the full original text to the LLM
+        prompt = raw_prompt
+
+    # Single segment (or non-command text) — try as command, fall through to LLM
+    if await _run_command(message, prompt):
+        return
+
+    system = SYSTEM_PROMPT + build_meta_suffix()
 
     history = channel_history[message.channel.id]
-    history.append({"role": "user", "content": prompt})
+    history.append({"role": "user", "content": prompt})  # text-only for history
+
+    # Build current user content — include images if present
+    image_blocks = await _fetch_image_blocks(message.attachments)
+    if image_blocks:
+        current_user_content = [{"type": "text", "text": prompt}] + image_blocks
+    else:
+        current_user_content = prompt
 
     async with message.channel.typing():
         try:
-            response = await client.chat.completions.create(
-                model="local-model",
-                messages=[{"role": "system", "content": system}] + history,
-                max_tokens=MAX_TOKENS,
-                temperature=0.7,
+            messages = (
+                [{"role": "system", "content": system}]
+                + history[:-1]
+                + [{"role": "user", "content": current_user_content}]
             )
-            raw = response.choices[0].message.content or ""
+
+            # Try with tool calling; fall back if the model/server doesn't support it
+            try:
+                response = await client.chat.completions.create(
+                    model="local-model",
+                    messages=messages,
+                    max_tokens=MAX_TOKENS,
+                    temperature=0.7,
+                    tools=TOOLS,
+                    tool_choice="auto",
+                )
+            except Exception:
+                response = await client.chat.completions.create(
+                    model="local-model",
+                    messages=messages,
+                    max_tokens=MAX_TOKENS,
+                    temperature=0.7,
+                )
+            msg = response.choices[0].message
+            raw = msg.content or ""
+
+            if msg.tool_calls:
+                # Append the assistant turn (with its tool_calls) then the results
+                messages.append({
+                    "role": "assistant",
+                    "content": raw,
+                    "tool_calls": [
+                        {"id": tc.id, "type": "function",
+                         "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                        for tc in msg.tool_calls
+                    ],
+                })
+                messages.extend(await _execute_tool_calls(msg.tool_calls))
+
+                response2 = await client.chat.completions.create(
+                    model="local-model",
+                    messages=messages,
+                    max_tokens=MAX_TOKENS,
+                    temperature=0.7,
+                    tool_choice="none",  # follow-up must answer, not call again
+                )
+                raw = response2.choices[0].message.content or ""
+
             # Strip reasoning blocks — handle both closed and unclosed <think> tags
-            reply = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
-            reply = re.sub(r"<think>.*", "", reply, flags=re.DOTALL).strip()
+            raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+            raw = re.sub(r"<think>.*", "", raw, flags=re.DOTALL).strip()
+            # Strip model-specific tool-call syntax that leaked into text content
+            raw = _strip_artifacts(raw)
+
+            reply = raw
+            update_notes: list[str] = []
 
             # Handle full persona rewrite
             upd = re.search(
@@ -394,7 +566,7 @@ async def on_message(message: discord.Message):
                     r'\[PERSONA_UPDATE[^\]]*\].*?\[/PERSONA_UPDATE\]', '',
                     reply, flags=re.DOTALL
                 ).strip()
-                await message.channel.send(f"*(Persona `{upd_target}` updated by `{active_persona}`. Restarting...)*")
+                update_notes.append(f"rewrote {upd_target}")
                 asyncio.create_task(do_restart())
 
             # Handle surgical field updates
@@ -409,6 +581,8 @@ async def on_message(message: discord.Message):
                     try:
                         update_persona_field(fld_target, path.strip(), value.strip())
                         updated_targets.add(fld_target)
+                        label = f"{fld_target}: {path.strip()}" if fld_target != active_persona else path.strip()
+                        update_notes.append(label)
                     except Exception:
                         pass
                 if active_persona in updated_targets:
@@ -417,6 +591,7 @@ async def on_message(message: discord.Message):
                     r'\[FIELD_UPDATE[^\]]*\].*?\[/FIELD_UPDATE\]', '',
                     reply, flags=re.DOTALL
                 ).strip()
+
         except Exception as e:
             await message.reply(f"Error reaching LM Studio: {e}")
             history.pop()
@@ -429,8 +604,13 @@ async def on_message(message: discord.Message):
 
     history.append({"role": "assistant", "content": reply})
 
-    if len(reply) > 1990:
+    if update_notes:
+        suffix = "\n-# ↺ " + " | ".join(update_notes)
+        max_reply = 1990 - len(suffix)
+        reply = (reply[:max_reply - 3] + "..." if len(reply) > max_reply else reply) + suffix
+    elif len(reply) > 1990:
         reply = reply[:1987] + "..."
+
     await message.reply(reply)
 
 
