@@ -11,7 +11,9 @@
   "state": {
     "current_mood": null,
     "recent_activity": null,
-    "current_topic": null
+    "current_topic": null,
+    "pinned_note": null
   },
-  "name": "normal_dude"
+  "name": "normal_dude",
+  "current_mood": "vibing"
 }

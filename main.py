@@ -3,7 +3,10 @@ import re
 import sys
 import json
 import base64
+import socket
+import logging
 import asyncio
+import sqlite3
 import subprocess
 import warnings
 warnings.filterwarnings("ignore", message="Impersonate.*does not exist")
@@ -16,14 +19,54 @@ from ddgs import DDGS
 
 load_dotenv()
 
-LM_STUDIO_URL = "http://localhost:1234/v1"
-VAULT_PATH = Path(r"C:\Users\Leon\Desktop\Psychograph\Psychograph")
-VAULT_TOP_K = 3          # max notes to inject per query
-VAULT_EXCERPT_CHARS = 600  # chars to pull from each matched note
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger("psychograph")
+
+# ---------------------------------------------------------------------------
+# Singleton guard — claims a local UDP port as a process mutex
+# ---------------------------------------------------------------------------
+
+SINGLETON_PORT = 47823
+_INSTANCE_LOCK: socket.socket | None = None
+try:
+    _INSTANCE_LOCK = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    _INSTANCE_LOCK.bind(("127.0.0.1", SINGLETON_PORT))
+except OSError:
+    log.warning("[bot] Another instance is already running. Exiting.")
+    sys.exit(0)
+
+# ---------------------------------------------------------------------------
+# Configuration — all tunables from environment or sensible defaults
+# ---------------------------------------------------------------------------
+
+LM_STUDIO_URL = os.getenv("LM_STUDIO_URL", "http://localhost:1234/v1")
+LM_MODEL      = os.getenv("LM_MODEL", "local-model")
+VAULT_PATH    = Path(os.getenv("VAULT_PATH", r"C:\Users\Leon\Desktop\Psychograph\Psychograph"))
+
+VAULT_TOP_K          = 3      # max notes to inject per search query
+VAULT_EXCERPT_CHARS  = 600    # chars pulled from each matched note
+WEB_MAX_RESULTS      = 3
+WEB_SNIPPET_CHARS    = 300
+DISCORD_MSG_LIMIT    = 1990   # Discord's 2000-char cap minus buffer for suffixes
+RESTART_DELAY_S      = 0.5    # seconds before spawning fresh process on restart
+MAX_HISTORY_MESSAGES = 40     # rolling context window injected into each API call
+STREAM_EDIT_INTERVAL = 1.2    # seconds between Discord message edits during streaming
 
 PERSONAS_DIR = Path(__file__).parent / "personas"
-MAX_TOKENS = int(os.getenv("MAX_TOKENS", "8192"))
+DB_PATH      = Path(__file__).parent / "history.db"
+MAX_TOKENS   = int(os.getenv("MAX_TOKENS", "8192"))
 
+# ---------------------------------------------------------------------------
+# Persona helpers
+# ---------------------------------------------------------------------------
 
 def render_persona(data: dict) -> str:
     """Flatten a structured persona dict into a readable system prompt."""
@@ -75,7 +118,7 @@ def load_persona(name: str) -> str:
         data = json.loads(raw)
         return render_persona(data)
     except (json.JSONDecodeError, KeyError):
-        return raw  # plain text fallback
+        return raw  # plain-text persona fallback
 
 
 def update_persona_field(persona_name: str, path: str, value: str) -> None:
@@ -99,29 +142,37 @@ def reset_persona_state(persona_name: str) -> None:
     p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-# Active persona — change PERSONA in .env or switch at runtime with "@bot persona <name>"
+# ---------------------------------------------------------------------------
+# Active persona + verbosity
+# ---------------------------------------------------------------------------
+
 active_persona: str = os.getenv("PERSONA", "pineapple")
 SYSTEM_PROMPT: str = load_persona(active_persona)
 
-# Verbosity level 1-5. Controls response length instruction injected into system prompt.
 verbosity: int = 2
 VERBOSITY_INSTRUCTIONS = {
-    1: "One sentence only. Extremely terse.",
-    2: "1-3 sentences. Match the length of a typical Discord message.",
-    3: "A short paragraph. Some elaboration is fine.",
-    4: "A full paragraph. Be thorough.",
-    5: "No length restriction. Full character voice.",
+    1: "ONE sentence. Stop after the period. No lists, no follow-up thoughts, no elaboration.",
+    2: "1-3 sentences, no more. No bullet points, no preamble. Cut anything that isn't the core response.",
+    3: "One short paragraph. Make the point, add one supporting thought, stop.",
+    4: "A full paragraph. Be substantive and thorough.",
+    5: "No length limit. Full depth, full character voice — as long as the response warrants.",
 }
 
 
 def build_meta_suffix() -> str:
+    from datetime import datetime
+    now = datetime.now()
+    timestamp = now.strftime("%A, %d %B %Y %H:%M")  # e.g. "Monday, 23 February 2026 03:14"
     verb_instr = VERBOSITY_INSTRUCTIONS[verbosity]
     return (
         "\n\n---\n"
+        f"**Current date/time:** {timestamp}\n\n"
         "## Runtime capabilities\n\n"
-        "You have two tools: **web_search** and **vault_search**. "
-        "Use them only when you genuinely cannot answer from your training data — live scores, breaking news, very recent events, or topics that are clearly specific to the operator's personal notes. "
-        "Do not call tools for questions you can answer confidently from knowledge. Prefer answering directly.\n\n"
+        "You have one tool: **search** — takes a `queries` list, each item with `type` ('web' or 'vault') and `query`. "
+        "All queries run in parallel and return together. You can mix web and vault in a single call. "
+        "Only use it when you cannot answer from training data. Prefer answering directly.\n\n"
+        "**Discord formatting:** URLs render inline — articles auto-preview, images display in-chat. "
+        "Link or embed when it adds something relevant.\n\n"
         "**Persona system:**\n"
         "Your persona is stored as structured JSON with three fields:\n"
         "  - `voice` — your character description and voice\n"
@@ -137,8 +188,14 @@ def build_meta_suffix() -> str:
         "  [PERSONA_UPDATE target=other_persona]{...}[/PERSONA_UPDATE]\n\n"
         "Use FIELD_UPDATE liberally to keep your state accurate as you learn things. "
         "Use PERSONA_UPDATE only when a fundamental character rewrite is warranted.\n\n"
-        f"**Verbosity: {verbosity}/5** — {verb_instr}"
+        f"## Response length — verbosity {verbosity}/5\n"
+        f"{verb_instr}"
     )
+
+
+# ---------------------------------------------------------------------------
+# LM Studio client + tool schema
+# ---------------------------------------------------------------------------
 
 client = AsyncOpenAI(base_url=LM_STUDIO_URL, api_key="lm-studio")
 
@@ -146,39 +203,125 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "web_search",
-            "description": "Search the web for current information. Use when the question concerns recent events, facts you're uncertain about, or anything that benefits from live data.",
+            "name": "search",
+            "description": (
+                "Run one or more searches in parallel and get all results back in a single call. "
+                "Use type 'web' for live DuckDuckGo results (current events, uncertain facts, anything time-sensitive). "
+                "Use type 'vault' to search the operator's Obsidian notes (personal projects, interests, prior context). "
+                "You can mix both types in one call. Only use this tool when you cannot answer from training data."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "The search query"}
+                    "queries": {
+                        "type": "array",
+                        "description": "One or more searches to run in parallel.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "type": {
+                                    "type": "string",
+                                    "enum": ["web", "vault"],
+                                    "description": "'web' for DuckDuckGo, 'vault' for Obsidian notes",
+                                },
+                                "query": {"type": "string", "description": "The search query"},
+                            },
+                            "required": ["type", "query"],
+                        },
+                    }
                 },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "vault_search",
-            "description": "Search the operator's Obsidian notes for relevant context. Use when the question might relate to the operator's personal notes, projects, or interests.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "The search query"}
-                },
-                "required": ["query"],
+                "required": ["queries"],
             },
         },
     },
 ]
 
-# Per-channel conversation history: {channel_id: [{"role": ..., "content": ...}]}
-channel_history = defaultdict(list)
+# Per-channel conversation history — in-memory write-through cache over SQLite
+channel_history: defaultdict[int, list] = defaultdict(list)
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = discord.Client(intents=intents)
+
+# ---------------------------------------------------------------------------
+# SQLite persistence — history.db lives beside main.py
+# ---------------------------------------------------------------------------
+
+_hydrated_channels: set[int] = set()
+
+
+def _init_db() -> None:
+    """Create messages table and index if they don't exist."""
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL,
+                role       TEXT NOT NULL,
+                content    TEXT NOT NULL,
+                ts         DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_channel ON messages(channel_id, id)"
+        )
+        conn.commit()
+
+
+def _db_load(channel_id: int, limit: int = MAX_HISTORY_MESSAGES) -> list[dict]:
+    """Fetch the most recent `limit` messages for a channel."""
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(
+            "SELECT role, content FROM messages "
+            "WHERE channel_id = ? ORDER BY id DESC LIMIT ?",
+            (channel_id, limit),
+        ).fetchall()
+    return [{"role": r, "content": c} for r, c in reversed(rows)]
+
+
+def _db_save(channel_id: int, role: str, content: str) -> None:
+    """Append a single message to the DB."""
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO messages (channel_id, role, content) VALUES (?, ?, ?)",
+            (channel_id, role, content),
+        )
+        conn.commit()
+
+
+def _db_delete_last(channel_id: int, role: str) -> None:
+    """Delete the most recent message of a given role for a channel."""
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "DELETE FROM messages WHERE id = ("
+            "  SELECT MAX(id) FROM messages WHERE channel_id = ? AND role = ?"
+            ")",
+            (channel_id, role),
+        )
+        conn.commit()
+
+
+def _db_clear_channel(channel_id: int) -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("DELETE FROM messages WHERE channel_id = ?", (channel_id,))
+        conn.commit()
+
+
+def _db_clear_all() -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("DELETE FROM messages")
+        conn.commit()
+
+
+def _ensure_hydrated(channel_id: int) -> None:
+    """Lazy-load channel history from SQLite into memory on first access."""
+    if channel_id not in _hydrated_channels:
+        rows = _db_load(channel_id)
+        if rows:
+            channel_history[channel_id].extend(rows)
+            log.info("[db] loaded %d messages for channel %d", len(rows), channel_id)
+        _hydrated_channels.add(channel_id)
+
 
 # ---------------------------------------------------------------------------
 # Vault search
@@ -206,7 +349,7 @@ def _build_vault_index() -> None:
             continue
         words = set(re.findall(r"[a-zA-Z]{3,}", content.lower())) - STOPWORDS
         _vault_index.append((md_file, content, words))
-    print(f"Vault index built: {len(_vault_index)} notes from {VAULT_PATH}")
+    log.info("[vault] index built: %d notes from %s", len(_vault_index), VAULT_PATH)
 
 
 def vault_search(query: str) -> str:
@@ -217,23 +360,19 @@ def vault_search(query: str) -> str:
     if not query_words:
         return ""
 
-    scored = []
-    for path, content, keywords in _vault_index:
-        score = len(query_words & keywords)
-        if score > 0:
-            scored.append((score, path, content))
-
+    scored = [
+        (len(query_words & kw), path, content)
+        for path, content, kw in _vault_index
+        if query_words & kw
+    ]
     scored.sort(key=lambda x: x[0], reverse=True)
-    top = scored[:VAULT_TOP_K]
 
-    if not top:
+    parts = [
+        f"[Note: {path.stem}]\n{content.strip()[:VAULT_EXCERPT_CHARS]}"
+        for _, path, content in scored[:VAULT_TOP_K]
+    ]
+    if not parts:
         return ""
-
-    parts = []
-    for score, path, content in top:
-        excerpt = content.strip()[:VAULT_EXCERPT_CHARS]
-        parts.append(f"[Note: {path.stem}]\n{excerpt}")
-
     return "--- VAULT CONTEXT (from your notes) ---\n" + "\n\n".join(parts) + "\n---"
 
 
@@ -241,29 +380,24 @@ def vault_search(query: str) -> str:
 # Web search
 # ---------------------------------------------------------------------------
 
-WEB_MAX_RESULTS = 3
-WEB_SNIPPET_CHARS = 300
-
-
 def _ddg_search(query: str) -> str:
-    """Blocking DuckDuckGo search — run in executor."""
+    """Blocking DuckDuckGo search — call via run_in_executor."""
     try:
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=WEB_MAX_RESULTS))
         if not results:
             return ""
-        parts = []
-        for r in results:
-            snippet = (r.get("body") or "")[:WEB_SNIPPET_CHARS]
-            parts.append(f"[{r['title']}]\n{snippet}\n{r['href']}")
+        parts = [
+            f"[{r['title']}]\n{(r.get('body') or '')[:WEB_SNIPPET_CHARS]}\n{r['href']}"
+            for r in results
+        ]
         return "--- WEB SEARCH RESULTS ---\n" + "\n\n".join(parts) + "\n---"
     except Exception:
         return ""
 
 
 async def web_search(query: str) -> str:
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _ddg_search, query)
+    return await asyncio.get_event_loop().run_in_executor(None, _ddg_search, query)
 
 
 # ---------------------------------------------------------------------------
@@ -277,8 +411,7 @@ async def _fetch_image_blocks(attachments: list) -> list[dict]:
         if not (att.content_type or "").startswith("image/"):
             continue
         try:
-            data = await att.read()
-            b64 = base64.b64encode(data).decode()
+            b64 = base64.b64encode(await att.read()).decode()
             blocks.append({
                 "type": "image_url",
                 "image_url": {"url": f"data:{att.content_type};base64,{b64}"},
@@ -289,10 +422,10 @@ async def _fetch_image_blocks(attachments: list) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Output helpers
 # ---------------------------------------------------------------------------
 
-def chunk_message(text: str, limit: int = 1990) -> list[str]:
+def chunk_message(text: str, limit: int = DISCORD_MSG_LIMIT) -> list[str]:
     if len(text) <= limit:
         return [text]
     chunks = []
@@ -303,18 +436,17 @@ def chunk_message(text: str, limit: int = 1990) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Output cleanup
+# Output cleanup — strip model-specific tool-call syntax that leaked into text
 # ---------------------------------------------------------------------------
 
-# Patterns small models use when they "write" a tool call in text instead of
-# using the structured API field — strip these before sending to Discord.
 _ARTIFACT_PATTERNS = [
-    r"<tool_call>.*?</tool_call>",              # Qwen, generic
-    r"<tool_response>.*?</tool_response>",       # Qwen, generic
-    r"<function_calls>.*?</function_calls>",     # some Claude-fine-tuned models
-    r"\[TOOL_CALLS\].*?(?=\n\S|\Z)",             # Mistral
-    r"<\|python_tag\|>.*?(?:<\|eot_id\|>|\Z)",  # Llama 3.1+
-    r'^\s*\{"name":\s*"(?:web_search|vault_search)".*?\}\s*$',  # bare JSON
+    r"<tool_call>.*?</tool_call>",                              # Qwen, generic
+    r"<tool_response>.*?</tool_response>",                       # Qwen, generic
+    r"<function_calls>.*?</function_calls>",                     # some Claude fine-tunes
+    r"\[TOOL_CALLS\].*?(?=\n\S|\Z)",                             # Mistral
+    r"<\|python_tag\|>.*?(?:<\|eot_id\|>|\Z)",                  # Llama 3.1+
+    r"\[TOOL_REQUEST\].*?(?:\[END_TOOL_REQUEST\]|\Z)",           # Gemma-3 / LM Studio
+    r'^\s*\{"name":\s*"search".*?\}\s*$',                        # bare JSON
 ]
 
 
@@ -324,56 +456,132 @@ def _strip_artifacts(text: str) -> str:
     return text.strip()
 
 
+def _clean_raw(raw: str) -> str:
+    """Strip thinking blocks and tool-call artifacts from a raw LLM response."""
+    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+    raw = re.sub(r"<think>.*", "", raw, flags=re.DOTALL).strip()
+    return _strip_artifacts(raw)
+
+
 # ---------------------------------------------------------------------------
 # Tool execution
 # ---------------------------------------------------------------------------
 
 async def _execute_tool_calls(tool_calls) -> list[dict]:
     """Run all tool calls in parallel and return tool-role messages."""
+    async def _run_query(q: dict) -> str:
+        qtype = q.get("type", "web")
+        query = q.get("query", "")
+        if qtype == "web":
+            result = await web_search(query)
+            return f"[web: {query}]\n{result}" if result else ""
+        elif qtype == "vault":
+            result = vault_search(query)
+            return f"[vault: {query}]\n{result}" if result else ""
+        return ""
+
     async def _run_one(tc) -> dict:
         try:
             args = json.loads(tc.function.arguments)
         except (json.JSONDecodeError, TypeError):
             return {"role": "tool", "tool_call_id": tc.id, "content": "Error: invalid arguments"}
 
-        fn = tc.function.name
-        if fn == "web_search":
-            result = await web_search(args.get("query", ""))
-        elif fn == "vault_search":
-            result = vault_search(args.get("query", ""))
-        else:
-            result = f"Unknown tool: {fn}"
+        if tc.function.name == "search":
+            queries = args.get("queries", [])
+            parts = await asyncio.gather(*(_run_query(q) for q in queries))
+            combined = "\n\n".join(p for p in parts if p)
+            return {"role": "tool", "tool_call_id": tc.id, "content": combined or "No results found."}
 
-        return {"role": "tool", "tool_call_id": tc.id, "content": result or "No results found."}
+        return {"role": "tool", "tool_call_id": tc.id, "content": f"Unknown tool: {tc.function.name}"}
 
     return list(await asyncio.gather(*(_run_one(tc) for tc in tool_calls)))
 
 
 # ---------------------------------------------------------------------------
-# Bot events
+# Streaming response — edits a Discord placeholder as tokens arrive
 # ---------------------------------------------------------------------------
 
-async def do_restart():
+async def _stream_reply(
+    messages: list,
+    original_msg: discord.Message,
+    preamble: str = "",
+    **api_kwargs,
+) -> tuple[str, discord.Message]:
+    """Stream an LLM response to Discord, editing a placeholder message as tokens arrive.
+
+    `preamble` is any pre-tool-call text the model emitted before deciding to search;
+    it seeds the placeholder and is prepended to the streamed content so nothing is lost.
+
+    Returns (full_raw_text, discord_message) so the caller can do a final edit
+    with cleaned / post-processed content (persona tags stripped, suffix added, etc.).
+    """
+    initial = (preamble + "\n\n") if preamble else "-# *generating...*"
+    placeholder = await original_msg.reply(initial)
+    accumulated = preamble + ("\n\n" if preamble else "")
+    last_edit = 0.0
+
+    try:
+        stream = await client.chat.completions.create(
+            model=LM_MODEL,
+            messages=messages,
+            max_tokens=MAX_TOKENS,
+            stream=True,
+            **api_kwargs,
+        )
+        async for chunk in stream:
+            delta = (chunk.choices[0].delta.content or "") if chunk.choices else ""
+            accumulated += delta
+            now = asyncio.get_event_loop().time()
+            if now - last_edit >= STREAM_EDIT_INTERVAL and accumulated.strip():
+                try:
+                    await placeholder.edit(content=accumulated[:DISCORD_MSG_LIMIT])
+                    last_edit = now
+                except discord.HTTPException:
+                    pass
+    except Exception:
+        try:
+            await placeholder.delete()
+        except discord.HTTPException:
+            pass
+        raise
+
+    return accumulated, placeholder
+
+
+# ---------------------------------------------------------------------------
+# Bot lifecycle helpers
+# ---------------------------------------------------------------------------
+
+async def do_restart() -> None:
     """Spawn a fresh process then close this one."""
-    await asyncio.sleep(0.5)          # let any pending Discord messages deliver
+    await asyncio.sleep(RESTART_DELAY_S)
+    if _INSTANCE_LOCK:
+        _INSTANCE_LOCK.close()
     subprocess.Popen([sys.executable] + sys.argv)
-    await bot.close()                 # discord.py winds down, bot.run() returns
+    await bot.close()
 
 
 @bot.event
 async def on_ready():
+    _init_db()
     _build_vault_index()
-    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
-    print(f"LM Studio endpoint: {LM_STUDIO_URL}")
-    print("Ready. Mention the bot in a channel to chat.")
+    log.info("[bot] logged in as %s (ID: %s)", bot.user, bot.user.id)
+    log.info("[bot] LM Studio: %s  model: %s", LM_STUDIO_URL, LM_MODEL)
+    log.info("[bot] ready — mention the bot in any channel to chat")
 
+
+# ---------------------------------------------------------------------------
+# Command handler
+# ---------------------------------------------------------------------------
 
 async def _run_command(message: discord.Message, cmd: str) -> bool:
-    """Handle a single command string. Returns True if handled, False if it should go to the LLM."""
+    """Handle a single command string. Returns True if handled, False if LLM-bound."""
     global active_persona, SYSTEM_PROMPT, verbosity
 
     if cmd.lower() == "reset":
         channel_history[message.channel.id].clear()
+        _db_clear_channel(message.channel.id)
+        _hydrated_channels.discard(message.channel.id)
         reset_persona_state(active_persona)
         SYSTEM_PROMPT = load_persona(active_persona)
         await message.reply(f"Context and `{active_persona}` state cleared.")
@@ -381,6 +589,8 @@ async def _run_command(message: discord.Message, cmd: str) -> bool:
 
     if cmd.lower() == "reset all":
         channel_history.clear()
+        _hydrated_channels.clear()
+        _db_clear_all()
         for p in PERSONAS_DIR.glob("*.md"):
             reset_persona_state(p.stem)
         SYSTEM_PROMPT = load_persona(active_persona)
@@ -394,6 +604,8 @@ async def _run_command(message: discord.Message, cmd: str) -> bool:
             SYSTEM_PROMPT = load_persona(requested)
             active_persona = requested
             channel_history.clear()
+            _hydrated_channels.clear()
+            _db_clear_all()
             await message.reply(f"Persona switched to **{requested}**. All context and state cleared.")
         except FileNotFoundError as e:
             await message.reply(str(e))
@@ -438,6 +650,12 @@ async def _run_command(message: discord.Message, cmd: str) -> bool:
         if not new_content:
             await message.reply("Usage: `edit <new content>` or `edit <persona_name> <new content>`")
             return True
+        # Validate JSON structure before writing
+        try:
+            json.loads(new_content)
+        except json.JSONDecodeError as e:
+            await message.reply(f"Invalid JSON — persona not updated.\n```\n{e}\n```")
+            return True
         (PERSONAS_DIR / f"{target}.md").write_text(new_content, encoding="utf-8")
         if target == active_persona:
             SYSTEM_PROMPT = load_persona(target)
@@ -447,6 +665,10 @@ async def _run_command(message: discord.Message, cmd: str) -> bool:
 
     return False
 
+
+# ---------------------------------------------------------------------------
+# Main message handler
+# ---------------------------------------------------------------------------
 
 @bot.event
 async def on_message(message: discord.Message):
@@ -473,38 +695,43 @@ async def on_message(message: discord.Message):
                 if not await _run_command(message, part):
                     await message.reply(f"*(unknown command in chain: `{part}`)*")
             return
-        # Not a command chain — pass the full original text to the LLM
-        prompt = raw_prompt
+        prompt = raw_prompt  # not a command chain — pass full text to LLM
 
-    # Single segment (or non-command text) — try as command, fall through to LLM
     if await _run_command(message, prompt):
         return
 
     system = SYSTEM_PROMPT + build_meta_suffix()
 
+    # Lazy-load channel history from SQLite if this is the first message this session
+    _ensure_hydrated(message.channel.id)
+
     history = channel_history[message.channel.id]
     history.append({"role": "user", "content": prompt})  # text-only for history
+    _db_save(message.channel.id, "user", prompt)
 
-    # Build current user content — include images if present
+    # Build current user content — include images if present (not persisted to DB)
     image_blocks = await _fetch_image_blocks(message.attachments)
     if image_blocks:
         current_user_content = [{"type": "text", "text": prompt}] + image_blocks
     else:
         current_user_content = prompt
 
+    # Rolling context window — send only the most recent N turns to the LLM
+    context = history[-MAX_HISTORY_MESSAGES:]
+
     async with message.channel.typing():
         try:
-            messages = (
+            messages_payload = (
                 [{"role": "system", "content": system}]
-                + history[:-1]
+                + context[:-1]
                 + [{"role": "user", "content": current_user_content}]
             )
 
-            # Try with tool calling; fall back if the model/server doesn't support it
+            # Pass 1: detect tool calls (regular API — result must be inspected before streaming)
             try:
                 response = await client.chat.completions.create(
-                    model="local-model",
-                    messages=messages,
+                    model=LM_MODEL,
+                    messages=messages_payload,
                     max_tokens=MAX_TOKENS,
                     temperature=0.7,
                     tools=TOOLS,
@@ -512,42 +739,41 @@ async def on_message(message: discord.Message):
                 )
             except Exception:
                 response = await client.chat.completions.create(
-                    model="local-model",
-                    messages=messages,
+                    model=LM_MODEL,
+                    messages=messages_payload,
                     max_tokens=MAX_TOKENS,
                     temperature=0.7,
                 )
-            msg = response.choices[0].message
-            raw = msg.content or ""
 
-            if msg.tool_calls:
-                # Append the assistant turn (with its tool_calls) then the results
-                messages.append({
+            msg_obj = response.choices[0].message
+            raw = msg_obj.content or ""
+            reply_msg: discord.Message | None = None
+
+            if msg_obj.tool_calls:
+                log.debug("[tools] %d tool call(s) — executing", len(msg_obj.tool_calls))
+                # Clean any pre-tool text the model emitted before deciding to search
+                pre_text = _clean_raw(raw)
+                messages_payload.append({
                     "role": "assistant",
                     "content": raw,
                     "tool_calls": [
                         {"id": tc.id, "type": "function",
                          "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
-                        for tc in msg.tool_calls
+                        for tc in msg_obj.tool_calls
                     ],
                 })
-                messages.extend(await _execute_tool_calls(msg.tool_calls))
+                messages_payload.extend(await _execute_tool_calls(msg_obj.tool_calls))
 
-                response2 = await client.chat.completions.create(
-                    model="local-model",
-                    messages=messages,
-                    max_tokens=MAX_TOKENS,
+                # Pass 2: stream the final answer; prepend pre-tool text so it isn't lost
+                raw, reply_msg = await _stream_reply(
+                    messages_payload, message,
+                    preamble=pre_text,
                     temperature=0.7,
-                    tool_choice="none",  # follow-up must answer, not call again
+                    tool_choice="none",  # must answer in text, not call again
                 )
-                raw = response2.choices[0].message.content or ""
 
-            # Strip reasoning blocks — handle both closed and unclosed <think> tags
-            raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
-            raw = re.sub(r"<think>.*", "", raw, flags=re.DOTALL).strip()
-            # Strip model-specific tool-call syntax that leaked into text content
-            raw = _strip_artifacts(raw)
-
+            # Post-process: strip thinking blocks and tool-call artifacts
+            raw = _clean_raw(raw)
             reply = raw
             update_notes: list[str] = []
 
@@ -593,25 +819,112 @@ async def on_message(message: discord.Message):
                 ).strip()
 
         except Exception as e:
+            log.error("[bot] LM Studio error: %s", e)
             await message.reply(f"Error reaching LM Studio: {e}")
             history.pop()
+            _db_delete_last(message.channel.id, "user")
             return
 
     if not reply:
-        await message.reply("*(no response)*")
+        if reply_msg:
+            await reply_msg.edit(content="*(no response)*")
+        else:
+            await message.reply("*(no response)*")
         history.pop()
+        _db_delete_last(message.channel.id, "user")
         return
 
     history.append({"role": "assistant", "content": reply})
+    _db_save(message.channel.id, "assistant", reply)
 
+    # Build final display string with optional update-notes suffix
     if update_notes:
         suffix = "\n-# ↺ " + " | ".join(update_notes)
-        max_reply = 1990 - len(suffix)
-        reply = (reply[:max_reply - 3] + "..." if len(reply) > max_reply else reply) + suffix
-    elif len(reply) > 1990:
-        reply = reply[:1987] + "..."
+        max_reply = DISCORD_MSG_LIMIT - len(suffix)
+        display = (reply[:max_reply - 3] + "..." if len(reply) > max_reply else reply) + suffix
+    elif len(reply) > DISCORD_MSG_LIMIT:
+        display = reply[:DISCORD_MSG_LIMIT - 3] + "..."
+    else:
+        display = reply
 
-    await message.reply(reply)
+    if reply_msg:
+        # Final edit: replace streaming placeholder with fully post-processed content
+        await reply_msg.edit(content=display)
+    else:
+        await message.reply(display)
+
+
+# ---------------------------------------------------------------------------
+# Reaction-based commands
+# ---------------------------------------------------------------------------
+
+@bot.event
+async def on_reaction_add(reaction: discord.Reaction, user: discord.User):
+    """
+    Reaction shortcuts on bot messages:
+      🔄  — regenerate the last response with a fresh call (slightly higher temperature)
+      📌  — pin the message content into the active persona's state.pinned_note
+    """
+    global SYSTEM_PROMPT, active_persona
+
+    if user.bot:
+        return
+    if reaction.message.author != bot.user:
+        return
+
+    channel_id = reaction.message.channel.id
+
+    # --- 🔄 Regenerate ---
+    if str(reaction.emoji) == "🔄":
+        history = channel_history.get(channel_id)
+        if not history:
+            return
+
+        # Remove last assistant turn (the message being reacted to)
+        for i in range(len(history) - 1, -1, -1):
+            if history[i]["role"] == "assistant":
+                history.pop(i)
+                _db_delete_last(channel_id, "assistant")
+                break
+        else:
+            return  # no assistant turn found
+
+        # Find the last user message as the context tail
+        if not history or history[-1]["role"] != "user":
+            return
+
+        system = SYSTEM_PROMPT + build_meta_suffix()
+        context = history[-MAX_HISTORY_MESSAGES:]
+        messages_payload = [{"role": "system", "content": system}] + context
+
+        try:
+            async with reaction.message.channel.typing():
+                # Slightly higher temperature for variation on regeneration
+                raw, new_msg = await _stream_reply(
+                    messages_payload, reaction.message,
+                    temperature=0.85,
+                )
+            raw = _clean_raw(raw)
+            display = raw[:DISCORD_MSG_LIMIT - 3] + "..." if len(raw) > DISCORD_MSG_LIMIT else raw
+            await new_msg.edit(content=display or "*(no response)*")
+            if raw:
+                history.append({"role": "assistant", "content": raw})
+                _db_save(channel_id, "assistant", raw)
+        except Exception as e:
+            log.error("[regen] error: %s", e)
+
+    # --- 📌 Pin to persona state ---
+    elif str(reaction.emoji) == "📌":
+        content = reaction.message.content
+        if not content:
+            return
+        try:
+            update_persona_field(active_persona, "state.pinned_note", content[:200])
+            SYSTEM_PROMPT = load_persona(active_persona)
+            await reaction.message.add_reaction("✅")
+            log.info("[pin] saved note to %s state.pinned_note", active_persona)
+        except Exception as e:
+            log.error("[pin] error: %s", e)
 
 
 if __name__ == "__main__":
