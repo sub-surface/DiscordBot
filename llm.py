@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import os
+import urllib.request
 from typing import AsyncGenerator
 
 from openai import AsyncOpenAI, BadRequestError
@@ -37,9 +38,15 @@ def get_client(provider: str, cfg: dict) -> AsyncOpenAI:
                 api_key=pcfg.get("api_key", "lm-studio"),
             )
         elif provider == "openrouter":
+            api_key = os.environ.get("OPENROUTER_API_KEY", "")
+            if not api_key:
+                raise ValueError(
+                    "OPENROUTER_API_KEY is not set in .env — "
+                    "add it before using the OpenRouter provider"
+                )
             _clients[provider] = AsyncOpenAI(
                 base_url=pcfg["base_url"],
-                api_key=os.environ.get("OPENROUTER_API_KEY", ""),
+                api_key=api_key,
                 default_headers={
                     "HTTP-Referer": "https://github.com/psychograph",
                     "X-Title": "Psychograph",
@@ -71,6 +78,46 @@ async def get_local_models(cfg: dict) -> list[str]:
         client = get_client("local", cfg)
         models = await client.models.list()
         return [m.id for m in models.data]
+    except Exception:
+        return []
+
+
+async def get_openrouter_models(
+    cfg: dict,
+    free_only: bool = False,
+    paid_only: bool = False,
+) -> list[str]:
+    """
+    Fetch model list from OpenRouter's /v1/models endpoint.
+    free_only=True  → only models with zero prompt+completion cost.
+    paid_only=True  → only models with non-zero prompt cost.
+    """
+    base_url = cfg["providers"]["openrouter"]["base_url"].rstrip("/")
+    url = f"{base_url}/models"
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+
+    def _fetch() -> dict:
+        req = urllib.request.Request(url)
+        if api_key:
+            req.add_header("Authorization", f"Bearer {api_key}")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+
+    try:
+        data = await asyncio.to_thread(_fetch)
+        models = data.get("data", [])
+        if free_only:
+            models = [
+                m for m in models
+                if str(m.get("pricing", {}).get("prompt", "1")) == "0"
+                and str(m.get("pricing", {}).get("completion", "1")) == "0"
+            ]
+        elif paid_only:
+            models = [
+                m for m in models
+                if str(m.get("pricing", {}).get("prompt", "0")) != "0"
+            ]
+        return sorted(m["id"] for m in models)
     except Exception:
         return []
 

@@ -19,6 +19,8 @@ DiscordBot/
 ├── bot.py          # Discord client, commands, reply-chain context, streaming
 ├── llm.py          # Provider routing, async generator, tool calling, image handling
 ├── db.py           # SQLite CRUD — messages (reply-chain) + pins
+├── board.py        # FEN → chess board rendering (PNG image + ASCII fallback)
+├── chess_engine.py # Move validation, board state, game lifecycle (python-chess)
 ├── personas.py     # load_persona(), render_persona(), list_personas()
 ├── search.py       # DuckDuckGo web search (async wrapper)
 ├── config.yaml     # All non-secret config
@@ -34,6 +36,8 @@ DiscordBot/
 |---|---|
 | `discord.py` | Bot framework |
 | `openai` | AsyncOpenAI client — used for both LM Studio and OpenRouter |
+| `Pillow` | Chess board image rendering |
+| `chess` | python-chess — move validation, board state, FEN |
 | `ddgs` | DuckDuckGo search |
 | `pyyaml` | Config loading |
 | `python-dotenv` | Secret injection |
@@ -57,6 +61,7 @@ All LLM calls go through here. Both providers use `openai.AsyncOpenAI` — the o
 - `get_client(provider, cfg)` — returns a cached `AsyncOpenAI` client for `"local"` or `"openrouter"`.
 - `format_image_blocks(attachments)` — async; returns OpenAI `image_url` content blocks. Works identically for both providers. Images not persisted to DB.
 - `get_local_models(cfg)` — calls `GET /v1/models` on LM Studio, returns list of loaded model IDs.
+- `get_openrouter_models(cfg, paid_only=False)` — fetches model list from OpenRouter API. `paid_only=True` filters to models where `pricing.prompt != "0"`.
 - `complete(messages, provider, model, cfg, ...)` — **async generator** yielding text chunks.
 
 **`complete()` flow:**
@@ -66,7 +71,7 @@ All LLM calls go through here. Both providers use `openai.AsyncOpenAI` — the o
 4. If tool calls: execute `web_search` in parallel → build updated messages → Pass 2 streaming with `tool_choice="none"`.
 
 ### `db.py`
-SQLite persistence. Two tables:
+SQLite persistence. Three tables:
 
 **`messages`** — reply-chain graph. Keyed by Discord message ID.
 ```sql
@@ -83,6 +88,14 @@ channel_id INTEGER
 content    TEXT                     -- capped at 200 chars, last 5 shown
 ```
 
+**`chess_games`** — one row per active chess game, keyed by channel.
+```sql
+channel_id  INTEGER PRIMARY KEY
+fen         TEXT                    -- current position FEN (informational)
+move_stack  TEXT                    -- space-separated UCI move history (source of truth)
+```
+`move_stack` is the authoritative record; the board is always rebuilt by replaying moves from the start. `save_chess_game()`, `get_chess_game()`, `delete_chess_game()` are the CRUD functions.
+
 `init_db()` auto-migrates the old per-channel rolling schema (drops the old `messages` table if `discord_msg_id` column is missing).
 
 ### `personas.py`
@@ -94,6 +107,36 @@ Read-only. No self-modification.
 
 ### `search.py`
 - `web_search(query, max_results, snippet_chars)` — async wrapper over a blocking DuckDuckGo call via `run_in_executor`. Returns a formatted markdown block.
+
+### `board.py`
+Chess board rendering from FEN strings. Two output modes:
+
+- `fen_to_image(fen)` — renders a PNG image (returns `bytes | None`). Uses Unicode chess piece symbols (♔♕♖♗♘♙♚♛♜♝♞♟) drawn with Segoe UI Symbol font. White pieces rendered as white glyphs with dark outline, black pieces as dark glyphs with light outline. Board colours match chess.com. Returns `None` if Pillow is missing or FEN is invalid.
+- `fen_to_board(fen)` — ASCII fallback in a Discord code block using the same Unicode piece symbols. Used when Pillow is unavailable.
+
+Font priority for pieces: `seguisym.ttf` → `seguiemj.ttf` → `arialbd.ttf` → Pillow default. Labels use Arial.
+
+Called from `bot.py` via `extract_board()` which parses `[board: FEN]` tags from LLM output.
+
+### `chess_engine.py`
+Move validation and game state management using `python-chess`. One game per channel, persisted to SQLite.
+
+- `is_chess_persona(name)` — returns `True` if the active persona is `chess`.
+- `get_board(channel_id)` — loads the `chess.Board` from DB (or fresh starting position).
+- `apply_user_move(channel_id, move_text)` — validates + applies the human's move. Returns `(ok, san_or_error, fen)`.
+- `apply_bot_move(channel_id, move_text)` — validates + applies the LLM's move. Same return signature.
+- `extract_bot_move(text)` — pulls the first SAN/UCI-shaped token from LLM response text.
+- `legal_moves_str(channel_id)` — comma-separated SAN list of legal moves.
+- `game_status(channel_id)` — human-readable game-over string, or `None` if ongoing.
+- `current_fen(channel_id)` — authoritative FEN for the current position.
+- `reset_game(channel_id)` — deletes the game from DB.
+- `move_number(channel_id)`, `side_to_move(channel_id)` — convenience accessors.
+
+**Integration with `bot.py`:**
+1. User's move is validated *before* calling the LLM — illegal moves are rejected immediately.
+2. The authoritative FEN, move number, side to move, and full legal-moves list are injected into the system prompt.
+3. After the LLM responds, its move is extracted and validated. If illegal, the LLM is re-prompted with the legal moves list (up to `MAX_CHESS_RETRIES = 3` attempts).
+4. The `[board: FEN]` tag in the response is overwritten with the engine's authoritative FEN.
 
 ## Config Reference (`config.yaml`)
 
@@ -137,6 +180,8 @@ Provider, model, and persona changes are written back to `config.yaml` immediate
 | `verbosity <1-5>` | Set response length (not persisted, resets to 2 on restart) |
 | `model` | List models for current provider |
 | `model <name>` | Switch model (written to config) |
+| `model random` | Pick a random paid model (non-zero cost) from OpenRouter |
+| `model free random` | Pick a random free model from OpenRouter |
 | `provider local` | Switch to LM Studio |
 | `provider openrouter` | Switch to OpenRouter |
 | `restart` | Spawn fresh process, close current |
@@ -194,3 +239,4 @@ Injected as a named rule at the end of every system prompt (`## Response length 
 
 - `INFO` — startup, provider/model/persona changes
 - `ERROR` — LLM failures, reaction handler errors
+

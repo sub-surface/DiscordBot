@@ -1,29 +1,46 @@
-providers:
-  local:
-    base_url: http://localhost:1234/v1
-    api_key: lm-studio
-  openrouter:
-    base_url: https://openrouter.ai/api/v1
-    # api_key is read from OPENROUTER_API_KEY env var
-    models:
-      - anthropic/claude-opus-4-6
-      - anthropic/claude-sonnet-4-6
-      - google/gemini-2.0-flash-001
-      - openai/gpt-4o
-      - meta-llama/llama-3.3-70b-instruct
-
-default_provider: local
-default_model: local-model
-
-persona: mecha-epstein
-
 context:
   max_messages: 40
-
-web_search:
-  max_results: 3
-  snippet_chars: 300
-
+default_model: stepfun/step-3.5-flash:free
+default_provider: openrouter
+persona: chess
+providers:
+  local:
+    api_key: lm-studio
+    base_url: http://localhost:1234/v1
+  openrouter:
+    base_url: https://openrouter.ai/api/v1
+    models:
+    - anthropic/claude-opus-4.5
+    - anthropic/claude-sonnet-4.5
+    - anthropic/claude-3.7-sonnet:thinking
+    - openai/gpt-4.1
+    - openai/gpt-4o
+    - openai/o4-mini
+    - openai/o3
+    - google/gemini-2.5-pro
+    - google/gemini-2.5-flash
+    - google/gemini-2.0-flash-001
+    - deepseek/deepseek-r1-0528
+    - deepseek/deepseek-v3.2
+    - meta-llama/llama-4-maverick
+    - meta-llama/llama-3.3-70b-instruct
+    - qwen/qwen3-235b-a22b
+    - mistralai/mistral-large-2512
+    - x-ai/grok-4
+    - moonshotai/kimi-k2
+    - perplexity/sonar-pro
+    - deepseek/deepseek-r1-0528:free
+    - google/gemma-3-27b-it:free
+    - meta-llama/llama-3.3-70b-instruct:free
+    - mistralai/mistral-small-3.1-24b-instruct:free
+    - nousresearch/hermes-3-llama-3.1-405b:free
+    - openai/gpt-oss-120b:free
+    - qwen/qwen3-235b-a22b-thinking-2507
+    - qwen/qwen3-coder:free
+    - qwen/qwen3-next-80b-a3b-instruct:free
 response:
   max_tokens: 8192
   temperature: 0.7
+web_search:
+  max_results: 3
+  snippet_chars: 300

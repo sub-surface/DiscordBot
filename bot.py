@@ -1,5 +1,7 @@
 import asyncio
+import io
 import logging
+import random
 import os
 import re
 import socket
@@ -66,7 +68,11 @@ VERBOSITY_INSTRUCTIONS = {
 
 import db
 import llm
+import chess_engine
+from board import fen_to_board, fen_to_image
 from personas import list_personas, load_persona
+
+MAX_CHESS_RETRIES = 3
 
 
 def get_system_prompt(persona_name: str, channel_id: int) -> str:
@@ -91,6 +97,8 @@ def _build_meta_suffix() -> str:
     )
 
 
+_BOARD_TAG = re.compile(r'\[board:\s*([^\]]+)\]', re.IGNORECASE)
+
 _ARTIFACT_PATTERNS = [
     r"<tool_call>.*?</tool_call>",                          # Qwen, generic
     r"<tool_response>.*?</tool_response>",                   # Qwen, generic
@@ -100,6 +108,25 @@ _ARTIFACT_PATTERNS = [
     r"\[TOOL_REQUEST\].*?(?:\[END_TOOL_REQUEST\]|\Z)",       # Gemma-3 / LM Studio
     r'^\s*\{"name":\s*"(?:web_search|search)".*?\}\s*$',    # bare JSON function leakage
 ]
+
+
+def extract_board(text: str) -> tuple[str, bytes | None]:
+    """
+    Strip [board: FEN] tag from text.
+    Returns (text_without_tag, png_bytes) if Pillow is available,
+    or (text_without_tag + ascii_board, None) as a fallback.
+    """
+    m = _BOARD_TAG.search(text)
+    if not m:
+        return text, None
+    fen   = m.group(1).strip()
+    clean = _BOARD_TAG.sub('', text).strip()
+    image = fen_to_image(fen)
+    if image is None:
+        # Pillow unavailable — append ASCII board to the text response
+        board_text = fen_to_board(fen)
+        return (clean + '\n\n' + board_text).strip() if board_text else clean, None
+    return clean, image
 
 
 def clean_response(text: str) -> str:
@@ -210,6 +237,8 @@ async def do_restart() -> None:
 async def on_ready():
     db.init_db()
     log.info("Logged in as %s (ID: %s)", bot.user, bot.user.id)
+    if current_provider == "openrouter" and not os.getenv("OPENROUTER_API_KEY"):
+        log.error("OPENROUTER_API_KEY is not set in .env — OpenRouter requests will fail with 401")
     log.info("Provider: %s  Model: %s  Persona: %s", current_provider, current_model, current_persona)
     log.info("Ready — mention the bot to chat.")
 
@@ -221,6 +250,8 @@ async def handle_command(message: discord.Message, cmd: str) -> bool:
 
     if cmd_lower == "reset":
         db.clear_channel(message.channel.id)
+        if chess_engine.is_chess_persona(current_persona):
+            chess_engine.reset_game(message.channel.id)
         await message.reply("Context cleared.")
         return True
 
@@ -235,10 +266,15 @@ async def handle_command(message: discord.Message, cmd: str) -> bool:
         if load_persona(name) is None:
             await message.reply(f"Persona `{name}` not found. Available: {', '.join(list_personas())}")
             return True
+        # Clean up chess game if leaving or entering chess persona
+        if chess_engine.is_chess_persona(current_persona):
+            chess_engine.reset_game(message.channel.id)
         current_persona = name
         config["persona"] = name
         save_config(config)
         db.clear_channel(message.channel.id)
+        if chess_engine.is_chess_persona(name):
+            chess_engine.reset_game(message.channel.id)
         await message.reply(f"Persona switched to **{name}**. Context cleared.")
         return True
 
@@ -266,6 +302,48 @@ async def handle_command(message: discord.Message, cmd: str) -> bool:
             models = config["providers"].get(current_provider, {}).get("models", [])
             lines = [f"→ **{m}** *(active)*" if m == current_model else f"  {m}" for m in models]
             await message.reply(f"**{current_provider} models:**\n```\n" + "\n".join(lines) + "\n```")
+        return True
+
+    if cmd_lower == "model random":
+        if current_provider != "openrouter":
+            await message.reply("Random model selection is only available for the OpenRouter provider.")
+            return True
+        models = await llm.get_openrouter_models(config, paid_only=True)
+        if not models:
+            await message.reply("Could not fetch models from OpenRouter (check your API key or network).")
+            return True
+        current_model = random.choice(models)
+        config["default_model"] = current_model
+        save_config(config)
+        await message.reply(f"🎲 Random model: **{current_model}**")
+        return True
+
+    if cmd_lower in ("model free random", "model random free"):
+        if current_provider != "openrouter":
+            await message.reply("Random free model selection is only available for the OpenRouter provider.")
+            return True
+        models = await llm.get_openrouter_models(config, free_only=True)
+        if not models:
+            await message.reply("Could not fetch free models from OpenRouter (check your API key or network).")
+            return True
+        current_model = random.choice(models)
+        config["default_model"] = current_model
+        save_config(config)
+        await message.reply(f"🎲 Random free model: **{current_model}**")
+        return True
+
+    if cmd_lower == "model free":
+        if current_provider != "openrouter":
+            await message.reply("Free model listing is only available for the OpenRouter provider.")
+            return True
+        models = await llm.get_openrouter_models(config, free_only=True)
+        if not models:
+            await message.reply("Could not fetch free models from OpenRouter (check your API key or network).")
+            return True
+        lines = [f"→ **{m}** *(active)*" if m == current_model else f"  {m}" for m in models]
+        body = "\n".join(lines)
+        for chunk in chunk_text(f"**OpenRouter free models:**\n```\n{body}\n```"):
+            await message.reply(chunk)
         return True
 
     if cmd_lower.startswith("model "):
@@ -324,7 +402,32 @@ async def on_message(message: discord.Message):
     if prompt and await handle_command(message, prompt):
         return
 
+    is_chess = chess_engine.is_chess_persona(current_persona)
+
+    # ── Chess: validate user move before calling the LLM ─────────
+    if is_chess and prompt:
+        ok, san_or_err, fen = chess_engine.apply_user_move(message.channel.id, prompt)
+        if not ok:
+            await message.reply(san_or_err)
+            return
+
     system = get_system_prompt(current_persona, message.channel.id)
+
+    # Inject authoritative board state for chess persona
+    if is_chess:
+        fen_now = chess_engine.current_fen(message.channel.id)
+        status = chess_engine.game_status(message.channel.id)
+        chess_ctx = (
+            f"\n\n## Board state (authoritative — maintained by the engine)\n"
+            f"FEN: `{fen_now}`\n"
+            f"Move: {chess_engine.move_number(message.channel.id)}, "
+            f"{chess_engine.side_to_move(message.channel.id)} to move\n"
+            f"Legal moves: {chess_engine.legal_moves_str(message.channel.id)}"
+        )
+        if status:
+            chess_ctx += f"\n**Game over: {status}**"
+        system += chess_ctx
+
     context = await build_context(message, bot.user.id)
 
     image_blocks = await llm.format_image_blocks(message.attachments)
@@ -346,16 +449,60 @@ async def on_message(message: discord.Message):
             return
 
     cleaned = clean_response(raw)
-    if not cleaned:
+
+    # ── Chess: validate LLM move, retry if illegal ───────────────
+    if is_chess and not chess_engine.game_status(message.channel.id):
+        bot_move_token = chess_engine.extract_bot_move(cleaned)
+        retries = 0
+        while retries < MAX_CHESS_RETRIES:
+            if bot_move_token:
+                ok, san_or_err, fen = chess_engine.apply_bot_move(message.channel.id, bot_move_token)
+                if ok:
+                    # Replace any [board: ...] tag with the authoritative FEN
+                    cleaned = _BOARD_TAG.sub("", cleaned).strip()
+                    cleaned += f"\n\n[board: {fen}]"
+                    break
+            # Illegal or unparseable — retry with feedback
+            retries += 1
+            log.warning("Chess retry %d/%d — illegal move '%s'", retries, MAX_CHESS_RETRIES, bot_move_token)
+            legal = chess_engine.legal_moves_str(message.channel.id)
+            retry_msg = (
+                f"Your move '{bot_move_token}' is illegal. "
+                f"The current FEN is: {chess_engine.current_fen(message.channel.id)}\n"
+                f"Legal moves: {legal}\n"
+                f"Pick one legal move and respond with ONLY that move in SAN."
+            )
+            retry_payload = messages_payload + [
+                {"role": "assistant", "content": cleaned},
+                {"role": "user", "content": retry_msg},
+            ]
+            try:
+                retry_gen = llm.complete(messages=retry_payload, provider=current_provider, model=current_model, cfg=config)
+                retry_raw = ""
+                async for chunk in retry_gen:
+                    retry_raw += chunk
+                cleaned = clean_response(retry_raw)
+                bot_move_token = chess_engine.extract_bot_move(cleaned)
+            except Exception as e:
+                log.error("Chess retry LLM error: %s", e)
+                break
+        else:
+            # All retries exhausted
+            cleaned = f"*(Failed to produce a legal move after {MAX_CHESS_RETRIES} attempts. Use 🔄 to regenerate.)*"
+
+    cleaned, board_image = extract_board(cleaned)
+    if not cleaned and not board_image:
         await reply_msg.edit(content="*(no response)*")
         db.delete_message(message.id)
         return
 
     db.save_message(reply_msg.id, message.id, message.channel.id, "assistant", cleaned)
     chunks = chunk_text(cleaned)
-    await reply_msg.edit(content=chunks[0])
+    await reply_msg.edit(content=chunks[0] if chunks else "-# *…*")
     for extra in chunks[1:]:
         await message.channel.send(extra)
+    if board_image:
+        await message.channel.send(file=discord.File(io.BytesIO(board_image), filename="board.png"))
 
 
 @bot.event
@@ -383,11 +530,14 @@ async def on_reaction_add(reaction: discord.Reaction, user: discord.User):
                 gen = llm.complete(messages=messages_payload, provider=current_provider, model=current_model, cfg=config, temperature=0.85)
                 raw, new_msg = await stream_to_discord(gen, reaction.message)
             cleaned = clean_response(raw)
+            cleaned, board_image = extract_board(cleaned)
             db.save_message(new_msg.id, user_row["discord_msg_id"], channel_id, "assistant", cleaned or "*(no response)*")
             chunks = chunk_text(cleaned)
             await new_msg.edit(content=chunks[0] if chunks else "*(no response)*")
             for extra in chunks[1:]:
                 await reaction.message.channel.send(extra)
+            if board_image:
+                await reaction.message.channel.send(file=discord.File(io.BytesIO(board_image), filename="board.png"))
         except Exception as e:
             log.error("Regen error: %s", e)
 

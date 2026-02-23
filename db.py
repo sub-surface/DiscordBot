@@ -34,6 +34,15 @@ def init_db() -> None:
                 ts          DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS chess_games (
+                channel_id  INTEGER PRIMARY KEY,
+                fen         TEXT NOT NULL,
+                move_stack  TEXT NOT NULL DEFAULT '',
+                started_ts  DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_ts  DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         conn.commit()
 
 
@@ -99,4 +108,34 @@ def get_pins(channel_id: int) -> list[str]:
 def clear_channel(channel_id: int) -> None:
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("DELETE FROM messages WHERE channel_id = ?", (channel_id,))
+        conn.commit()
+
+
+# ── Chess game persistence ──────────────────────────────────────────
+
+def save_chess_game(channel_id: int, fen: str, move_stack: str) -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO chess_games "
+            "(channel_id, fen, move_stack, updated_ts) "
+            "VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
+            (channel_id, fen, move_stack),
+        )
+        conn.commit()
+
+
+def get_chess_game(channel_id: int) -> dict | None:
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT channel_id, fen, move_stack FROM chess_games WHERE channel_id = ?",
+            (channel_id,),
+        ).fetchone()
+    if row:
+        return {"channel_id": row[0], "fen": row[1], "move_stack": row[2]}
+    return None
+
+
+def delete_chess_game(channel_id: int) -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("DELETE FROM chess_games WHERE channel_id = ?", (channel_id,))
         conn.commit()
