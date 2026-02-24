@@ -21,6 +21,7 @@ DiscordBot/
 ├── db.py           # SQLite CRUD — messages (reply-chain) + pins
 ├── board.py        # FEN → chess board rendering (PNG image + ASCII fallback)
 ├── chess_engine.py # Move validation, board state, game lifecycle (python-chess)
+├── chess_api.py    # Stockfish move lookup via chess-api.com (chess-classic persona)
 ├── personas.py     # load_persona(), render_persona(), list_personas()
 ├── search.py       # DuckDuckGo web search (async wrapper)
 ├── config.yaml     # All non-secret config
@@ -118,10 +119,17 @@ Font priority for pieces: `seguisym.ttf` → `seguiemj.ttf` → `arialbd.ttf` �
 
 Called from `bot.py` via `extract_board()` which parses `[board: FEN]` tags from LLM output.
 
+### `chess_api.py`
+Single async function for the chess-classic persona.
+
+- `get_stockfish_move(fen, depth=12)` — POSTs to `https://chess-api.com/v1` with `{"fen": fen, "depth": depth}` using aiohttp. Returns the parsed JSON dict on success (caller uses `.move` for UCI and `.san` for SAN), or `None` on any failure. Handles HTTP errors, missing `move` key, and chess-api.com's `type=info` error envelope. 15-second timeout per request.
+
 ### `chess_engine.py`
 Move validation and game state management using `python-chess`. One game per channel, persisted to SQLite.
 
-- `is_chess_persona(name)` — returns `True` if the active persona is `chess`.
+- `is_chess_persona(name)` — returns `True` if the active persona is `chess` (LLM-based).
+- `is_chess_classic_persona(name)` — returns `True` if the active persona is `chess-classic` (API-based).
+- `is_any_chess_persona(name)` — returns `True` for either chess persona; used by reset/switch guards.
 - `get_board(channel_id)` — loads the `chess.Board` from DB (or fresh starting position).
 - `apply_user_move(channel_id, move_text)` — validates + applies the human's move. Returns `(ok, san_or_error, fen)`.
 - `apply_bot_move(channel_id, move_text)` — validates + applies the LLM's move. Same return signature.

@@ -1,8 +1,8 @@
 context:
   max_messages: 40
-default_model: stepfun/step-3.5-flash:free
-default_provider: openrouter
-persona: chess
+default_model: google/gemma-3-4b
+default_provider: local
+persona: mochi
 providers:
   local:
     api_key: lm-studio

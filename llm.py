@@ -48,8 +48,8 @@ def get_client(provider: str, cfg: dict) -> AsyncOpenAI:
                 base_url=pcfg["base_url"],
                 api_key=api_key,
                 default_headers={
-                    "HTTP-Referer": "https://github.com/psychograph",
-                    "X-Title": "Psychograph",
+                    "HTTP-Referer": "https://github.com/sub-surface/discordbot",
+                    "X-Title": "sub-surface/discordbot on GitHub",
                 },
             )
     return _clients[provider]

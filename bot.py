@@ -54,9 +54,22 @@ current_provider: str = config.get("default_provider", "local")
 current_model: str = config.get("default_model", "local-model")
 current_persona: str = config.get("persona", "pineapple")
 verbosity: int = 2
+chess_level: int = 3  # chess-classic difficulty; 3 ≈ 1500 Elo (see CHESS_LEVEL_MAP)
 
 DISCORD_MSG_LIMIT = 1990
 STREAM_EDIT_INTERVAL = 1.2
+
+# Maps user-facing level (1-8) → (search depth, Elo label)
+CHESS_LEVEL_MAP = {
+    1: (1,  "~900"),
+    2: (3,  "~1200"),
+    3: (5,  "~1500"),
+    4: (7,  "~1700"),
+    5: (9,  "~2000"),
+    6: (11, "~2200"),
+    7: (13, "~2400"),
+    8: (15, "~2600+"),
+}
 
 VERBOSITY_INSTRUCTIONS = {
     1: "ONE sentence. Stop after the period. No lists, no follow-up thoughts, no elaboration.",
@@ -66,13 +79,97 @@ VERBOSITY_INSTRUCTIONS = {
     5: "No length limit. Full depth, full character voice — as long as the response warrants.",
 }
 
+_THINKING_LINES = [
+    "-# *· thinking ·*",
+    "-# *· gathering thoughts ·*",
+    "-# *· consulting the void ·*",
+    "-# *· ✦ reaching into the ether ✦ ·*",
+    "-# *· ˚ · brewing a response · ˚ ·*",
+    "-# *· rummaging through neurons ·*",
+    "-# *· ⋆ something stirs ⋆ ·*",
+    "-# *· words are forming ·*",
+    "-# *· ✧ contemplating ✧ ·*",
+    "-# *· turning this over ·*",
+    "-# *· ˚ · hold on · ˚ ·*",
+    "-# *· ⊹ thinking very hard ⊹ ·*",
+    "-# *· sifting through the noise ·*",
+    "-# *· ★ · working on it · ★ ·*",
+    "-# *· give it a moment ·*",
+    "-# *· ✦ · the gears turn · ✦ ·*",
+    "-# *· assembling something ·*",
+    "-# *· ˖ ° . searching . ° ˖ ·*",
+    "-# *· in the quiet before words ·*",
+    "-# *· ⋆ ˚ · nearly there · ˚ ⋆ ·*",
+]
+
+VERBOSITY_LABELS = {
+    1: "·˚ whisper mode · one sentence, then silence ˚·",
+    2: "·˚ concise · a breath, not a speech ˚·",
+    3: "·˚ balanced · a thought, fully formed ˚·",
+    4: "·˚ expansive · room to stretch out ˚·",
+    5: "·˚ unbound · full depth, full voice, no ceiling ˚·",
+}
+
 import db
 import llm
+import chess_api
 import chess_engine
 from board import fen_to_board, fen_to_image
-from personas import list_personas, load_persona
+from personas import list_personas, load_persona, load_persona_style
+from styles import get_style, make_embed, EMBED_DESC_LIMIT
 
 MAX_CHESS_RETRIES = 3
+
+# ── Chess result flavour text ─────────────────────────────────────────
+_WIN_MSGS = [
+    "✦ · checkmate · you win · ✦",
+    "~*~ stockfish has fallen ~*~",
+    "· ★ · you beat the engine · ★ ·",
+    "*˚· checkmate! well played ·˚*",
+    "✧ the machine bows to you ✧",
+    "·:· checkmate · a stunning finish ·:·",
+    "~ ✦ ~ you outplayed stockfish ~ ✦ ~",
+]
+
+_LOSS_MSGS = [
+    "✦ checkmate · the engine prevails ✦",
+    "~*~ stockfish wins this one ~*~",
+    "· ★ · no mercy from the machine · ★ ·",
+    "*˚· checkmate · better luck next time ·˚*",
+    "✧ outplayed · the engine is ruthless ✧",
+    "·:· checkmate · the machine never sleeps ·:·",
+    "~ ✦ ~ stockfish sends its regards ~ ✦ ~",
+]
+
+_DRAW_MSGS = [
+    "·˚ draw · a perfectly balanced game ˚·",
+    "~*~ neither side could break through ~*~",
+    "✦ · draw · honour preserved on both sides · ✦",
+    "*˚· stalemate · a hard-fought result ·˚*",
+    "✧ draw · well contested ✧",
+    "·:· a draw · the position holds ·:·",
+    "~ ✦ ~ no winner today · a fair split ~ ✦ ~",
+]
+
+_RESIGN_MSGS = [
+    "·˚ you resigned · the engine accepts ˚·",
+    "~*~ white tips the king ~*~",
+    "✦ white resigns · black wins ✦",
+    "*˚· a wise decision · resigned ·˚*",
+    "✧ resigned · fight again another day ✧",
+    "·:· you resigned · until next time ·:·",
+    "~ ✦ ~ white puts down the pieces ~ ✦ ~",
+]
+
+
+def _chess_result_text(status: str) -> str:
+    """Pick a random flavour message matching the game outcome."""
+    s = status.lower()
+    if "white wins" in s:
+        return random.choice(_WIN_MSGS)
+    if "black wins" in s:
+        return random.choice(_LOSS_MSGS)
+    return random.choice(_DRAW_MSGS)
 
 
 def get_system_prompt(persona_name: str, channel_id: int) -> str:
@@ -199,7 +296,7 @@ async def build_context(message: discord.Message, bot_id: int) -> list[dict]:
 
 
 async def stream_to_discord(gen, reply_target: discord.Message) -> tuple[str, discord.Message]:
-    placeholder = await reply_target.reply("-# *generating...*")
+    placeholder = await reply_target.reply(random.choice(_THINKING_LINES))
     full_text, last_edit = "", 0.0
     try:
         async for chunk in gen:
@@ -244,21 +341,33 @@ async def on_ready():
 
 
 async def handle_command(message: discord.Message, cmd: str) -> bool:
-    global current_persona, current_provider, current_model, verbosity
+    global current_persona, current_provider, current_model, verbosity, chess_level
 
     cmd_lower = cmd.lower().strip()
 
+    if cmd_lower == "resign":
+        if not chess_engine.is_any_chess_persona(current_persona):
+            await message.reply("· no game in progress · no king to topple ·")
+            return True
+        fen = chess_engine.current_fen(message.channel.id)
+        chess_engine.reset_game(message.channel.id)
+        text, board_image = extract_board(f"{random.choice(_RESIGN_MSGS)}\n\n[board: {fen}]")
+        await message.reply(text)
+        if board_image:
+            await message.channel.send(file=discord.File(io.BytesIO(board_image), filename="board.png"))
+        return True
+
     if cmd_lower == "reset":
         db.clear_channel(message.channel.id)
-        if chess_engine.is_chess_persona(current_persona):
+        if chess_engine.is_any_chess_persona(current_persona):
             chess_engine.reset_game(message.channel.id)
-        await message.reply("Context cleared.")
+        await message.reply("·˚ slate wiped · starting fresh ˚·")
         return True
 
     if cmd_lower == "personas":
         names = list_personas()
-        lines = [f"→ **{n}** *(active)*" if n == current_persona else f"  {n}" for n in names]
-        await message.reply("**Personas:**\n```\n" + "\n".join(lines) + "\n```")
+        lines = [f"→ {n} *(active)*" if n == current_persona else f"  {n}" for n in names]
+        await message.reply("· ★ · personas · ★ ·\n```\n" + "\n".join(lines) + "\n```")
         return True
 
     if cmd_lower.startswith("persona "):
@@ -266,16 +375,16 @@ async def handle_command(message: discord.Message, cmd: str) -> bool:
         if load_persona(name) is None:
             await message.reply(f"Persona `{name}` not found. Available: {', '.join(list_personas())}")
             return True
-        # Clean up chess game if leaving or entering chess persona
-        if chess_engine.is_chess_persona(current_persona):
+        # Clean up chess game if leaving or entering a chess persona
+        if chess_engine.is_any_chess_persona(current_persona):
             chess_engine.reset_game(message.channel.id)
         current_persona = name
         config["persona"] = name
         save_config(config)
         db.clear_channel(message.channel.id)
-        if chess_engine.is_chess_persona(name):
+        if chess_engine.is_any_chess_persona(name):
             chess_engine.reset_game(message.channel.id)
-        await message.reply(f"Persona switched to **{name}**. Context cleared.")
+        await message.reply(f"· now speaking as: **{name}** · previous context dissolved ·")
         return True
 
     if cmd_lower == "prompt":
@@ -288,9 +397,28 @@ async def handle_command(message: discord.Message, cmd: str) -> bool:
         val = cmd[10:].strip()
         if val.isdigit() and 1 <= int(val) <= 5:
             verbosity = int(val)
-            await message.reply(f"Verbosity set to **{verbosity}/5** — {VERBOSITY_INSTRUCTIONS[verbosity]}")
+            await message.reply(f"· verbosity **{verbosity}/5** · {VERBOSITY_LABELS[verbosity]}")
         else:
-            await message.reply("Usage: `verbosity <1-5>`")
+            await message.reply("· usage: `verbosity <1-5>` ·")
+        return True
+
+    if cmd_lower == "level":
+        depth, elo = CHESS_LEVEL_MAP[chess_level]
+        await message.reply(f"· stockfish · **level {chess_level}/8** · {elo} Elo · depth {depth} ·")
+        return True
+
+    if cmd_lower.startswith("level "):
+        val = cmd[6:].strip()
+        if val.isdigit() and 1 <= int(val) <= 8:
+            chess_level = int(val)
+            depth, elo = CHESS_LEVEL_MAP[chess_level]
+            await message.reply(f"· difficulty dialled to **level {chess_level}/8** · {elo} Elo · depth {depth} ·")
+        else:
+            await message.reply(
+                "· ♟ · level <1-8> · ♟ ·\n```\n"
+                + "\n".join(f"  {l}  depth {d:>2}  {e}" for l, (d, e) in CHESS_LEVEL_MAP.items())
+                + "\n```"
+            )
         return True
 
     if cmd_lower == "model":
@@ -372,7 +500,7 @@ async def handle_command(message: discord.Message, cmd: str) -> bool:
         return True
 
     if cmd_lower == "restart":
-        await message.reply("Restarting...")
+        await message.reply("·˚ rebooting · back in a moment ˚·")
         asyncio.create_task(do_restart())
         return True
 
@@ -403,6 +531,7 @@ async def on_message(message: discord.Message):
         return
 
     is_chess = chess_engine.is_chess_persona(current_persona)
+    is_chess_classic = chess_engine.is_chess_classic_persona(current_persona)
 
     # ── Chess: validate user move before calling the LLM ─────────
     if is_chess and prompt:
@@ -410,6 +539,86 @@ async def on_message(message: discord.Message):
         if not ok:
             await message.reply(san_or_err)
             return
+
+    # ── Chess-classic: Stockfish via chess-api.com, no LLM ───────
+    if is_chess_classic:
+        channel_id = message.channel.id
+        parent_id = message.reference.message_id if message.reference else None
+
+        async def _reply_classic(text: str) -> None:
+            """Send a chess-classic reply, save both sides to DB."""
+            db.save_message(message.id, parent_id, channel_id, "user", prompt)
+            clean, board_image = extract_board(text)
+            try:
+                reply_msg = await message.reply(clean)
+            except discord.HTTPException as e:
+                log.error("chess-classic send failed: %s", e)
+                return
+            db.save_message(reply_msg.id, message.id, channel_id, "assistant", clean)
+            if board_image:
+                try:
+                    await message.channel.send(
+                        file=discord.File(io.BytesIO(board_image), filename="board.png")
+                    )
+                except discord.HTTPException as e:
+                    log.error("chess-classic board image send failed: %s", e)
+
+        # 0. Game already over from a previous move?
+        status = chess_engine.game_status(channel_id)
+        if status:
+            await _reply_classic(
+                f"{_chess_result_text(status)}\n\n[board: {chess_engine.current_fen(channel_id)}]"
+            )
+            return
+
+        # 1. No move text → show current board
+        if not prompt:
+            await _reply_classic(
+                f"· ♟ · awaiting your move · SAN or UCI · ♟ ·\n\n"
+                f"[board: {chess_engine.current_fen(channel_id)}]"
+            )
+            return
+
+        # 2. Apply the user's move (validates + persists)
+        ok, san_or_err, _ = chess_engine.apply_user_move(channel_id, prompt)
+        if not ok:
+            await message.reply(san_or_err)
+            return
+
+        # 3. Game over after user's move?
+        status = chess_engine.game_status(channel_id)
+        if status:
+            await _reply_classic(
+                f"{_chess_result_text(status)}\n\n[board: {chess_engine.current_fen(channel_id)}]"
+            )
+            return
+
+        # 4. Ask Stockfish for the bot's reply
+        depth, _ = CHESS_LEVEL_MAP[chess_level]
+        result = await chess_api.get_stockfish_move(chess_engine.current_fen(channel_id), depth=depth)
+        if result is None:
+            await message.reply("·˚ the oracle is silent · chess-api.com unreachable · try again ˚·")
+            return
+
+        # 5. Apply the bot's move (validates + persists)
+        ok, san_or_err, _ = chess_engine.apply_bot_move(channel_id, result["move"])
+        if not ok:
+            log.error("Stockfish returned illegal move: %s", result.get("move"))
+            await message.reply(
+                f"Engine error — Stockfish returned an illegal move (`{result.get('move')}`). "
+                "Use `@bot reset` to start over."
+            )
+            return
+
+        # 6. Bot SAN + optional game-over line + board image
+        status = chess_engine.game_status(channel_id)
+        reply_text = f"**{result['san']}**"
+        if status:
+            reply_text += f"\n\n{_chess_result_text(status)}"
+        reply_text += f"\n\n[board: {chess_engine.current_fen(channel_id)}]"
+
+        await _reply_classic(reply_text)
+        return
 
     system = get_system_prompt(current_persona, message.channel.id)
 
@@ -497,10 +706,17 @@ async def on_message(message: discord.Message):
         return
 
     db.save_message(reply_msg.id, message.id, message.channel.id, "assistant", cleaned)
-    chunks = chunk_text(cleaned)
-    await reply_msg.edit(content=chunks[0] if chunks else "-# *…*")
-    for extra in chunks[1:]:
-        await message.channel.send(extra)
+    style = get_style(current_persona, load_persona_style(current_persona))
+    if style:
+        chunks = chunk_text(cleaned, limit=EMBED_DESC_LIMIT)
+        await reply_msg.edit(content=None, embed=make_embed(chunks[0], style) if chunks else None)
+        for extra in chunks[1:]:
+            await message.channel.send(embed=make_embed(extra, style))
+    else:
+        chunks = chunk_text(cleaned)
+        await reply_msg.edit(content=chunks[0] if chunks else "-# *…*")
+        for extra in chunks[1:]:
+            await message.channel.send(extra)
     if board_image:
         await message.channel.send(file=discord.File(io.BytesIO(board_image), filename="board.png"))
 
@@ -532,10 +748,17 @@ async def on_reaction_add(reaction: discord.Reaction, user: discord.User):
             cleaned = clean_response(raw)
             cleaned, board_image = extract_board(cleaned)
             db.save_message(new_msg.id, user_row["discord_msg_id"], channel_id, "assistant", cleaned or "*(no response)*")
-            chunks = chunk_text(cleaned)
-            await new_msg.edit(content=chunks[0] if chunks else "*(no response)*")
-            for extra in chunks[1:]:
-                await reaction.message.channel.send(extra)
+            style = get_style(current_persona, load_persona_style(current_persona))
+            if style:
+                chunks = chunk_text(cleaned, limit=EMBED_DESC_LIMIT)
+                await new_msg.edit(content=None, embed=make_embed(chunks[0], style) if chunks else None)
+                for extra in chunks[1:]:
+                    await reaction.message.channel.send(embed=make_embed(extra, style))
+            else:
+                chunks = chunk_text(cleaned)
+                await new_msg.edit(content=chunks[0] if chunks else "*(no response)*")
+                for extra in chunks[1:]:
+                    await reaction.message.channel.send(extra)
             if board_image:
                 await reaction.message.channel.send(file=discord.File(io.BytesIO(board_image), filename="board.png"))
         except Exception as e:

@@ -37,3 +37,16 @@ def load_persona(name: str) -> str | None:
         return render_persona(data)
     except (json.JSONDecodeError, KeyError):
         return raw  # plain-text persona fallback
+
+
+def load_persona_style(name: str) -> dict | None:
+    """Extract the 'style' dict from a JSON persona file, if present."""
+    path = PERSONAS_DIR / f"{name}.md"
+    if not path.exists():
+        return None
+    raw = path.read_text(encoding="utf-8").strip()
+    try:
+        data = json.loads(raw)
+        return data.get("style")
+    except (json.JSONDecodeError, KeyError):
+        return None

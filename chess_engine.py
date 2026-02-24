@@ -160,8 +160,18 @@ def reset_game(channel_id: int) -> None:
 
 
 def is_chess_persona(persona_name: str) -> bool:
-    """True if the active persona is the chess persona."""
+    """True if the active persona is the LLM-based chess persona."""
     return persona_name.lower() == "chess"
+
+
+def is_chess_classic_persona(persona_name: str) -> bool:
+    """True if the active persona is the API-based chess-classic persona."""
+    return persona_name.lower() == "chess-classic"
+
+
+def is_any_chess_persona(persona_name: str) -> bool:
+    """True for any chess persona (LLM or API)."""
+    return is_chess_persona(persona_name) or is_chess_classic_persona(persona_name)
 
 
 def move_number(channel_id: int) -> int:
