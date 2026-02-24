@@ -1,8 +1,8 @@
 context:
   max_messages: 40
-default_model: google/gemma-3-4b
+default_model: mechaepstein-8000
 default_provider: local
-persona: mochi
+persona: normal_dude
 providers:
   local:
     api_key: lm-studio

@@ -1,6 +1,9 @@
 # Bot cheat sheet
 
-Mention the bot to chat, or use these commands:
+Mention the bot to chat. Chain commands with `;`:
+```
+@bot persona mochi; verbosity 3; reset
+```
 
 ## Personas
 `@bot personas` — list all personas (active one marked)
@@ -22,12 +25,25 @@ Mention the bot to chat, or use these commands:
 ## Output
 `@bot verbosity <1-5>` — how long responses are (default: 2)
 
-## Reactions
+## Settings Panel
+`@bot options` — interactive settings panel with:
+- persona switcher dropdown
+- verbosity buttons (active shown in green)
+- reset context button
+
+## Buttons (on every response)
+`↺ regenerate` — re-run the response with higher temperature
+`📌 pin` — pin the message as a persistent note for this channel
+
+## Reactions (also still work)
 🔄 on a bot message — regenerate that response
-📌 on a bot message — pin it as a persistent note for this channel
+📌 on a bot message — pin it as a persistent note
+
+## Chess
+`@bot resign` — resign the current game
+`@bot level <1-8>` — set chess-classic difficulty
 
 ## Meta
 `@bot restart` — restart the bot
-`@bot <cmd>; <cmd>` — chain commands with semicolons
 
 The bot has web search — it decides when to use it.

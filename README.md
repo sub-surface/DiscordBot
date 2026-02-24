@@ -1,6 +1,6 @@
 # Psychograph Discord Bot
 
-A multi-persona Discord bot backed by local LLMs via **LM Studio** or cloud models via **OpenRouter**. Each persona is a distinct character with its own voice, expertise, and worldview. Context follows Discord reply chains — multiple independent conversations can coexist in the same channel.
+A multi-persona Discord bot backed by local LLMs via **LM Studio** or cloud models via **OpenRouter**. Each persona is a distinct character with its own voice, expertise, and embed styling. Context follows Discord reply chains — multiple independent conversations can coexist in the same channel.
 
 ---
 
@@ -47,9 +47,9 @@ Attach images to any message and the bot will see them (requires a vision-capabl
 
 ## Commands
 
-All commands use `@bot <command>`. Chain multiple commands with `;`:
+All commands use `@bot <command>`. Chain multiple commands with `;` — all outputs are collected and posted as a single reply:
 ```
-@bot reset; persona ledger; verbosity 3
+@bot persona mochi; verbosity 3; reset
 ```
 
 ### Personas
@@ -66,6 +66,9 @@ All commands use `@bot <command>`. Chain multiple commands with `;`:
 |---|---|
 | `@bot model` | List available models for the current provider |
 | `@bot model <name>` | Switch to a specific model |
+| `@bot model free` | List all free-tier models on OpenRouter |
+| `@bot model random` | Switch to a random paid model |
+| `@bot model free random` | Switch to a random free model |
 | `@bot provider local` | Switch to LM Studio (local) |
 | `@bot provider openrouter` | Switch to OpenRouter (cloud) |
 
@@ -75,16 +78,28 @@ All commands use `@bot <command>`. Chain multiple commands with `;`:
 |---|---|
 | `@bot verbosity <1-5>` | Set response length (default: 2) |
 | `@bot reset` | Clear this channel's conversation history |
+| `@bot options` | Open interactive settings panel |
 | `@bot restart` | Restart the bot process |
 
-### Reaction Shortcuts
+### Settings Panel (`@bot options`)
 
-React to any bot message:
+An interactive embed with:
+- **Persona dropdown** — switch persona in one click (clears channel history)
+- **Verbosity buttons** — 1–5, active level highlighted in green
+- **Reset context** — clears conversation history for this channel
 
-| Emoji | Action |
+---
+
+## Buttons
+
+Every bot response has two buttons:
+
+| Button | Action |
 |---|---|
-| 🔄 | **Regenerate** — re-run the response with higher temperature (more variation) |
-| 📌 | **Pin** — save the message as a note, injected into future system prompts for this channel |
+| `↺ regenerate` | Re-run the response with higher temperature (more variation) |
+| `📌 pin` | Save the message as a persistent note for this channel |
+
+Buttons survive bot restarts. Reactions (🔄 and 📌) also still work as alternatives.
 
 ---
 
@@ -103,6 +118,8 @@ Control how much the bot writes with `@bot verbosity N`:
 ---
 
 ## Personas
+
+Each persona has its own embed color and in-character footer tagline.
 
 | Persona | Character |
 |---|---|
@@ -124,10 +141,10 @@ Control how much the bot writes with `@bot verbosity N`:
 | `k_punk` | Mark Fisher mourner. Blames Land for the right-acc pipeline. Holds onto what Fisher was building. |
 | `strange_loop` | AI safety researcher. Reflective stability focus. |
 | `plateau` | Deleuze postdoc. Precise on concepts. Virtuality, cinema, the actual/virtual distinction. |
-| `chess` | Chess opponent (~1900 Elo). Responds only to moves in SAN or UCI notation. |
-| `pineapple` | 23 years of pineapple on pizza. Has derived a general philosophy from it. Thoroughly at peace. |
+| `mochi` | Maximally soft and chaotic entity made of starlight, marshmallow fluff, and unhinged affection. Mandatory uwu. |
 | `normal_dude` | Just a normal person on Discord. Not a bot. Why would you even ask. |
-| `other_persona` | Generic fallback |
+| `pineapple` | 23 years of pineapple on pizza. Has derived a general philosophy from it. Thoroughly at peace. |
+| `chess` | Chess opponent (~1900 Elo). Responds only to moves in SAN or UCI notation. |
 
 ---
 
@@ -182,3 +199,4 @@ Provider, model, and persona changes made via `@bot` commands are written back t
 - `@bot reset` clears history for the current channel only
 - Verbosity resets to level 2 on restart (not persisted)
 - Pinned notes (📌) persist per-channel and are injected into every response in that channel
+- The bot has web search — it decides when to use it

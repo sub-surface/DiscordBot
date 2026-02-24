@@ -172,6 +172,148 @@ def _chess_result_text(status: str) -> str:
     return random.choice(_DRAW_MSGS)
 
 
+# ── UI Views ──────────────────────────────────────────────────────────────────
+
+class ResponseView(discord.ui.View):
+    """Persistent action row attached to every LLM response."""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="↺ regenerate", style=discord.ButtonStyle.secondary, custom_id="psychograph:regen")
+    async def regen(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        bot_row = db.get_message(interaction.message.id)
+        if not bot_row:
+            return
+        user_row = db.get_message(bot_row["parent_msg_id"]) if bot_row["parent_msg_id"] else None
+        if not user_row:
+            return
+
+        # Strip buttons from old message while we work
+        await interaction.message.edit(view=None)
+        db.delete_message(interaction.message.id)
+
+        channel_id = interaction.channel_id
+        chain = _db_chain(user_row["parent_msg_id"])
+        system = get_system_prompt(current_persona, channel_id)
+        messages_payload = [{"role": "system", "content": system}] + chain + [{"role": "user", "content": user_row["content"]}]
+
+        try:
+            gen = llm.complete(messages=messages_payload, provider=current_provider, model=current_model, cfg=config, temperature=0.85)
+            raw, new_msg = await stream_to_discord(gen, interaction.message)
+            cleaned = clean_response(raw)
+            cleaned, board_image = extract_board(cleaned)
+            db.save_message(new_msg.id, user_row["discord_msg_id"], channel_id, "assistant", cleaned or "*(no response)*")
+            style = get_style(current_persona, load_persona_style(current_persona))
+            if style:
+                chunks = chunk_text(cleaned, limit=EMBED_DESC_LIMIT)
+                await new_msg.edit(content=None, embed=make_embed(chunks[0], style) if chunks else None, view=ResponseView())
+                for extra in chunks[1:]:
+                    await interaction.message.channel.send(embed=make_embed(extra, style))
+            else:
+                chunks = chunk_text(cleaned)
+                await new_msg.edit(content=chunks[0] if chunks else "*(no response)*", view=ResponseView())
+                for extra in chunks[1:]:
+                    await interaction.message.channel.send(extra)
+            if board_image:
+                await interaction.message.channel.send(file=discord.File(io.BytesIO(board_image), filename="board.png"))
+        except Exception as e:
+            log.error("Regen (button) error: %s", e)
+
+    @discord.ui.button(label="📌 pin", style=discord.ButtonStyle.secondary, custom_id="psychograph:pin")
+    async def pin(self, interaction: discord.Interaction, button: discord.ui.Button):
+        msg = interaction.message
+        content = msg.embeds[0].description if msg.embeds else msg.content
+        if content:
+            db.add_pin(interaction.channel_id, content[:200])
+            await interaction.response.send_message("-# *· pinned ·*", ephemeral=True)
+        else:
+            await interaction.response.send_message("-# *· nothing to pin ·*", ephemeral=True)
+
+
+def _options_embed() -> discord.Embed:
+    """Build the settings overview embed, tinted with the current persona's colour."""
+    style = get_style(current_persona, load_persona_style(current_persona))
+    color = style["color"] if style else 0x2B2D31
+    embed = discord.Embed(title="⚙️ settings", color=color)
+    embed.add_field(name="persona", value=f"`{current_persona}`", inline=True)
+    embed.add_field(name="verbosity", value=f"**{verbosity}/5**", inline=True)
+    embed.add_field(name="provider", value=f"`{current_provider}`", inline=True)
+    embed.add_field(name="model", value=f"`{current_model}`", inline=False)
+    embed.set_footer(text=VERBOSITY_LABELS[verbosity])
+    return embed
+
+
+class PersonaSelect(discord.ui.Select):
+    def __init__(self):
+        names = list_personas()[:25]  # Discord select limit
+        options = [
+            discord.SelectOption(label=n, value=n, default=(n == current_persona))
+            for n in names
+        ]
+        super().__init__(placeholder="switch persona…", options=options, row=0)
+
+    async def callback(self, interaction: discord.Interaction):
+        global current_persona
+        name = self.values[0]
+        if load_persona(name) is None:
+            await interaction.response.send_message(f"Persona `{name}` not found.", ephemeral=True)
+            return
+        if chess_engine.is_any_chess_persona(current_persona):
+            chess_engine.reset_game(interaction.channel_id)
+        current_persona = name
+        config["persona"] = name
+        save_config(config)
+        db.clear_channel(interaction.channel_id)
+        if chess_engine.is_any_chess_persona(name):
+            chess_engine.reset_game(interaction.channel_id)
+        await interaction.response.edit_message(embed=_options_embed(), view=OptionsView())
+
+
+class OptionsView(discord.ui.View):
+    """Ephemeral settings panel with verbosity selector and persona switcher."""
+
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.add_item(PersonaSelect())
+
+    def _verb_style(self, level: int) -> discord.ButtonStyle:
+        return discord.ButtonStyle.success if verbosity == level else discord.ButtonStyle.secondary
+
+    @discord.ui.button(label="1", style=discord.ButtonStyle.secondary, custom_id="opt:v1", row=1)
+    async def v1(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._set_verbosity(interaction, 1)
+
+    @discord.ui.button(label="2", style=discord.ButtonStyle.secondary, custom_id="opt:v2", row=1)
+    async def v2(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._set_verbosity(interaction, 2)
+
+    @discord.ui.button(label="3", style=discord.ButtonStyle.secondary, custom_id="opt:v3", row=1)
+    async def v3(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._set_verbosity(interaction, 3)
+
+    @discord.ui.button(label="4", style=discord.ButtonStyle.secondary, custom_id="opt:v4", row=1)
+    async def v4(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._set_verbosity(interaction, 4)
+
+    @discord.ui.button(label="5", style=discord.ButtonStyle.secondary, custom_id="opt:v5", row=1)
+    async def v5(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._set_verbosity(interaction, 5)
+
+    async def _set_verbosity(self, interaction: discord.Interaction, level: int):
+        global verbosity
+        verbosity = level
+        await interaction.response.edit_message(embed=_options_embed(), view=OptionsView())
+
+    @discord.ui.button(label="♻️ reset context", style=discord.ButtonStyle.danger, custom_id="opt:reset", row=2)
+    async def reset_ctx(self, interaction: discord.Interaction, button: discord.ui.Button):
+        db.clear_channel(interaction.channel_id)
+        if chess_engine.is_any_chess_persona(current_persona):
+            chess_engine.reset_game(interaction.channel_id)
+        await interaction.response.edit_message(embed=_options_embed(), view=OptionsView())
+
+
 def get_system_prompt(persona_name: str, channel_id: int) -> str:
     persona_text = load_persona(persona_name) or f"You are {persona_name}."
     pins = db.get_pins(channel_id)
@@ -333,6 +475,7 @@ async def do_restart() -> None:
 @bot.event
 async def on_ready():
     db.init_db()
+    bot.add_view(ResponseView())  # re-register persistent view after restart
     log.info("Logged in as %s (ID: %s)", bot.user, bot.user.id)
     if current_provider == "openrouter" and not os.getenv("OPENROUTER_API_KEY"):
         log.error("OPENROUTER_API_KEY is not set in .env — OpenRouter requests will fail with 401")
@@ -340,19 +483,26 @@ async def on_ready():
     log.info("Ready — mention the bot to chat.")
 
 
-async def handle_command(message: discord.Message, cmd: str) -> bool:
+async def handle_command(message: discord.Message, cmd: str, *, _out: list[str] | None = None) -> bool:
     global current_persona, current_provider, current_model, verbosity, chess_level
 
     cmd_lower = cmd.lower().strip()
 
+    async def emit(text: str) -> None:
+        """Buffer text when chaining commands, otherwise send immediately."""
+        if _out is not None:
+            _out.append(text)
+        else:
+            await message.reply(text)
+
     if cmd_lower == "resign":
         if not chess_engine.is_any_chess_persona(current_persona):
-            await message.reply("· no game in progress · no king to topple ·")
+            await emit("· no game in progress · no king to topple ·")
             return True
         fen = chess_engine.current_fen(message.channel.id)
         chess_engine.reset_game(message.channel.id)
         text, board_image = extract_board(f"{random.choice(_RESIGN_MSGS)}\n\n[board: {fen}]")
-        await message.reply(text)
+        await emit(text)
         if board_image:
             await message.channel.send(file=discord.File(io.BytesIO(board_image), filename="board.png"))
         return True
@@ -361,21 +511,20 @@ async def handle_command(message: discord.Message, cmd: str) -> bool:
         db.clear_channel(message.channel.id)
         if chess_engine.is_any_chess_persona(current_persona):
             chess_engine.reset_game(message.channel.id)
-        await message.reply("·˚ slate wiped · starting fresh ˚·")
+        await emit("·˚ slate wiped · starting fresh ˚·")
         return True
 
     if cmd_lower == "personas":
         names = list_personas()
         lines = [f"→ {n} *(active)*" if n == current_persona else f"  {n}" for n in names]
-        await message.reply("· ★ · personas · ★ ·\n```\n" + "\n".join(lines) + "\n```")
+        await emit("· ★ · personas · ★ ·\n```\n" + "\n".join(lines) + "\n```")
         return True
 
     if cmd_lower.startswith("persona "):
         name = cmd[8:].strip().lower().replace(" ", "_")
         if load_persona(name) is None:
-            await message.reply(f"Persona `{name}` not found. Available: {', '.join(list_personas())}")
+            await emit(f"Persona `{name}` not found. Available: {', '.join(list_personas())}")
             return True
-        # Clean up chess game if leaving or entering a chess persona
         if chess_engine.is_any_chess_persona(current_persona):
             chess_engine.reset_game(message.channel.id)
         current_persona = name
@@ -384,27 +533,27 @@ async def handle_command(message: discord.Message, cmd: str) -> bool:
         db.clear_channel(message.channel.id)
         if chess_engine.is_any_chess_persona(name):
             chess_engine.reset_game(message.channel.id)
-        await message.reply(f"· now speaking as: **{name}** · previous context dissolved ·")
+        await emit(f"· now speaking as: **{name}** · previous context dissolved ·")
         return True
 
     if cmd_lower == "prompt":
         text = load_persona(current_persona) or f"(no persona file for {current_persona})"
         for chunk in chunk_text(f"**Active persona:** `{current_persona}`\n\n" + text):
-            await message.reply(chunk)
+            await emit(chunk)
         return True
 
     if cmd_lower.startswith("verbosity "):
         val = cmd[10:].strip()
         if val.isdigit() and 1 <= int(val) <= 5:
             verbosity = int(val)
-            await message.reply(f"· verbosity **{verbosity}/5** · {VERBOSITY_LABELS[verbosity]}")
+            await emit(f"· verbosity **{verbosity}/5** · {VERBOSITY_LABELS[verbosity]}")
         else:
-            await message.reply("· usage: `verbosity <1-5>` ·")
+            await emit("· usage: `verbosity <1-5>` ·")
         return True
 
     if cmd_lower == "level":
         depth, elo = CHESS_LEVEL_MAP[chess_level]
-        await message.reply(f"· stockfish · **level {chess_level}/8** · {elo} Elo · depth {depth} ·")
+        await emit(f"· stockfish · **level {chess_level}/8** · {elo} Elo · depth {depth} ·")
         return True
 
     if cmd_lower.startswith("level "):
@@ -412,9 +561,9 @@ async def handle_command(message: discord.Message, cmd: str) -> bool:
         if val.isdigit() and 1 <= int(val) <= 8:
             chess_level = int(val)
             depth, elo = CHESS_LEVEL_MAP[chess_level]
-            await message.reply(f"· difficulty dialled to **level {chess_level}/8** · {elo} Elo · depth {depth} ·")
+            await emit(f"· difficulty dialled to **level {chess_level}/8** · {elo} Elo · depth {depth} ·")
         else:
-            await message.reply(
+            await emit(
                 "· ♟ · level <1-8> · ♟ ·\n```\n"
                 + "\n".join(f"  {l}  depth {d:>2}  {e}" for l, (d, e) in CHESS_LEVEL_MAP.items())
                 + "\n```"
@@ -425,66 +574,66 @@ async def handle_command(message: discord.Message, cmd: str) -> bool:
         if current_provider == "local":
             models = await llm.get_local_models(config)
             body = "\n".join(f"→ **{m}** *(active)*" if m == current_model else f"  {m}" for m in models) if models else "Could not reach LM Studio or no models loaded."
-            await message.reply(f"**Local models:**\n```\n{body}\n```" if models else body)
+            await emit(f"**Local models:**\n```\n{body}\n```" if models else body)
         else:
             models = config["providers"].get(current_provider, {}).get("models", [])
             lines = [f"→ **{m}** *(active)*" if m == current_model else f"  {m}" for m in models]
-            await message.reply(f"**{current_provider} models:**\n```\n" + "\n".join(lines) + "\n```")
+            await emit(f"**{current_provider} models:**\n```\n" + "\n".join(lines) + "\n```")
         return True
 
     if cmd_lower == "model random":
         if current_provider != "openrouter":
-            await message.reply("Random model selection is only available for the OpenRouter provider.")
+            await emit("Random model selection is only available for the OpenRouter provider.")
             return True
         models = await llm.get_openrouter_models(config, paid_only=True)
         if not models:
-            await message.reply("Could not fetch models from OpenRouter (check your API key or network).")
+            await emit("Could not fetch models from OpenRouter (check your API key or network).")
             return True
         current_model = random.choice(models)
         config["default_model"] = current_model
         save_config(config)
-        await message.reply(f"🎲 Random model: **{current_model}**")
+        await emit(f"🎲 Random model: **{current_model}**")
         return True
 
     if cmd_lower in ("model free random", "model random free"):
         if current_provider != "openrouter":
-            await message.reply("Random free model selection is only available for the OpenRouter provider.")
+            await emit("Random free model selection is only available for the OpenRouter provider.")
             return True
         models = await llm.get_openrouter_models(config, free_only=True)
         if not models:
-            await message.reply("Could not fetch free models from OpenRouter (check your API key or network).")
+            await emit("Could not fetch free models from OpenRouter (check your API key or network).")
             return True
         current_model = random.choice(models)
         config["default_model"] = current_model
         save_config(config)
-        await message.reply(f"🎲 Random free model: **{current_model}**")
+        await emit(f"🎲 Random free model: **{current_model}**")
         return True
 
     if cmd_lower == "model free":
         if current_provider != "openrouter":
-            await message.reply("Free model listing is only available for the OpenRouter provider.")
+            await emit("Free model listing is only available for the OpenRouter provider.")
             return True
         models = await llm.get_openrouter_models(config, free_only=True)
         if not models:
-            await message.reply("Could not fetch free models from OpenRouter (check your API key or network).")
+            await emit("Could not fetch free models from OpenRouter (check your API key or network).")
             return True
         lines = [f"→ **{m}** *(active)*" if m == current_model else f"  {m}" for m in models]
         body = "\n".join(lines)
         for chunk in chunk_text(f"**OpenRouter free models:**\n```\n{body}\n```"):
-            await message.reply(chunk)
+            await emit(chunk)
         return True
 
     if cmd_lower.startswith("model "):
         current_model = cmd[6:].strip()
         config["default_model"] = current_model
         save_config(config)
-        await message.reply(f"Model switched to **{current_model}**.")
+        await emit(f"Model switched to **{current_model}**.")
         return True
 
     if cmd_lower.startswith("provider "):
         name = cmd[9:].strip().lower()
         if name not in config.get("providers", {}):
-            await message.reply(f"Unknown provider `{name}`. Available: {', '.join(config.get('providers', {}).keys())}")
+            await emit(f"Unknown provider `{name}`. Available: {', '.join(config.get('providers', {}).keys())}")
             return True
         current_provider = name
         config["default_provider"] = name
@@ -496,12 +645,17 @@ async def handle_command(message: discord.Message, cmd: str) -> bool:
             current_model = models[0] if models else "unknown"
         config["default_model"] = current_model
         save_config(config)
-        await message.reply(f"Switched to **{name}** provider, model **{current_model}**.")
+        await emit(f"Switched to **{name}** provider, model **{current_model}**.")
         return True
 
     if cmd_lower == "restart":
-        await message.reply("·˚ rebooting · back in a moment ˚·")
+        await emit("·˚ rebooting · back in a moment ˚·")
         asyncio.create_task(do_restart())
+        return True
+
+    if cmd_lower == "options":
+        # options always sends directly (has a View, can't be buffered)
+        await message.reply(embed=_options_embed(), view=OptionsView())
         return True
 
     return False
@@ -521,11 +675,15 @@ async def on_message(message: discord.Message):
         return
 
     parts = [p.strip() for p in prompt.split(";") if p.strip()]
-    if len(parts) > 1 and await handle_command(message, parts[0]):
-        for part in parts[1:]:
-            if not await handle_command(message, part):
-                await message.reply(f"*(unknown command: `{part}`)*")
-        return
+    if len(parts) > 1:
+        out: list[str] = []
+        if await handle_command(message, parts[0], _out=out):
+            for part in parts[1:]:
+                if not await handle_command(message, part, _out=out):
+                    out.append(f"*(unknown command: `{part}`)*")
+            if out:
+                await message.reply("\n\n".join(out))
+            return
 
     if prompt and await handle_command(message, prompt):
         return
@@ -707,14 +865,16 @@ async def on_message(message: discord.Message):
 
     db.save_message(reply_msg.id, message.id, message.channel.id, "assistant", cleaned)
     style = get_style(current_persona, load_persona_style(current_persona))
+    is_chess_persona = chess_engine.is_any_chess_persona(current_persona)
+    response_view = ResponseView() if not is_chess_persona else None
     if style:
         chunks = chunk_text(cleaned, limit=EMBED_DESC_LIMIT)
-        await reply_msg.edit(content=None, embed=make_embed(chunks[0], style) if chunks else None)
+        await reply_msg.edit(content=None, embed=make_embed(chunks[0], style) if chunks else None, view=response_view)
         for extra in chunks[1:]:
             await message.channel.send(embed=make_embed(extra, style))
     else:
         chunks = chunk_text(cleaned)
-        await reply_msg.edit(content=chunks[0] if chunks else "-# *…*")
+        await reply_msg.edit(content=chunks[0] if chunks else "-# *…*", view=response_view)
         for extra in chunks[1:]:
             await message.channel.send(extra)
     if board_image:
@@ -749,14 +909,15 @@ async def on_reaction_add(reaction: discord.Reaction, user: discord.User):
             cleaned, board_image = extract_board(cleaned)
             db.save_message(new_msg.id, user_row["discord_msg_id"], channel_id, "assistant", cleaned or "*(no response)*")
             style = get_style(current_persona, load_persona_style(current_persona))
+            response_view = ResponseView() if not chess_engine.is_any_chess_persona(current_persona) else None
             if style:
                 chunks = chunk_text(cleaned, limit=EMBED_DESC_LIMIT)
-                await new_msg.edit(content=None, embed=make_embed(chunks[0], style) if chunks else None)
+                await new_msg.edit(content=None, embed=make_embed(chunks[0], style) if chunks else None, view=response_view)
                 for extra in chunks[1:]:
                     await reaction.message.channel.send(embed=make_embed(extra, style))
             else:
                 chunks = chunk_text(cleaned)
-                await new_msg.edit(content=chunks[0] if chunks else "*(no response)*")
+                await new_msg.edit(content=chunks[0] if chunks else "*(no response)*", view=response_view)
                 for extra in chunks[1:]:
                     await reaction.message.channel.send(extra)
             if board_image:
