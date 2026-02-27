@@ -2,7 +2,7 @@ context:
   max_messages: 40
 default_model: mechaepstein-8000
 default_provider: local
-persona: normal_dude
+persona: mochi
 providers:
   local:
     api_key: lm-studio

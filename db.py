@@ -1,4 +1,5 @@
 import sqlite3
+import time
 from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "history.db"
@@ -43,6 +44,18 @@ def init_db() -> None:
                 updated_ts  DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS channel_settings (
+                channel_id  INTEGER PRIMARY KEY,
+                persona     TEXT,
+                verbosity   INTEGER NOT NULL DEFAULT 2,
+                reset_ts    REAL
+            )
+        """)
+        # Migration: add reset_ts column to existing tables that predate it
+        cs_cols = [r[1] for r in conn.execute("PRAGMA table_info(channel_settings)").fetchall()]
+        if "reset_ts" not in cs_cols:
+            conn.execute("ALTER TABLE channel_settings ADD COLUMN reset_ts REAL")
         conn.commit()
 
 
@@ -108,7 +121,23 @@ def get_pins(channel_id: int) -> list[str]:
 def clear_channel(channel_id: int) -> None:
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("DELETE FROM messages WHERE channel_id = ?", (channel_id,))
+        # Record the reset timestamp so build_context can ignore pre-reset Discord messages
+        conn.execute(
+            "INSERT INTO channel_settings (channel_id, reset_ts) VALUES (?, ?) "
+            "ON CONFLICT(channel_id) DO UPDATE SET reset_ts = excluded.reset_ts",
+            (channel_id, time.time()),
+        )
         conn.commit()
+
+
+def get_channel_reset_ts(channel_id: int) -> float | None:
+    """Return the Unix timestamp of the last reset, or None if never reset."""
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT reset_ts FROM channel_settings WHERE channel_id = ?",
+            (channel_id,),
+        ).fetchone()
+    return row[0] if row else None
 
 
 # ── Chess game persistence ──────────────────────────────────────────
@@ -138,4 +167,44 @@ def get_chess_game(channel_id: int) -> dict | None:
 def delete_chess_game(channel_id: int) -> None:
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("DELETE FROM chess_games WHERE channel_id = ?", (channel_id,))
+        conn.commit()
+
+
+# ── Per-channel settings ───────────────────────────────────────────────────────
+
+def get_channel_persona(channel_id: int) -> str | None:
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT persona FROM channel_settings WHERE channel_id = ?",
+            (channel_id,),
+        ).fetchone()
+    return row[0] if row else None
+
+
+def set_channel_persona(channel_id: int, persona: str) -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO channel_settings (channel_id, persona) VALUES (?, ?) "
+            "ON CONFLICT(channel_id) DO UPDATE SET persona = excluded.persona",
+            (channel_id, persona),
+        )
+        conn.commit()
+
+
+def get_channel_verbosity(channel_id: int) -> int:
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT verbosity FROM channel_settings WHERE channel_id = ?",
+            (channel_id,),
+        ).fetchone()
+    return row[0] if row else 2
+
+
+def set_channel_verbosity(channel_id: int, verbosity: int) -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO channel_settings (channel_id, verbosity) VALUES (?, ?) "
+            "ON CONFLICT(channel_id) DO UPDATE SET verbosity = excluded.verbosity",
+            (channel_id, verbosity),
+        )
         conn.commit()

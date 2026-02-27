@@ -52,8 +52,6 @@ config = load_config()
 
 current_provider: str = config.get("default_provider", "local")
 current_model: str = config.get("default_model", "local-model")
-current_persona: str = config.get("persona", "pineapple")
-verbosity: int = 2
 chess_level: int = 3  # chess-classic difficulty; 3 ≈ 1500 Elo (see CHESS_LEVEL_MAP)
 
 DISCORD_MSG_LIMIT = 1990
@@ -117,6 +115,16 @@ import chess_engine
 from board import fen_to_board, fen_to_image
 from personas import list_personas, load_persona, load_persona_style
 from styles import get_style, make_embed, EMBED_DESC_LIMIT
+
+def ch_persona(channel_id: int) -> str:
+    """Active persona for a channel; falls back to the config default."""
+    return db.get_channel_persona(channel_id) or config.get("persona", "mochi")
+
+
+def ch_verbosity(channel_id: int) -> int:
+    """Verbosity level for a channel; defaults to 2."""
+    return db.get_channel_verbosity(channel_id)
+
 
 MAX_CHESS_RETRIES = 3
 
@@ -195,24 +203,29 @@ class ResponseView(discord.ui.View):
         db.delete_message(interaction.message.id)
 
         channel_id = interaction.channel_id
+        persona = ch_persona(channel_id)
         chain = _db_chain(user_row["parent_msg_id"])
-        system = get_system_prompt(current_persona, channel_id)
+        system = get_system_prompt(persona, channel_id)
         messages_payload = [{"role": "system", "content": system}] + chain + [{"role": "user", "content": user_row["content"]}]
 
         try:
             gen = llm.complete(messages=messages_payload, provider=current_provider, model=current_model, cfg=config, temperature=0.85)
             raw, new_msg = await stream_to_discord(gen, interaction.message)
-            cleaned = clean_response(raw)
+            thinking, raw_rest = extract_thinking(raw)
+            cleaned = clean_response(raw_rest)
             cleaned, board_image = extract_board(cleaned)
             db.save_message(new_msg.id, user_row["discord_msg_id"], channel_id, "assistant", cleaned or "*(no response)*")
-            style = get_style(current_persona, load_persona_style(current_persona))
+            style = get_style(persona, load_persona_style(persona))
+            thinking_display = format_thinking_spoiler(thinking)
             if style:
                 chunks = chunk_text(cleaned, limit=EMBED_DESC_LIMIT)
-                await new_msg.edit(content=None, embed=make_embed(chunks[0], style) if chunks else None, view=ResponseView())
+                await new_msg.edit(content=thinking_display, embed=make_embed(chunks[0], style) if chunks else None, view=ResponseView())
                 for extra in chunks[1:]:
                     await interaction.message.channel.send(embed=make_embed(extra, style))
             else:
-                chunks = chunk_text(cleaned)
+                short_display = format_thinking_spoiler(thinking, limit=800)
+                full_content = (short_display + "\n\n" + cleaned) if short_display and cleaned else (short_display or cleaned or "*(no response)*")
+                chunks = chunk_text(full_content)
                 await new_msg.edit(content=chunks[0] if chunks else "*(no response)*", view=ResponseView())
                 for extra in chunks[1:]:
                     await interaction.message.channel.send(extra)
@@ -232,54 +245,62 @@ class ResponseView(discord.ui.View):
             await interaction.response.send_message("-# *· nothing to pin ·*", ephemeral=True)
 
 
-def _options_embed() -> discord.Embed:
+def _options_embed(channel_id: int) -> discord.Embed:
     """Build the settings overview embed, tinted with the current persona's colour."""
-    style = get_style(current_persona, load_persona_style(current_persona))
+    persona = ch_persona(channel_id)
+    verb = ch_verbosity(channel_id)
+    style = get_style(persona, load_persona_style(persona))
     color = style["color"] if style else 0x2B2D31
     embed = discord.Embed(title="⚙️ settings", color=color)
-    embed.add_field(name="persona", value=f"`{current_persona}`", inline=True)
-    embed.add_field(name="verbosity", value=f"**{verbosity}/5**", inline=True)
+    embed.add_field(name="persona", value=f"`{persona}`", inline=True)
+    embed.add_field(name="verbosity", value=f"**{verb}/5**", inline=True)
     embed.add_field(name="provider", value=f"`{current_provider}`", inline=True)
     embed.add_field(name="model", value=f"`{current_model}`", inline=False)
-    embed.set_footer(text=VERBOSITY_LABELS[verbosity])
+    embed.set_footer(text=VERBOSITY_LABELS[verb])
     return embed
 
 
 class PersonaSelect(discord.ui.Select):
-    def __init__(self):
+    def __init__(self, channel_id: int):
+        self.channel_id = channel_id
         names = list_personas()[:25]  # Discord select limit
+        current = ch_persona(channel_id)
         options = [
-            discord.SelectOption(label=n, value=n, default=(n == current_persona))
+            discord.SelectOption(label=n, value=n, default=(n == current))
             for n in names
         ]
         super().__init__(placeholder="switch persona…", options=options, row=0)
 
     async def callback(self, interaction: discord.Interaction):
-        global current_persona
         name = self.values[0]
         if load_persona(name) is None:
             await interaction.response.send_message(f"Persona `{name}` not found.", ephemeral=True)
             return
-        if chess_engine.is_any_chess_persona(current_persona):
-            chess_engine.reset_game(interaction.channel_id)
-        current_persona = name
-        config["persona"] = name
-        save_config(config)
-        db.clear_channel(interaction.channel_id)
+        channel_id = interaction.channel_id
+        if chess_engine.is_any_chess_persona(ch_persona(channel_id)):
+            chess_engine.reset_game(channel_id)
+        db.set_channel_persona(channel_id, name)
+        db.clear_channel(channel_id)
         if chess_engine.is_any_chess_persona(name):
-            chess_engine.reset_game(interaction.channel_id)
-        await interaction.response.edit_message(embed=_options_embed(), view=OptionsView())
+            chess_engine.reset_game(channel_id)
+        await interaction.response.edit_message(embed=_options_embed(channel_id), view=OptionsView(channel_id))
 
 
 class OptionsView(discord.ui.View):
     """Ephemeral settings panel with verbosity selector and persona switcher."""
 
-    def __init__(self):
+    def __init__(self, channel_id: int):
         super().__init__(timeout=120)
-        self.add_item(PersonaSelect())
+        self.channel_id = channel_id
+        self.add_item(PersonaSelect(channel_id))
+        # Highlight the active verbosity button
+        active = ch_verbosity(channel_id)
+        for child in self.children:
+            if isinstance(child, discord.ui.Button) and child.label.isdigit():
+                child.style = discord.ButtonStyle.success if int(child.label) == active else discord.ButtonStyle.secondary
 
     def _verb_style(self, level: int) -> discord.ButtonStyle:
-        return discord.ButtonStyle.success if verbosity == level else discord.ButtonStyle.secondary
+        return discord.ButtonStyle.success if ch_verbosity(self.channel_id) == level else discord.ButtonStyle.secondary
 
     @discord.ui.button(label="1", style=discord.ButtonStyle.secondary, custom_id="opt:v1", row=1)
     async def v1(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -302,26 +323,26 @@ class OptionsView(discord.ui.View):
         await self._set_verbosity(interaction, 5)
 
     async def _set_verbosity(self, interaction: discord.Interaction, level: int):
-        global verbosity
-        verbosity = level
-        await interaction.response.edit_message(embed=_options_embed(), view=OptionsView())
+        db.set_channel_verbosity(interaction.channel_id, level)
+        await interaction.response.edit_message(embed=_options_embed(interaction.channel_id), view=OptionsView(interaction.channel_id))
 
     @discord.ui.button(label="♻️ reset context", style=discord.ButtonStyle.danger, custom_id="opt:reset", row=2)
     async def reset_ctx(self, interaction: discord.Interaction, button: discord.ui.Button):
-        db.clear_channel(interaction.channel_id)
-        if chess_engine.is_any_chess_persona(current_persona):
-            chess_engine.reset_game(interaction.channel_id)
-        await interaction.response.edit_message(embed=_options_embed(), view=OptionsView())
+        channel_id = interaction.channel_id
+        db.clear_channel(channel_id)
+        if chess_engine.is_any_chess_persona(ch_persona(channel_id)):
+            chess_engine.reset_game(channel_id)
+        await interaction.response.edit_message(embed=_options_embed(channel_id), view=OptionsView(channel_id))
 
 
 def get_system_prompt(persona_name: str, channel_id: int) -> str:
     persona_text = load_persona(persona_name) or f"You are {persona_name}."
     pins = db.get_pins(channel_id)
     pin_section = "\n\n**Pinned notes:**\n" + "\n".join(f"- {p}" for p in pins) if pins else ""
-    return persona_text + pin_section + _build_meta_suffix()
+    return persona_text + pin_section + _build_meta_suffix(ch_verbosity(channel_id))
 
 
-def _build_meta_suffix() -> str:
+def _build_meta_suffix(verbosity: int) -> str:
     timestamp = datetime.now().strftime("%A, %d %B %Y %H:%M")
     return (
         "\n\n---\n"
@@ -368,9 +389,36 @@ def extract_board(text: str) -> tuple[str, bytes | None]:
     return clean, image
 
 
+def extract_thinking(text: str) -> tuple[str, str]:
+    """Extract <think>…</think> reasoning block.
+    Returns (thinking_text, text_without_think_blocks).
+    Handles both closed blocks and unclosed (model stopped mid-think)."""
+    m = re.search(r"<think>(.*?)</think>", text, flags=re.DOTALL)
+    if m:
+        thinking = m.group(1).strip()
+        rest = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        return thinking, rest
+    m = re.search(r"<think>(.*)", text, flags=re.DOTALL)
+    if m:
+        thinking = m.group(1).strip()
+        rest = re.sub(r"<think>.*", "", text, flags=re.DOTALL).strip()
+        return thinking, rest
+    return "", text
+
+
+_THINKING_SPOILER_LIMIT = 1200   # max chars shown in the expandable spoiler
+
+
+def format_thinking_spoiler(thinking: str, limit: int = _THINKING_SPOILER_LIMIT) -> str | None:
+    """Wrap reasoning text in a Discord spoiler block, or return None if empty."""
+    if not thinking:
+        return None
+    body = thinking[:limit]
+    suffix = "\n-# *(truncated)*" if len(thinking) > limit else ""
+    return f"-# 💭 *reasoning · click to expand*\n||{body}{suffix}||"
+
+
 def clean_response(text: str) -> str:
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-    text = re.sub(r"<think>.*", "", text, flags=re.DOTALL).strip()
     for pat in _ARTIFACT_PATTERNS:
         text = re.sub(pat, "", text, flags=re.DOTALL | re.MULTILINE)
     return text.strip()
@@ -414,6 +462,7 @@ async def build_context(message: discord.Message, bot_id: int) -> list[dict]:
     max_msgs = config.get("context", {}).get("max_messages", 40)
     chain, visited = [], set()
     parent_id = message.reference.message_id if message.reference else None
+    reset_ts = db.get_channel_reset_ts(message.channel.id)
 
     while parent_id and len(chain) < max_msgs:
         if parent_id in visited:
@@ -426,6 +475,10 @@ async def build_context(message: discord.Message, bot_id: int) -> list[dict]:
         else:
             try:
                 d_msg = await message.channel.fetch_message(parent_id)
+                # Stop at any message that predates the last @bot reset — this prevents
+                # cleared context from leaking back in via the Discord API fallback.
+                if reset_ts and d_msg.created_at.timestamp() < reset_ts:
+                    break
                 role = "assistant" if d_msg.author.id == bot_id else "user"
                 text = re.sub(rf"<@!?{bot_id}>", "", d_msg.content).strip() if role == "user" else d_msg.content
                 chain.append({"role": role, "content": text})
@@ -444,12 +497,17 @@ async def stream_to_discord(gen, reply_target: discord.Message) -> tuple[str, di
         async for chunk in gen:
             full_text += chunk
             now = asyncio.get_event_loop().time()
-            if now - last_edit >= STREAM_EDIT_INTERVAL and full_text.strip():
-                try:
-                    await placeholder.edit(content=full_text[:DISCORD_MSG_LIMIT])
-                    last_edit = now
-                except discord.HTTPException:
-                    pass
+            if now - last_edit >= STREAM_EDIT_INTERVAL:
+                # Strip <think> blocks from the live view — the placeholder stays as
+                # "thinking…" while the model reasons, then streams the actual response.
+                display = re.sub(r"<think>.*?</think>", "", full_text, flags=re.DOTALL)
+                display = re.sub(r"<think>.*", "", display, flags=re.DOTALL).strip()
+                if display:
+                    try:
+                        await placeholder.edit(content=display[:DISCORD_MSG_LIMIT])
+                        last_edit = now
+                    except discord.HTTPException:
+                        pass
     except Exception:
         try:
             await placeholder.delete()
@@ -479,12 +537,12 @@ async def on_ready():
     log.info("Logged in as %s (ID: %s)", bot.user, bot.user.id)
     if current_provider == "openrouter" and not os.getenv("OPENROUTER_API_KEY"):
         log.error("OPENROUTER_API_KEY is not set in .env — OpenRouter requests will fail with 401")
-    log.info("Provider: %s  Model: %s  Persona: %s", current_provider, current_model, current_persona)
+    log.info("Provider: %s  Model: %s  Default persona: %s", current_provider, current_model, config.get("persona", "mochi"))
     log.info("Ready — mention the bot to chat.")
 
 
 async def handle_command(message: discord.Message, cmd: str, *, _out: list[str] | None = None) -> bool:
-    global current_persona, current_provider, current_model, verbosity, chess_level
+    global current_provider, current_model, chess_level
 
     cmd_lower = cmd.lower().strip()
 
@@ -496,7 +554,7 @@ async def handle_command(message: discord.Message, cmd: str, *, _out: list[str] 
             await message.reply(text)
 
     if cmd_lower == "resign":
-        if not chess_engine.is_any_chess_persona(current_persona):
+        if not chess_engine.is_any_chess_persona(ch_persona(message.channel.id)):
             await emit("· no game in progress · no king to topple ·")
             return True
         fen = chess_engine.current_fen(message.channel.id)
@@ -509,14 +567,14 @@ async def handle_command(message: discord.Message, cmd: str, *, _out: list[str] 
 
     if cmd_lower == "reset":
         db.clear_channel(message.channel.id)
-        if chess_engine.is_any_chess_persona(current_persona):
+        if chess_engine.is_any_chess_persona(ch_persona(message.channel.id)):
             chess_engine.reset_game(message.channel.id)
         await emit("·˚ slate wiped · starting fresh ˚·")
         return True
 
     if cmd_lower == "personas":
         names = list_personas()
-        lines = [f"→ {n} *(active)*" if n == current_persona else f"  {n}" for n in names]
+        lines = [f"→ {n} *(active)*" if n == ch_persona(message.channel.id) else f"  {n}" for n in names]
         await emit("· ★ · personas · ★ ·\n```\n" + "\n".join(lines) + "\n```")
         return True
 
@@ -525,11 +583,9 @@ async def handle_command(message: discord.Message, cmd: str, *, _out: list[str] 
         if load_persona(name) is None:
             await emit(f"Persona `{name}` not found. Available: {', '.join(list_personas())}")
             return True
-        if chess_engine.is_any_chess_persona(current_persona):
+        if chess_engine.is_any_chess_persona(ch_persona(message.channel.id)):
             chess_engine.reset_game(message.channel.id)
-        current_persona = name
-        config["persona"] = name
-        save_config(config)
+        db.set_channel_persona(message.channel.id, name)
         db.clear_channel(message.channel.id)
         if chess_engine.is_any_chess_persona(name):
             chess_engine.reset_game(message.channel.id)
@@ -537,16 +593,18 @@ async def handle_command(message: discord.Message, cmd: str, *, _out: list[str] 
         return True
 
     if cmd_lower == "prompt":
-        text = load_persona(current_persona) or f"(no persona file for {current_persona})"
-        for chunk in chunk_text(f"**Active persona:** `{current_persona}`\n\n" + text):
+        active = ch_persona(message.channel.id)
+        text = load_persona(active) or f"(no persona file for {active})"
+        for chunk in chunk_text(f"**Active persona:** `{active}`\n\n" + text):
             await emit(chunk)
         return True
 
     if cmd_lower.startswith("verbosity "):
         val = cmd[10:].strip()
         if val.isdigit() and 1 <= int(val) <= 5:
-            verbosity = int(val)
-            await emit(f"· verbosity **{verbosity}/5** · {VERBOSITY_LABELS[verbosity]}")
+            level = int(val)
+            db.set_channel_verbosity(message.channel.id, level)
+            await emit(f"· verbosity **{level}/5** · {VERBOSITY_LABELS[level]}")
         else:
             await emit("· usage: `verbosity <1-5>` ·")
         return True
@@ -655,7 +713,7 @@ async def handle_command(message: discord.Message, cmd: str, *, _out: list[str] 
 
     if cmd_lower == "options":
         # options always sends directly (has a View, can't be buffered)
-        await message.reply(embed=_options_embed(), view=OptionsView())
+        await message.reply(embed=_options_embed(message.channel.id), view=OptionsView(message.channel.id))
         return True
 
     return False
@@ -688,8 +746,9 @@ async def on_message(message: discord.Message):
     if prompt and await handle_command(message, prompt):
         return
 
-    is_chess = chess_engine.is_chess_persona(current_persona)
-    is_chess_classic = chess_engine.is_chess_classic_persona(current_persona)
+    persona = ch_persona(message.channel.id)
+    is_chess = chess_engine.is_chess_persona(persona)
+    is_chess_classic = chess_engine.is_chess_classic_persona(persona)
 
     # ── Chess: validate user move before calling the LLM ─────────
     if is_chess and prompt:
@@ -778,7 +837,7 @@ async def on_message(message: discord.Message):
         await _reply_classic(reply_text)
         return
 
-    system = get_system_prompt(current_persona, message.channel.id)
+    system = get_system_prompt(persona, message.channel.id)
 
     # Inject authoritative board state for chess persona
     if is_chess:
@@ -815,7 +874,8 @@ async def on_message(message: discord.Message):
             db.delete_message(message.id)
             return
 
-    cleaned = clean_response(raw)
+    thinking, raw_rest = extract_thinking(raw)
+    cleaned = clean_response(raw_rest)
 
     # ── Chess: validate LLM move, retry if illegal ───────────────
     if is_chess and not chess_engine.game_status(message.channel.id):
@@ -848,7 +908,8 @@ async def on_message(message: discord.Message):
                 retry_raw = ""
                 async for chunk in retry_gen:
                     retry_raw += chunk
-                cleaned = clean_response(retry_raw)
+                _, retry_rest = extract_thinking(retry_raw)
+                cleaned = clean_response(retry_rest)
                 bot_move_token = chess_engine.extract_bot_move(cleaned)
             except Exception as e:
                 log.error("Chess retry LLM error: %s", e)
@@ -864,16 +925,21 @@ async def on_message(message: discord.Message):
         return
 
     db.save_message(reply_msg.id, message.id, message.channel.id, "assistant", cleaned)
-    style = get_style(current_persona, load_persona_style(current_persona))
-    is_chess_persona = chess_engine.is_any_chess_persona(current_persona)
+    style = get_style(persona, load_persona_style(persona))
+    is_chess_persona = chess_engine.is_any_chess_persona(persona)
     response_view = ResponseView() if not is_chess_persona else None
+    thinking_display = format_thinking_spoiler(thinking)
     if style:
+        # Embed responses: thinking goes in `content` (above the embed), response in description.
         chunks = chunk_text(cleaned, limit=EMBED_DESC_LIMIT)
-        await reply_msg.edit(content=None, embed=make_embed(chunks[0], style) if chunks else None, view=response_view)
+        await reply_msg.edit(content=thinking_display, embed=make_embed(chunks[0], style) if chunks else None, view=response_view)
         for extra in chunks[1:]:
             await message.channel.send(embed=make_embed(extra, style))
     else:
-        chunks = chunk_text(cleaned)
+        # Plain text: prepend a shorter spoiler so both fit within the message limit.
+        short_display = format_thinking_spoiler(thinking, limit=800)
+        full_content = (short_display + "\n\n" + cleaned) if short_display and cleaned else (short_display or cleaned or "-# *…*")
+        chunks = chunk_text(full_content)
         await reply_msg.edit(content=chunks[0] if chunks else "-# *…*", view=response_view)
         for extra in chunks[1:]:
             await message.channel.send(extra)
@@ -897,26 +963,31 @@ async def on_reaction_add(reaction: discord.Reaction, user: discord.User):
             return
 
         db.delete_message(reaction.message.id)
+        persona = ch_persona(channel_id)
         chain = _db_chain(user_row["parent_msg_id"])
-        system = get_system_prompt(current_persona, channel_id)
+        system = get_system_prompt(persona, channel_id)
         messages_payload = [{"role": "system", "content": system}] + chain + [{"role": "user", "content": user_row["content"]}]
 
         try:
             async with reaction.message.channel.typing():
                 gen = llm.complete(messages=messages_payload, provider=current_provider, model=current_model, cfg=config, temperature=0.85)
                 raw, new_msg = await stream_to_discord(gen, reaction.message)
-            cleaned = clean_response(raw)
+            thinking, raw_rest = extract_thinking(raw)
+            cleaned = clean_response(raw_rest)
             cleaned, board_image = extract_board(cleaned)
             db.save_message(new_msg.id, user_row["discord_msg_id"], channel_id, "assistant", cleaned or "*(no response)*")
-            style = get_style(current_persona, load_persona_style(current_persona))
-            response_view = ResponseView() if not chess_engine.is_any_chess_persona(current_persona) else None
+            style = get_style(persona, load_persona_style(persona))
+            response_view = ResponseView() if not chess_engine.is_any_chess_persona(persona) else None
+            thinking_display = format_thinking_spoiler(thinking)
             if style:
                 chunks = chunk_text(cleaned, limit=EMBED_DESC_LIMIT)
-                await new_msg.edit(content=None, embed=make_embed(chunks[0], style) if chunks else None, view=response_view)
+                await new_msg.edit(content=thinking_display, embed=make_embed(chunks[0], style) if chunks else None, view=response_view)
                 for extra in chunks[1:]:
                     await reaction.message.channel.send(embed=make_embed(extra, style))
             else:
-                chunks = chunk_text(cleaned)
+                short_display = format_thinking_spoiler(thinking, limit=800)
+                full_content = (short_display + "\n\n" + cleaned) if short_display and cleaned else (short_display or cleaned or "*(no response)*")
+                chunks = chunk_text(full_content)
                 await new_msg.edit(content=chunks[0] if chunks else "*(no response)*", view=response_view)
                 for extra in chunks[1:]:
                     await reaction.message.channel.send(extra)

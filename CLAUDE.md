@@ -8,6 +8,12 @@ A multi-persona Discord bot backed by local LLMs (LM Studio) or cloud models (Op
 python bot.py
 ```
 
+or for the dashboard (experimental):
+
+```bash
+node dash.mjs
+```
+
 Stop the bot before running again — the singleton guard (`127.0.0.1:47823` UDP) will exit any second instance immediately.
 
 `.env` requires `DISCORD_TOKEN`. Set `OPENROUTER_API_KEY` to use the OpenRouter provider. All other config lives in `config.yaml`.
@@ -50,17 +56,37 @@ DiscordBot/
 Entry point. All Discord events, commands, and UI components live here.
 
 - `get_system_prompt(persona, channel_id)` — persona text + pinned notes + meta suffix
-- `_build_meta_suffix()` — injects date/time, tool description, verbosity rule
-- `build_context(message, bot_id)` — walks Discord reply chain upward, returns `[{role, content}]` ordered oldest-first. Checks DB first (fast path), falls back to Discord API fetch for messages not in DB.
-- `stream_to_discord(gen, reply_target)` — consumes the `llm.complete()` async generator, edits a Discord placeholder message every `STREAM_EDIT_INTERVAL = 1.2s`. Returns `(full_raw_text, discord_message)`. Placeholder chosen randomly from `_THINKING_LINES`.
-- `clean_response(text)` — strips `<think>...</think>` blocks (including unclosed) and model-specific tool-call syntax leakage (Qwen, Mistral, Llama, Gemma-3).
+- `_build_meta_suffix(verbosity)` — injects date/time, tool description, verbosity rule (takes verbosity int directly)
+- `ch_persona(channel_id)` — returns the active persona for a channel: reads `channel_settings` DB, falls back to `config.yaml` default. **All persona lookups go through here — no global state.**
+- `ch_verbosity(channel_id)` — returns the active verbosity level for a channel (delegates to `db.get_channel_verbosity`). **Per-channel, persisted in DB.**
+- `build_context(message, bot_id)` — walks Discord reply chain upward, returns `[{role, content}]` ordered oldest-first. Checks DB first (fast path), falls back to Discord API fetch for messages not in DB. **Reset guard:** loads `reset_ts` from `channel_settings`; if the Discord API fallback reaches a message predating the last `@bot reset`, it stops the chain there — prevents "ghost context" from old threads.
+- `stream_to_discord(gen, reply_target)` — consumes the `llm.complete()` async generator, edits a Discord placeholder message every `STREAM_EDIT_INTERVAL = 1.2s`. Returns `(full_raw_text, discord_message)`. Placeholder chosen randomly from `_THINKING_LINES`. **Suppresses `<think>` content during live streaming** — the placeholder stays as the poetic "thinking…" line while the model reasons; the actual response starts streaming only after `</think>`.
+- `extract_thinking(text)` — splits raw LLM output into `(thinking_text, rest)`. Handles both closed `<think>…</think>` and unclosed `<think>…` (model stopped mid-reasoning). Returns `("", text)` if no thinking block.
+- `format_thinking_spoiler(thinking, limit=_THINKING_SPOILER_LIMIT)` — wraps thinking text in Discord spoiler tags with a `-# 💭 *reasoning · click to expand*` header. Truncates at `limit` chars (default 1200) with a `-# *(truncated)*` suffix. Returns `None` if thinking is empty.
+- `clean_response(text)` — strips model-specific tool-call syntax leakage (Qwen, Mistral, Llama, Gemma-3). **No longer strips `<think>` blocks** — that's now done by `extract_thinking` before `clean_response` is called.
 - `chunk_text(text, limit=1990)` — splits at word/newline boundaries. Pass `limit=EMBED_DESC_LIMIT` (4096) for embed responses.
-- `handle_command(message, cmd, *, _out: list[str] | None = None)` — dispatches all `@bot` commands, returns `True` if consumed. When `_out` is provided, output is appended to that list instead of sent as a reply (used for command chaining).
-- `_options_embed()` — builds a settings `discord.Embed` showing current persona, verbosity, provider, model.
+- `handle_command(message, cmd, *, _out: list[str] | None = None)` — dispatches all `@bot` commands, returns `True` if consumed. When `_out` is provided, output is appended to that list instead of sent as a reply (used for command chaining). Persona and verbosity changes write to `channel_settings` DB (per-channel).
+- `_options_embed(channel_id)` — builds a settings `discord.Embed` showing the current persona, verbosity, provider, and model **for the given channel**.
 
 **UI Constants:**
 - `_THINKING_LINES` — list of 20 poetic placeholder strings, one chosen randomly per response
+- `_THINKING_SPOILER_LIMIT = 1200` — max chars shown in the reasoning spoiler before truncation
 - `VERBOSITY_LABELS` — dict mapping levels 1–5 to a poetic label shown in verbosity confirmation messages
+
+**Response sending pattern** (all three paths — `on_message`, regen button, reaction):
+```python
+thinking, raw_rest = extract_thinking(raw)
+cleaned = clean_response(raw_rest)
+thinking_display = format_thinking_spoiler(thinking)  # None if no thinking
+if style:
+    # Embed: thinking in message content (above embed), response in embed description
+    await reply_msg.edit(content=thinking_display, embed=make_embed(chunks[0], style), view=view)
+else:
+    # Plain text: thinking truncated at 800 chars, prepended to response
+    short_display = format_thinking_spoiler(thinking, limit=800)
+    full_content = (short_display + "\n\n" + cleaned) if short_display and cleaned else (...)
+    await reply_msg.edit(content=chunks[0], view=view)
+```
 
 **Persistent Views:**
 
@@ -69,11 +95,11 @@ Entry point. All Discord events, commands, and UI components live here.
 - `regen` button (`custom_id="psychograph:regen"`) — strips the current view, rebuilds context, re-calls LLM at temperature 0.85, posts a new response with a fresh `ResponseView`.
 - `pin` button (`custom_id="psychograph:pin"`) — saves embed description (or message content) as a pin, sends ephemeral confirmation.
 
-`OptionsView` — 120-second-timeout view for the `@bot options` settings panel.
+`OptionsView(channel_id)` — 120-second-timeout view for the `@bot options` settings panel. Takes `channel_id` so all interactions read/write the correct channel's settings.
 
-- Row 0: `PersonaSelect` dropdown (up to 25 personas, active one pre-selected). On select: switches persona, clears channel history, saves config, edits the options embed in-place.
-- Row 1: verbosity buttons 1–5. Active level shown in green (`ButtonStyle.success`). On click: updates verbosity, edits the options embed in-place.
-- Row 2: "↺ reset context" button (`ButtonStyle.danger`). Clears DB for this channel, sends ephemeral confirmation.
+- Row 0: `PersonaSelect(channel_id)` dropdown (up to 25 personas, active one pre-selected using `ch_persona(channel_id)`). On select: writes to `db.set_channel_persona`, clears channel history, edits the options embed in-place.
+- Row 1: verbosity buttons 1–5. Active level highlighted green (`ButtonStyle.success`) in `__init__` based on `ch_verbosity(channel_id)`. On click: writes to `db.set_channel_verbosity`, edits the options embed in-place.
+- Row 2: "↺ reset context" button (`ButtonStyle.danger`). Clears DB for this channel (records `reset_ts`), sends ephemeral confirmation.
 
 ### `llm.py`
 All LLM calls go through here. Both providers use `openai.AsyncOpenAI` — the only difference is base URL and auth header.
@@ -91,7 +117,7 @@ All LLM calls go through here. Both providers use `openai.AsyncOpenAI` — the o
 4. If tool calls: execute `web_search` in parallel → build updated messages → Pass 2 streaming with `tool_choice="none"`.
 
 ### `db.py`
-SQLite persistence. Three tables:
+SQLite persistence. Four tables:
 
 **`messages`** — reply-chain graph. Keyed by Discord message ID.
 ```sql
@@ -116,7 +142,18 @@ move_stack  TEXT                    -- space-separated UCI move history (source 
 ```
 `move_stack` is the authoritative record; the board is always rebuilt by replaying moves from the start. `save_chess_game()`, `get_chess_game()`, `delete_chess_game()` are the CRUD functions.
 
-`init_db()` auto-migrates the old per-channel rolling schema (drops the old `messages` table if `discord_msg_id` column is missing).
+**`channel_settings`** — per-channel persistent settings.
+```sql
+channel_id  INTEGER PRIMARY KEY
+persona     TEXT                    -- active persona name (NULL = use config.yaml default)
+verbosity   INTEGER DEFAULT 2       -- 1–5 verbosity level, persisted across restarts
+reset_ts    REAL                    -- Unix timestamp of last @bot reset (NULL if never)
+```
+Functions: `get_channel_persona(channel_id)`, `set_channel_persona(channel_id, persona)`, `get_channel_verbosity(channel_id)` (returns 2 if no row), `set_channel_verbosity(channel_id, verbosity)`, `get_channel_reset_ts(channel_id)` (returns `float | None`).
+
+`clear_channel(channel_id)` deletes all messages for the channel **and** records `reset_ts = time.time()` in `channel_settings`. This timestamp is the fence used by `build_context` to prevent ghost context.
+
+`init_db()` auto-migrates old schemas: drops `messages` table if `discord_msg_id` column is missing; adds `reset_ts` column to `channel_settings` if it predates that column.
 
 ### `styles.py`
 Embed styling for every persona. No side effects — pure data + two helper functions.
@@ -211,11 +248,11 @@ Provider, model, and persona changes are written back to `config.yaml` immediate
 
 | Command | Effect |
 |---|---|
-| `reset` | Clears all messages for this channel from DB |
-| `persona <name>` | Switch persona + clear channel history + write to config |
+| `reset` | Clears all messages for this channel from DB; records `reset_ts` to fence context |
+| `persona <name>` | Switch persona for this channel + clear channel history (writes to `channel_settings` DB) |
 | `personas` | List all personas, mark active |
 | `prompt` | Print active persona name + full rendered system prompt |
-| `verbosity <1-5>` | Set response length (not persisted, resets to 2 on restart) |
+| `verbosity <1-5>` | Set verbosity for this channel (persisted per-channel in `channel_settings` DB) |
 | `model` | List models for current provider |
 | `model <name>` | Switch model (written to config) |
 | `model random` | Pick a random paid model (non-zero cost) from OpenRouter |
@@ -273,7 +310,9 @@ To add a new persona to the embed system, add an entry to `PERSONA_STYLES`. To o
 
 Context follows **Discord reply chains**, not channel history. A user builds a thread by replying to bot messages. Multiple independent conversations can coexist in the same channel.
 
-`build_context()` traverses the chain by following `parent_msg_id` links upward in DB, up to `max_messages` deep. For messages not in DB (pre-rebuild history, or after `@bot reset`), it falls back to Discord's `channel.fetch_message()`.
+`build_context()` traverses the chain by following `parent_msg_id` links upward in DB, up to `max_messages` deep. For messages not in DB, it falls back to Discord's `channel.fetch_message()`.
+
+**Reset guard:** `build_context` loads `reset_ts` from `channel_settings` at the start. When the Discord API fallback fetches a message whose `created_at` timestamp predates `reset_ts`, it stops walking the chain. This prevents "ghost context" — old messages re-entering context after `@bot reset` because a user replied to a pre-reset thread.
 
 ## Image Handling
 
@@ -285,7 +324,7 @@ Use a proper vision model in LM Studio — `Qwen2.5-VL`, `LLaVA-1.6`, or `Intern
 
 ## Verbosity Levels
 
-Injected as a named rule at the end of every system prompt (`## Response length — verbosity N/5`).
+Injected as a named rule at the end of every system prompt (`## Response length — verbosity N/5`). **Verbosity is per-channel and persists across restarts** (stored in `channel_settings.verbosity`; defaults to 2 for new channels).
 
 | Level | Instruction | Label shown to user |
 |---|---|---|
@@ -294,6 +333,17 @@ Injected as a named rule at the end of every system prompt (`## Response length 
 | 3 | One short paragraph. | *balanced · a thought, fully formed* |
 | 4 | A full paragraph. | *expansive · room to stretch out* |
 | 5 | No limit. Full depth. | *unbound · full depth, full voice, no ceiling* |
+
+## Thinking / Reasoning Window
+
+Models that use `<think>…</think>` blocks (e.g., DeepSeek-R1, QwQ) get a collapsible reasoning display. The pipeline:
+
+1. **During streaming** — `<think>` content is stripped from live edits. The placeholder "thinking…" line stays visible while the model reasons; the actual response starts streaming after `</think>`.
+2. **After streaming** — `extract_thinking(raw)` splits the full output into `(thinking_text, rest)`.
+3. **Display** — `format_thinking_spoiler(thinking)` wraps the reasoning in Discord spoiler tags (`||…||`) with a `-# 💭 *reasoning · click to expand*` header above it.
+4. **Placement**:
+   - For embed personas: thinking goes in the Discord message `content` field (plain text, above the embed), response goes in embed description — separate character budgets.
+   - For plain-text personas: thinking (truncated at 800 chars) is prepended to the response content.
 
 ## Logging
 

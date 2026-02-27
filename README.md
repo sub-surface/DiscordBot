@@ -30,6 +30,12 @@ The defaults point to a local LM Studio instance. Change `default_provider`, `de
 python bot.py
 ```
 
+or for the dashboard (experimental):
+```bash
+node dash.mjs
+```
+
+
 ---
 
 ## Usage
