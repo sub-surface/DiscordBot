@@ -18,19 +18,31 @@ Stop the bot before running again — the singleton guard (`127.0.0.1:47823` UDP
 
 `.env` requires `DISCORD_TOKEN`. Set `OPENROUTER_API_KEY` to use the OpenRouter provider. All other config lives in `config.yaml`.
 
+## Performance & Caching
+
+The bot employs several layers of in-memory caching and concurrency optimizations:
+
+- **LLM Parallelism**: Local models (LM Studio) are serialized via a provider-specific lock to protect VRAM. **Cloud providers (OpenRouter) run in parallel**, allowing multiple simultaneous conversations without blocking.
+- **Database CTEs**: Conversation history is retrieved using a **Recursive Common Table Expression (CTE)** in a single SQLite query (`db.get_message_chain`), replacing iterative parent-pointer lookups.
+- **Settings Cache**: Channel persona, verbosity, and temperature are cached in memory (invalidated on write) to avoid SQLite I/O on every message.
+- **Search Cache**: Web search results are cached for 1 hour by query string in `search.py`.
+- **Chess Cache**: Stockfish moves are cached by (FEN, Depth) in `chess_api.py` to provide instant AI turns for known positions.
+- **Model Cache**: OpenRouter model lists are cached for 1 hour in `llm.py` to ensure fast slash-command autocomplete.
+- **Lazy Assets**: Avatar generation runs in a background thread on startup to prevent blocking the Discord client.
+
 ## File Structure
 
 ```
 DiscordBot/
 ├── bot.py          # Discord client, commands, reply-chain context, streaming, views
-├── llm.py          # Provider routing, async generator, tool calling, image handling
-├── db.py           # SQLite CRUD — messages (reply-chain) + pins
+├── llm.py          # Provider routing, async generator, tool calling, image handling, model caching
+├── db.py           # SQLite CRUD — messages (reply-chain) + pins + settings caching
 ├── styles.py       # Per-persona embed styles (color, footer), get_style(), make_embed()
 ├── board.py        # FEN → chess board rendering (PNG image + ASCII fallback)
 ├── chess_engine.py # Move validation, board state, game lifecycle (python-chess)
-├── chess_api.py    # Stockfish move lookup via chess-api.com (chess-classic persona)
+├── chess_api.py    # Stockfish move lookup via chess-api.com (cached)
 ├── personas.py     # load_persona(), render_persona(), load_persona_style(), list_personas()
-├── search.py       # DuckDuckGo web search (async wrapper)
+├── search.py       # DuckDuckGo web search (async wrapper + result caching)
 ├── config.yaml     # All non-secret config
 ├── .env            # DISCORD_TOKEN, OPENROUTER_API_KEY
 ├── requirements.txt
@@ -55,163 +67,70 @@ DiscordBot/
 ### `bot.py`
 Entry point. All Discord events, commands, and UI components live here.
 
-- `get_system_prompt(persona, channel_id)` — persona text + pinned notes + meta suffix
-- `_build_meta_suffix(verbosity)` — injects date/time, tool description, verbosity rule (takes verbosity int directly)
-- `ch_persona(channel_id)` — returns the active persona for a channel: reads `channel_settings` DB, falls back to `config.yaml` default. **All persona lookups go through here — no global state.**
-- `ch_verbosity(channel_id)` — returns the active verbosity level for a channel (delegates to `db.get_channel_verbosity`). **Per-channel, persisted in DB.**
-- `build_context(message, bot_id)` — walks Discord reply chain upward, returns `[{role, content}]` ordered oldest-first. Checks DB first (fast path), falls back to Discord API fetch for messages not in DB. **Reset guard:** loads `reset_ts` from `channel_settings`; if the Discord API fallback reaches a message predating the last `@bot reset`, it stops the chain there — prevents "ghost context" from old threads.
-- `stream_to_discord(gen, reply_target)` — consumes the `llm.complete()` async generator, edits a Discord placeholder message every `STREAM_EDIT_INTERVAL = 1.2s`. Returns `(full_raw_text, discord_message)`. Placeholder chosen randomly from `_THINKING_LINES`. **Suppresses `<think>` content during live streaming** — the placeholder stays as the poetic "thinking…" line while the model reasons; the actual response starts streaming only after `</think>`.
-- `extract_thinking(text)` — splits raw LLM output into `(thinking_text, rest)`. Handles both closed `<think>…</think>` and unclosed `<think>…` (model stopped mid-reasoning). Returns `("", text)` if no thinking block.
-- `format_thinking_spoiler(thinking, limit=_THINKING_SPOILER_LIMIT)` — wraps thinking text in Discord spoiler tags with a `-# 💭 *reasoning · click to expand*` header. Truncates at `limit` chars (default 1200) with a `-# *(truncated)*` suffix. Returns `None` if thinking is empty.
-- `clean_response(text)` — strips model-specific tool-call syntax leakage (Qwen, Mistral, Llama, Gemma-3). **No longer strips `<think>` blocks** — that's now done by `extract_thinking` before `clean_response` is called.
-- `chunk_text(text, limit=1990)` — splits at word/newline boundaries. Pass `limit=EMBED_DESC_LIMIT` (4096) for embed responses.
-- `handle_command(message, cmd, *, _out: list[str] | None = None)` — dispatches all `@bot` commands, returns `True` if consumed. When `_out` is provided, output is appended to that list instead of sent as a reply (used for command chaining). Persona and verbosity changes write to `channel_settings` DB (per-channel).
-- `_options_embed(channel_id)` — builds a settings `discord.Embed` showing the current persona, verbosity, provider, and model **for the given channel**.
+- `get_llm_lock(provider)` — returns a `local` lock or `None` (parallel) for cloud providers.
+- `get_system_prompt(persona, channel_id)` — persona text + pinned notes + meta suffix.
+- `ch_persona(channel_id)` — returns active persona; uses `db.get_channel_persona` (cached).
+- `ch_verbosity(channel_id)` — returns active verbosity (cached).
+- `_db_chain(parent_id)` — fetches conversation chain via `db.get_message_chain` (Recursive CTE).
+- `stream_to_discord(gen, reply_target)` — consumes `llm.complete()` generator. **Suppresses `<think>` content during live streaming**.
+- `extract_thinking(text)` — splits raw output into `(thinking_text, rest)`.
+- `format_thinking_spoiler(thinking, limit=1200)` — wraps thinking in Discord spoiler tags.
+- `handle_summarize(channel_id)` — summarizes last 20 messages, respects provider lock.
+- `_options_embed(channel_id)` — builds a settings `discord.Embed` for the channel.
 
 **UI Constants:**
-- `_THINKING_LINES` — list of 20 poetic placeholder strings, one chosen randomly per response
-- `_THINKING_SPOILER_LIMIT = 1200` — max chars shown in the reasoning spoiler before truncation
-- `VERBOSITY_LABELS` — dict mapping levels 1–5 to a poetic label shown in verbosity confirmation messages
-
-**Response sending pattern** (all three paths — `on_message`, regen button, reaction):
-```python
-thinking, raw_rest = extract_thinking(raw)
-cleaned = clean_response(raw_rest)
-thinking_display = format_thinking_spoiler(thinking)  # None if no thinking
-if style:
-    # Embed: thinking in message content (above embed), response in embed description
-    await reply_msg.edit(content=thinking_display, embed=make_embed(chunks[0], style), view=view)
-else:
-    # Plain text: thinking truncated at 800 chars, prepended to response
-    short_display = format_thinking_spoiler(thinking, limit=800)
-    full_content = (short_display + "\n\n" + cleaned) if short_display and cleaned else (...)
-    await reply_msg.edit(content=chunks[0], view=view)
-```
+- `_THINKING_LINES` — poetic placeholder strings for reasoning models.
+- `_THINKING_SPOILER_LIMIT = 1200` — reasoning spoiler character cap.
 
 **Persistent Views:**
-
-`ResponseView` — attached to every LLM response (except chess personas). Registers itself in `on_ready` via `bot.add_view(ResponseView())` so buttons survive restarts.
-
-- `regen` button (`custom_id="psychograph:regen"`) — strips the current view, rebuilds context, re-calls LLM at temperature 0.85, posts a new response with a fresh `ResponseView`.
-- `pin` button (`custom_id="psychograph:pin"`) — saves embed description (or message content) as a pin, sends ephemeral confirmation.
-
-`OptionsView(channel_id)` — 120-second-timeout view for the `@bot options` settings panel. Takes `channel_id` so all interactions read/write the correct channel's settings.
-
-- Row 0: `PersonaSelect(channel_id)` dropdown (up to 25 personas, active one pre-selected using `ch_persona(channel_id)`). On select: writes to `db.set_channel_persona`, clears channel history, edits the options embed in-place.
-- Row 1: verbosity buttons 1–5. Active level highlighted green (`ButtonStyle.success`) in `__init__` based on `ch_verbosity(channel_id)`. On click: writes to `db.set_channel_verbosity`, edits the options embed in-place.
-- Row 2: "↺ reset context" button (`ButtonStyle.danger`). Clears DB for this channel (records `reset_ts`), sends ephemeral confirmation.
+- `ResponseView` — registers in `on_ready`. `regen` button re-calls LLM; `pin` button saves notes.
+- `OptionsView(channel_id)` — persona dropdown, verbosity buttons, and reset button.
 
 ### `llm.py`
-All LLM calls go through here. Both providers use `openai.AsyncOpenAI` — the only difference is base URL and auth header.
+All LLM calls go through here. Both providers use `openai.AsyncOpenAI`.
 
-- `get_client(provider, cfg)` — returns a cached `AsyncOpenAI` client for `"local"` or `"openrouter"`.
-- `format_image_blocks(attachments)` — async; returns OpenAI `image_url` content blocks. Works identically for both providers. Images not persisted to DB.
-- `get_local_models(cfg)` — calls `GET /v1/models` on LM Studio, returns list of loaded model IDs.
-- `get_openrouter_models(cfg, paid_only=False)` — fetches model list from OpenRouter API. `paid_only=True` filters to models where `pricing.prompt != "0"`.
-- `complete(messages, provider, model, cfg, ...)` — **async generator** yielding text chunks.
-
-**`complete()` flow:**
-1. Pass 1 (non-streaming): call with `tool_choice="auto"` to detect tool calls.
-2. If `BadRequestError`: model doesn't support tools → fall through to plain streaming.
-3. If no tool calls: yield `msg_obj.content` directly (no second pass needed).
-4. If tool calls: execute `web_search` in parallel → build updated messages → Pass 2 streaming with `tool_choice="none"`.
+- `get_client(provider, cfg)` — returns a cached `AsyncOpenAI` client.
+- `get_openrouter_models(cfg, ...)` — returns cached list of models (1-hour TTL).
+- `complete(messages, provider, model, cfg, ...)` — **async generator** yielding text chunks. Executes `web_search` tool if requested.
 
 ### `db.py`
-SQLite persistence. Four tables:
+SQLite persistence with in-memory caching.
 
-**`messages`** — reply-chain graph. Keyed by Discord message ID.
-```sql
-discord_msg_id INTEGER PRIMARY KEY
-parent_msg_id  INTEGER              -- NULL if conversation start
-channel_id     INTEGER
-role           TEXT                 -- "user" or "assistant"
-content        TEXT
-```
+- **`messages`** — reply-chain graph keyed by Discord message ID.
+- **`channel_settings`** — persists persona, verbosity (1-5), temperature, and `reset_ts` per channel.
+- **`get_message_chain(start_msg_id, limit)`** — **Recursive CTE** that fetches hierarchy in one query.
+- **`usage_logs`** — tracks model, provider, tokens, and response time.
+- **`chess_games`** — persists FEN and move stack for active games.
+- **`_CHANNEL_CACHE`** — in-memory cache for channel settings to avoid redundant I/O.
+- **`init_db()`** — handles automatic schema migrations.
 
-**`pins`** — per-channel pinned notes, injected into system prompt.
-```sql
-channel_id INTEGER
-content    TEXT                     -- capped at 200 chars, last 5 shown
-```
+### `ui.py`
+Discord UI components and interactive views.
 
-**`chess_games`** — one row per active chess game, keyed by channel.
-```sql
-channel_id  INTEGER PRIMARY KEY
-fen         TEXT                    -- current position FEN (informational)
-move_stack  TEXT                    -- space-separated UCI move history (source of truth)
-```
-`move_stack` is the authoritative record; the board is always rebuilt by replaying moves from the start. `save_chess_game()`, `get_chess_game()`, `delete_chess_game()` are the CRUD functions.
-
-**`channel_settings`** — per-channel persistent settings.
-```sql
-channel_id  INTEGER PRIMARY KEY
-persona     TEXT                    -- active persona name (NULL = use config.yaml default)
-verbosity   INTEGER DEFAULT 2       -- 1–5 verbosity level, persisted across restarts
-reset_ts    REAL                    -- Unix timestamp of last @bot reset (NULL if never)
-```
-Functions: `get_channel_persona(channel_id)`, `set_channel_persona(channel_id, persona)`, `get_channel_verbosity(channel_id)` (returns 2 if no row), `set_channel_verbosity(channel_id, verbosity)`, `get_channel_reset_ts(channel_id)` (returns `float | None`).
-
-`clear_channel(channel_id)` deletes all messages for the channel **and** records `reset_ts = time.time()` in `channel_settings`. This timestamp is the fence used by `build_context` to prevent ghost context.
-
-`init_db()` auto-migrates old schemas: drops `messages` table if `discord_msg_id` column is missing; adds `reset_ts` column to `channel_settings` if it predates that column.
-
-### `styles.py`
-Embed styling for every persona. No side effects — pure data + two helper functions.
-
-- `PERSONA_STYLES` — dict mapping persona name → `{"color": int, "footer": str}`. All 21 personas have entries. Personas not in this dict (and without a `"style"` key in their JSON file) render as plain text.
-- `EMBED_DESC_LIMIT = 4096` — embed description character cap (Discord limit).
-- `get_style(persona_name, persona_style=None)` — returns style dict from the JSON persona's `"style"` key if present, otherwise falls back to `PERSONA_STYLES`. Returns `None` if no style found (→ plain text).
-- `make_embed(text, style)` — builds a `discord.Embed` with `description=text`, `color`, and optional `footer`.
-
-To add or change a persona's style, edit the `PERSONA_STYLES` dict in `styles.py`, or add a `"style"` key to the persona's JSON file (takes precedence).
+- `ResponseView` — persistent view for bot responses (Regenerate, Pin).
+- `OptionsView(channel_id)` — dropdown for persona switching and buttons for verbosity/reset.
+- `_options_embed(channel_id)` — generates the status embed for the options menu.
 
 ### `personas.py`
-Read-only. No self-modification.
+- `get_persona_metadata(name)` — returns display name and avatar path.
+- `render_persona(data)` — flattens JSON persona data into a system prompt.
+- `list_personas()` — scans `personas/` directory.
 
-- `load_persona(name)` — reads `personas/{name}.md`, tries JSON parse → `render_persona()`, falls back to raw text if plain `.md`.
-- `render_persona(data)` — flattens `voice` + `facts` dict into a readable system prompt string. `state` fields are ignored.
-- `load_persona_style(name)` — reads the same file, extracts and returns the `"style"` dict if the file is valid JSON and has one. Returns `None` otherwise (plain-text personas get their style from `PERSONA_STYLES` in `styles.py`).
-- `list_personas()` — sorted list of `.md` stems in `personas/`.
-
-### `search.py`
-- `web_search(query, max_results, snippet_chars)` — async wrapper over a blocking DuckDuckGo call via `run_in_executor`. Returns a formatted markdown block.
+### `styles.py`
+- `PERSONA_STYLES` — mapping of persona name → `{"color": int, "footer": str}`.
+- `get_style(persona_name, persona_style=None)` — returns style dict (JSON persona file overrides `styles.py`).
 
 ### `board.py`
-Chess board rendering from FEN strings. Two output modes:
-
-- `fen_to_image(fen)` — renders a PNG image (returns `bytes | None`). Uses Unicode chess piece symbols (♔♕♖♗♘♙♚♛♜♝♞♟) drawn with Segoe UI Symbol font. White pieces rendered as white glyphs with dark outline, black pieces as dark glyphs with light outline. Board colours match chess.com. Returns `None` if Pillow is missing or FEN is invalid.
-- `fen_to_board(fen)` — ASCII fallback in a Discord code block using the same Unicode piece symbols. Used when Pillow is unavailable.
-
-Font priority for pieces: `seguisym.ttf` → `seguiemj.ttf` → `arialbd.ttf` → Pillow default. Labels use Arial.
-
-Called from `bot.py` via `extract_board()` which parses `[board: FEN]` tags from LLM output.
+- `fen_to_image(fen)` — PNG rendering using `seguisym.ttf` → `seguiemj.ttf` → `arialbd.ttf`.
+- `fen_to_board(fen)` — ASCII fallback.
 
 ### `chess_api.py`
-Single async function for the chess-classic persona.
-
-- `get_stockfish_move(fen, depth=12)` — POSTs to `https://chess-api.com/v1` with `{"fen": fen, "depth": depth}` using aiohttp. Returns the parsed JSON dict on success (caller uses `.move` for UCI and `.san` for SAN), or `None` on any failure. Handles HTTP errors, missing `move` key, and chess-api.com's `type=info` error envelope. 15-second timeout per request.
+- `get_stockfish_move(fen, depth=12)` — fetches move. **Cached by (FEN, depth)** in memory.
 
 ### `chess_engine.py`
-Move validation and game state management using `python-chess`. One game per channel, persisted to SQLite.
-
-- `is_chess_persona(name)` — returns `True` if the active persona is `chess` (LLM-based).
-- `is_chess_classic_persona(name)` — returns `True` if the active persona is `chess-classic` (API-based).
-- `is_any_chess_persona(name)` — returns `True` for either chess persona; used by reset/switch guards and to suppress `ResponseView` buttons.
-- `get_board(channel_id)` — loads the `chess.Board` from DB (or fresh starting position).
-- `apply_user_move(channel_id, move_text)` — validates + applies the human's move. Returns `(ok, san_or_error, fen)`.
-- `apply_bot_move(channel_id, move_text)` — validates + applies the LLM's move. Same return signature.
-- `extract_bot_move(text)` — pulls the first SAN/UCI-shaped token from LLM response text.
-- `legal_moves_str(channel_id)` — comma-separated SAN list of legal moves.
-- `game_status(channel_id)` — human-readable game-over string, or `None` if ongoing.
-- `current_fen(channel_id)` — authoritative FEN for the current position.
-- `reset_game(channel_id)` — deletes the game from DB.
-- `move_number(channel_id)`, `side_to_move(channel_id)` — convenience accessors.
-
-**Integration with `bot.py`:**
-1. User's move is validated *before* calling the LLM — illegal moves are rejected immediately.
-2. The authoritative FEN, move number, side to move, and full legal-moves list are injected into the system prompt.
-3. After the LLM responds, its move is extracted and validated. If illegal, the LLM is re-prompted with the legal moves list (up to `MAX_CHESS_RETRIES = 3` attempts).
-4. The `[board: FEN]` tag in the response is overwritten with the engine's authoritative FEN.
+- `apply_user_move(channel_id, move_text)` — validates human move.
+- `apply_bot_move(channel_id, move_text)` — validates LLM move.
+- `extract_bot_move(text)` — pulls first SAN/UCI-shaped token.
 
 ## Config Reference (`config.yaml`)
 
@@ -222,14 +141,14 @@ providers:
     api_key: lm-studio
   openrouter:
     base_url: https://openrouter.ai/api/v1
-    models: [...]          # listed by @bot model when provider=openrouter
+    models: [...]
 
-default_provider: local    # changed by @bot provider <name>
-default_model: local-model # changed by @bot model <name>
-persona: mecha-epstein     # changed by @bot persona <name>
+default_provider: local
+default_model: local-model
+persona: mecha-epstein
 
 context:
-  max_messages: 40         # max reply-chain depth sent to LLM
+  max_messages: 40
 
 web_search:
   max_results: 3
@@ -240,114 +159,51 @@ response:
   temperature: 0.7
 ```
 
-Provider, model, and persona changes are written back to `config.yaml` immediately so they survive restarts.
-
 ## Commands
 
-`@bot <command>` — command chaining with `;` supported. When commands are chained, all output is collected and posted as a **single reply** after all commands complete.
+Both **Slash Commands** (`/`) and **Prefix Commands** (`!`) are supported. Prefix commands use `bot.process_commands(message)`.
 
 | Command | Effect |
 |---|---|
-| `reset` | Clears all messages for this channel from DB; records `reset_ts` to fence context |
-| `persona <name>` | Switch persona for this channel + clear channel history (writes to `channel_settings` DB) |
+| `reset` | Clears messages for this channel + records `reset_ts` |
+| `persona <name>` | Switch persona for this channel + clear history |
 | `personas` | List all personas, mark active |
-| `prompt` | Print active persona name + full rendered system prompt |
-| `verbosity <1-5>` | Set verbosity for this channel (persisted per-channel in `channel_settings` DB) |
-| `model` | List models for current provider |
-| `model <name>` | Switch model (written to config) |
-| `model random` | Pick a random paid model (non-zero cost) from OpenRouter |
-| `model free random` | Pick a random free model from OpenRouter |
-| `provider local` | Switch to LM Studio |
-| `provider openrouter` | Switch to OpenRouter |
-| `options` | Open interactive settings panel (persona dropdown, verbosity buttons, reset) |
+| `prompt` | Print active persona name + system prompt |
+| `verbosity <1-5>` | Set verbosity (persisted per-channel) |
+| `model <name>` | Switch model (supports dynamic autocomplete) |
+| `provider <name>` | Switch provider (`local` or `openrouter`). Also available as `!provider`. |
+| `options` | Open interactive settings panel |
 | `restart` | Spawn fresh process, close current |
-
-## Buttons (on every LLM response)
-
-`ResponseView` is attached to every bot response (not chess). Both buttons are persistent — they survive bot restarts via stable `custom_id` values registered in `on_ready`.
-
-| Button | Action |
-|---|---|
-| `↺ regenerate` | Re-runs the response with temperature 0.85 |
-| `📌 pin` | Saves the message as a persistent note for this channel |
-
-## Reaction Commands
-
-Reactions still work as an alternative to buttons:
-
-| Emoji | Action |
-|---|---|
-| 🔄 | Regenerate — delete old response from DB, rebuild context, re-call LLM at temperature 0.85 |
-| 📌 | Pin — save up to 200 chars to `pins` table; injected into system prompt for this channel |
-
-## Persona File Format
-
-```json
-{
-  "voice": "Character prose — the system prompt text (second person).",
-  "facts": { "key": "stable knowledge" },
-  "state": { "key": null },
-  "style": {
-    "color": "0x4A4A4A",
-    "footer": "· in-character footer text ·"
-  }
-}
-```
-
-Only `voice` and `facts` are rendered into the system prompt. `state` is present in files for legacy compatibility but ignored at runtime. `style` is optional — if present, it overrides the entry in `styles.py` for that persona. Plain-text `.md` files work as fallback (the whole file becomes the system prompt); their style comes from `PERSONA_STYLES` in `styles.py`.
-
-## Embed Styling System
-
-Every persona has an entry in `PERSONA_STYLES` in `styles.py` with a `color` (hex int) and `footer` (in-character tagline). When a persona has a style, responses are sent as Discord embeds (`discord.Embed`) instead of plain text. This gives:
-
-- A colored left-sidebar accent
-- A persistent footer with the persona's tagline
-- A higher single-message character limit (4096 vs 2000)
-
-To add a new persona to the embed system, add an entry to `PERSONA_STYLES`. To override from within the persona file itself, add a `"style"` key to the JSON.
 
 ## Context Model
 
-Context follows **Discord reply chains**, not channel history. A user builds a thread by replying to bot messages. Multiple independent conversations can coexist in the same channel.
+Context follows **Discord reply chains**. `build_context()` uses the `get_message_chain` CTE. A **Reset guard** uses `reset_ts` to prevent "ghost context" from pre-reset threads when using Discord API fallback.
 
-`build_context()` traverses the chain by following `parent_msg_id` links upward in DB, up to `max_messages` deep. For messages not in DB, it falls back to Discord's `channel.fetch_message()`.
+## Persona File Format
 
-**Reset guard:** `build_context` loads `reset_ts` from `channel_settings` at the start. When the Discord API fallback fetches a message whose `created_at` timestamp predates `reset_ts`, it stops walking the chain. This prevents "ghost context" — old messages re-entering context after `@bot reset` because a user replied to a pre-reset thread.
+Files are stored in `personas/*.md` but use **JSON format**:
 
-## Image Handling
-
-Both providers use the same OpenAI `image_url` format:
 ```json
-{"type": "image_url", "image_url": {"url": "data:image/webp;base64,..."}}
+{
+  "name": "Display Name",
+  "voice": "Character prose.",
+  "facts": { "key": "knowledge" },
+  "style": { "color": "0x4A4A4A", "footer": " tag " }
+}
 ```
-Use a proper vision model in LM Studio — `Qwen2.5-VL`, `LLaVA-1.6`, or `InternVL2`. Gemma-3 does not support this format in LM Studio.
 
 ## Verbosity Levels
 
-Injected as a named rule at the end of every system prompt (`## Response length — verbosity N/5`). **Verbosity is per-channel and persists across restarts** (stored in `channel_settings.verbosity`; defaults to 2 for new channels).
-
-| Level | Instruction | Label shown to user |
+| Level | Instruction | Label |
 |---|---|---|
-| 1 | ONE sentence. | *whisper mode · one sentence, then silence* |
-| 2 | 1-3 sentences. *(default)* | *concise · a breath, not a speech* |
-| 3 | One short paragraph. | *balanced · a thought, fully formed* |
-| 4 | A full paragraph. | *expansive · room to stretch out* |
-| 5 | No limit. Full depth. | *unbound · full depth, full voice, no ceiling* |
+| 1 | ONE sentence. | *whisper mode* |
+| 2 | 1-3 sentences. | *concise* |
+| 3 | One short paragraph. | *balanced* |
+| 4 | A full paragraph. | *expansive* |
+| 5 | No limit. Full depth. | *unbound* |
 
 ## Thinking / Reasoning Window
 
-Models that use `<think>…</think>` blocks (e.g., DeepSeek-R1, QwQ) get a collapsible reasoning display. The pipeline:
-
-1. **During streaming** — `<think>` content is stripped from live edits. The placeholder "thinking…" line stays visible while the model reasons; the actual response starts streaming after `</think>`.
-2. **After streaming** — `extract_thinking(raw)` splits the full output into `(thinking_text, rest)`.
-3. **Display** — `format_thinking_spoiler(thinking)` wraps the reasoning in Discord spoiler tags (`||…||`) with a `-# 💭 *reasoning · click to expand*` header above it.
-4. **Placement**:
-   - For embed personas: thinking goes in the Discord message `content` field (plain text, above the embed), response goes in embed description — separate character budgets.
-   - For plain-text personas: thinking (truncated at 800 chars) is prepended to the response content.
-
-## Logging
-
-`logging.getLogger("bot")` — format `HH:MM:SS LEVEL [bot] message`.
-
-- `INFO` — startup, provider/model/persona changes
-- `ERROR` — LLM failures, reaction handler errors
+1. **During streaming**: reasoning hidden from live edits.
+2. **Post-process**: `extract_thinking` splits output.
+3. **Display**: reasoning moved to spoiler tag (content field for embeds, prepended for plain text).

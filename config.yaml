@@ -1,6 +1,6 @@
 context:
   max_messages: 40
-default_model: mechaepstein-8000
+default_model: qwen/qwen3.5-9b
 default_provider: local
 persona: mochi
 providers:

@@ -1,8 +1,30 @@
 import json
 from pathlib import Path
 
+from avatar_gen import generate_avatar
+
 PERSONAS_DIR = Path(__file__).parent / "personas"
 
+def get_persona_metadata(name: str) -> dict:
+    """Get metadata for a persona including display name and avatar path."""
+    path = PERSONAS_DIR / f"{name}.md"
+    metadata = {"name": name, "avatar_path": generate_avatar(name)}
+    
+    if not path.exists():
+        return metadata
+
+    raw = path.read_text(encoding="utf-8").strip()
+    try:
+        data = json.loads(raw)
+        if "name" in data:
+            metadata["display_name"] = data["name"]
+        if "avatar" in data:
+            # If avatar is a URL, we use it directly. If it's a local path, we might need to handle it.
+            metadata["avatar_url"] = data["avatar"]
+    except (json.JSONDecodeError, KeyError):
+        pass
+    
+    return metadata
 
 def list_personas() -> list[str]:
     return sorted(p.stem for p in PERSONAS_DIR.glob("*.md"))

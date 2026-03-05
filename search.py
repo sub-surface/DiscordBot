@@ -1,12 +1,27 @@
 import asyncio
-
+import functools
+import time
 from ddgs import DDGS
 
+# Simple in-memory cache for search results
+_SEARCH_CACHE = {}
+CACHE_TTL = 3600  # 1 hour
 
 async def web_search(query: str, max_results: int = 3, snippet_chars: int = 300) -> str:
-    """Run a DuckDuckGo search and return a formatted results block."""
+    """Run a DuckDuckGo search and return a formatted results block. Results are cached."""
+    query_key = query.strip().lower()
+    now = time.time()
+    
+    if query_key in _SEARCH_CACHE:
+        result, expiry = _SEARCH_CACHE[query_key]
+        if now < expiry:
+            return result
+            
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _ddg_search, query, max_results, snippet_chars)
+    result = await loop.run_in_executor(None, _ddg_search, query, max_results, snippet_chars)
+    
+    _SEARCH_CACHE[query_key] = (result, now + CACHE_TTL)
+    return result
 
 
 def _ddg_search(query: str, max_results: int, snippet_chars: int) -> str:

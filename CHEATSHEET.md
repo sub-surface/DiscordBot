@@ -1,49 +1,39 @@
-# Bot cheat sheet
+# Bot Cheat Sheet
 
-Mention the bot to chat. Chain commands with `;`:
-```
-@bot persona mochi; verbosity 3; reset
-```
+Mention the bot to chat. Use **Slash Commands** (`/`) for all settings.
 
-## Personas
-`@bot personas` — list all personas (active one marked)
-`@bot persona <name>` — switch persona + clear history
-`@bot prompt` — show current persona's full system prompt
+## ⚙️ Settings & UI
+- `/options` — Open the interactive settings panel (Persona, Model, Verbosity, Temperature, Reset, Summarize).
+- `/help` — Show this guide.
 
-## Context
-`@bot reset` — clear this channel's conversation history
+## 👤 Personas
+- `/personas` — List all available personas (active one marked).
+- `/persona <name>` — Switch active persona and clear history.
+- `/prompt` — Show current persona's full system prompt.
 
-## Model / Provider
-`@bot model` — list models for current provider
-`@bot model <name>` — switch model
-`@bot model free` — list all free-tier models on OpenRouter
-`@bot model random` — switch to a random paid model
-`@bot model free random` — switch to a random free model
-`@bot provider local` — switch to LM Studio
-`@bot provider openrouter` — switch to OpenRouter
+## 🧠 Memory & Context
+- `/reset` — Clear this channel's conversation history.
+- `/context` — See the current messages being sent to the LLM.
+- `/options` → **[📝 summarize]** — Condense history into a concise summary.
 
-## Output
-`@bot verbosity <1-5>` — how long responses are (default: 2)
+## 🤖 Model & Provider
+- `/provider <name>` — Switch between `local` (LM Studio) and `openrouter`.
+- `/model <name>` — Switch active model (includes autocomplete for local cache).
+- `/temperature <0.0-2.0>` — Set model creativity/randomness.
 
-## Settings Panel
-`@bot options` — interactive settings panel with:
-- persona switcher dropdown
-- verbosity buttons (active shown in green)
-- reset context button
+## 💬 Output Control
+- `/verbosity <1-5>` — Set response length (1: whisper, 5: unbound).
 
-## Buttons (on every response)
-`↺ regenerate` — re-run the response with higher temperature
-`📌 pin` — pin the message as a persistent note for this channel
+## ♟️ Chess
+- `/resign` — Resign the current game (public).
+- `/level <1-8>` — Set Stockfish difficulty level.
 
-## Reactions (also still work)
-🔄 on a bot message — regenerate that response
-📌 on a bot message — pin it as a persistent note
+## 🛠️ Meta
+- `/restart` — Reboot the bot process (Owner only).
+- `/sync` — Force-refresh slash commands in the current guild (Owner only).
 
-## Chess
-`@bot resign` — resign the current game
-`@bot level <1-8>` — set chess-classic difficulty
+### **Buttons (on every response)**
+- `↺ regenerate` — Re-run the response.
+- `📌 pin` — Save the message as a persistent note for this channel.
 
-## Meta
-`@bot restart` — restart the bot
-
-The bot has web search — it decides when to use it.
+The bot has **Web Search** — it decides when to use it automatically.

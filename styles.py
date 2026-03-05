@@ -75,6 +75,11 @@ PERSONA_STYLES: dict[str, dict] = {
         "footer": "· signal over noise ·",
     },
 
+    "maya": {
+        "color": 0xFF4500,   # orange red
+        "footer": "💅 · eat hot chip and lie · 📖",
+    },
+
     # ── reflective stability ──────────────────────────────────────────────────
     "strange_loop": {
         "color": 0x1A4A7A,   # deep tech blue
@@ -131,6 +136,14 @@ PERSONA_STYLES: dict[str, dict] = {
 }
 
 EMBED_DESC_LIMIT = 4096
+
+VERBOSITY_LABELS = {
+    1: "·˚ whisper mode · one sentence, then silence ˚·",
+    2: "·˚ concise · a breath, not a speech ˚·",
+    3: "·˚ balanced · a thought, fully formed ˚·",
+    4: "·˚ expansive · room to stretch out ˚·",
+    5: "·˚ unbound · full depth, full voice, no ceiling ˚·",
+}
 
 
 def get_style(persona_name: str, persona_style: dict | None = None) -> dict | None:

@@ -8,15 +8,38 @@ import socket
 import subprocess
 import sys
 import warnings
+import time
 from datetime import datetime
 from pathlib import Path
 
 import discord
+from discord.ext import commands, tasks
+from discord import app_commands
 import yaml
 from dotenv import load_dotenv
 
+import db
+import llm
+import chess_api
+import chess_engine
+from avatar_gen import generate_avatar
+from board import fen_to_board, fen_to_image
+from personas import list_personas, load_persona, load_persona_style, get_persona_metadata
+from styles import get_style, make_embed, EMBED_DESC_LIMIT, VERBOSITY_LABELS
+from ui import ResponseView, OptionsView, _options_embed, _get_options_view
+from config_util import config, save_config
+
 warnings.filterwarnings("ignore", message="Impersonate.*does not exist")
 load_dotenv()
+
+# Global lock manager for sequential vs parallel LLM generation
+_PROVIDER_LOCKS = {"local": asyncio.Lock()}
+
+def get_llm_lock(provider: str) -> asyncio.Lock | None:
+    """Return a lock for sequential providers, or None for parallel ones."""
+    if provider == "local":
+        return _PROVIDER_LOCKS["local"]
+    return None # Parallel by default for cloud providers
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,49 +48,122 @@ logging.basicConfig(
 )
 log = logging.getLogger("bot")
 
-# Singleton guard — UDP port mutex
-SINGLETON_PORT = 47823
+# Singleton guard placeholder
 _INSTANCE_LOCK: socket.socket | None = None
-try:
-    _INSTANCE_LOCK = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    _INSTANCE_LOCK.bind(("127.0.0.1", SINGLETON_PORT))
-except OSError:
-    log.warning("Another instance is already running. Exiting.")
-    sys.exit(0)
+SINGLETON_PORT = 47823
 
-CONFIG_PATH = Path(__file__).parent / "config.yaml"
+class PsychographBot(commands.Bot):
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.message_content = True
+        super().__init__(command_prefix="!", intents=intents)
+        self.current_provider = config.get("default_provider", "local")
+        self.current_model = config.get("default_model", "local-model")
+        self.chess_level = 3
 
+    async def setup_hook(self):
+        db.init_db()
+        self.add_view(ResponseView(bot_callback=self.handle_view_interaction))
+        self.heartbeat.start()
+        log.info("Views registered and Heartbeat started. Use !sync in a channel to update slash commands.")
 
-def load_config() -> dict:
-    with open(CONFIG_PATH, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+    @tasks.loop(minutes=30)
+    async def heartbeat(self):
+        """Select a random persona to post in #sim-city once or twice a day."""
+        now = time.time()
+        last_run = db.get_last_run("sim_city_heartbeat")
+        # Run every 12 hours approx (43200 seconds)
+        if now - last_run < 40000:
+            return
 
+        for guild in self.guilds:
+            channel = discord.utils.get(guild.text_channels, name="sim-city")
+            if channel:
+                persona_name = random.choice(list_personas())
+                log.info(f"Heartbeat: {persona_name} is posting in #sim-city")
+                
+                # Simple prompt for heartbeat
+                topics = ["the weather", "a random thought", "something you noticed today", "a dream you had", "a piece of news"]
+                prompt = f"Write a short, characterful post about {random.choice(topics)}."
+                
+                system = get_system_prompt(persona_name, channel.id)
+                messages = [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": prompt}
+                ]
+                
+                await process_llm_request(channel, messages, persona_name, None)
+                db.set_last_run("sim_city_heartbeat", now)
+                break
 
-def save_config(cfg: dict) -> None:
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True)
+    async def get_or_create_webhook(self, channel: discord.TextChannel) -> discord.Webhook | None:
+        if not isinstance(channel, discord.TextChannel):
+            return None
+            
+        cached = db.get_channel_webhook(channel.id)
+        if cached:
+            try:
+                return discord.Webhook.from_url(cached['webhook_url'], client=self)
+            except:
+                pass
 
+        # Check existing webhooks in the channel
+        try:
+            webhooks = await channel.webhooks()
+            for wh in webhooks:
+                if wh.name == "SimCity Webhook":
+                    db.save_channel_webhook(channel.id, wh.url, wh.id)
+                    return wh
+            
+            # Create new one if not found
+            wh = await channel.create_webhook(name="SimCity Webhook")
+            db.save_channel_webhook(channel.id, wh.url, wh.id)
+            return wh
+        except Exception as e:
+            log.error(f"Failed to get/create webhook: {e}")
+            return None
 
-config = load_config()
+    async def handle_view_interaction(self, interaction: discord.Interaction, action: str):
+        if action == "regen":
+            await self.handle_regen(interaction)
 
-current_provider: str = config.get("default_provider", "local")
-current_model: str = config.get("default_model", "local-model")
-chess_level: int = 3  # chess-classic difficulty; 3 ≈ 1500 Elo (see CHESS_LEVEL_MAP)
+    async def handle_regen(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        bot_row = db.get_message(interaction.message.id)
+        if not bot_row: return
+        user_row = db.get_message(bot_row["parent_msg_id"]) if bot_row["parent_msg_id"] else None
+        if not user_row: return
 
-DISCORD_MSG_LIMIT = 1990
-STREAM_EDIT_INTERVAL = 1.2
+        await interaction.message.edit(view=None)
+        db.delete_message(interaction.message.id)
 
-# Maps user-facing level (1-8) → (search depth, Elo label)
-CHESS_LEVEL_MAP = {
-    1: (1,  "~900"),
-    2: (3,  "~1200"),
-    3: (5,  "~1500"),
-    4: (7,  "~1700"),
-    5: (9,  "~2000"),
-    6: (11, "~2200"),
-    7: (13, "~2400"),
-    8: (15, "~2600+"),
-}
+        channel_id = interaction.channel_id
+        persona = ch_persona(channel_id)
+        temp = db.get_channel_temperature(channel_id)
+        chain = _db_chain(user_row["parent_msg_id"])
+        system = get_system_prompt(persona, channel_id)
+        messages_payload = [{"role": "system", "content": system}] + chain + [{"role": "user", "content": user_row["content"]}]
+
+        await process_llm_request(interaction.message.channel, messages_payload, persona, user_row["discord_msg_id"], reply_to=interaction.message, temperature=temp)
+
+bot = PsychographBot()
+
+@bot.command()
+@commands.is_owner()
+async def sync(ctx: commands.Context):
+    """Sync slash commands to the current guild immediately."""
+    try:
+        bot.tree.copy_global_to(guild=ctx.guild)
+        synced = await bot.tree.sync(guild=ctx.guild)
+        await ctx.send(f"· synced {len(synced)} commands to this guild ·")
+    except Exception as e:
+        await ctx.send(f"Sync failed: {e}")
+
+# Helper accessors
+def ch_persona(cid: int) -> str: return db.get_channel_persona(cid) or config.get("persona", "mochi")
+def ch_verbosity(cid: int) -> int: return db.get_channel_verbosity(cid)
+
+# ── Formatting & Extraction ──────────────────────────────────────────────────
 
 VERBOSITY_INSTRUCTIONS = {
     1: "ONE sentence. Stop after the period. No lists, no follow-up thoughts, no elaboration.",
@@ -77,56 +173,7 @@ VERBOSITY_INSTRUCTIONS = {
     5: "No length limit. Full depth, full character voice — as long as the response warrants.",
 }
 
-_THINKING_LINES = [
-    "-# *· thinking ·*",
-    "-# *· gathering thoughts ·*",
-    "-# *· consulting the void ·*",
-    "-# *· ✦ reaching into the ether ✦ ·*",
-    "-# *· ˚ · brewing a response · ˚ ·*",
-    "-# *· rummaging through neurons ·*",
-    "-# *· ⋆ something stirs ⋆ ·*",
-    "-# *· words are forming ·*",
-    "-# *· ✧ contemplating ✧ ·*",
-    "-# *· turning this over ·*",
-    "-# *· ˚ · hold on · ˚ ·*",
-    "-# *· ⊹ thinking very hard ⊹ ·*",
-    "-# *· sifting through the noise ·*",
-    "-# *· ★ · working on it · ★ ·*",
-    "-# *· give it a moment ·*",
-    "-# *· ✦ · the gears turn · ✦ ·*",
-    "-# *· assembling something ·*",
-    "-# *· ˖ ° . searching . ° ˖ ·*",
-    "-# *· in the quiet before words ·*",
-    "-# *· ⋆ ˚ · nearly there · ˚ ⋆ ·*",
-]
-
-VERBOSITY_LABELS = {
-    1: "·˚ whisper mode · one sentence, then silence ˚·",
-    2: "·˚ concise · a breath, not a speech ˚·",
-    3: "·˚ balanced · a thought, fully formed ˚·",
-    4: "·˚ expansive · room to stretch out ˚·",
-    5: "·˚ unbound · full depth, full voice, no ceiling ˚·",
-}
-
-import db
-import llm
-import chess_api
-import chess_engine
-from board import fen_to_board, fen_to_image
-from personas import list_personas, load_persona, load_persona_style
-from styles import get_style, make_embed, EMBED_DESC_LIMIT
-
-def ch_persona(channel_id: int) -> str:
-    """Active persona for a channel; falls back to the config default."""
-    return db.get_channel_persona(channel_id) or config.get("persona", "mochi")
-
-
-def ch_verbosity(channel_id: int) -> int:
-    """Verbosity level for a channel; defaults to 2."""
-    return db.get_channel_verbosity(channel_id)
-
-
-MAX_CHESS_RETRIES = 3
+_THINKING_SIGNAL = "-# *· ✦ ·*"
 
 # ── Chess result flavour text ─────────────────────────────────────────
 _WIN_MSGS = [
@@ -169,846 +216,483 @@ _RESIGN_MSGS = [
     "~ ✦ ~ white puts down the pieces ~ ✦ ~",
 ]
 
-
 def _chess_result_text(status: str) -> str:
-    """Pick a random flavour message matching the game outcome."""
     s = status.lower()
-    if "white wins" in s:
-        return random.choice(_WIN_MSGS)
-    if "black wins" in s:
-        return random.choice(_LOSS_MSGS)
+    if "white wins" in s: return random.choice(_WIN_MSGS)
+    if "black wins" in s: return random.choice(_LOSS_MSGS)
     return random.choice(_DRAW_MSGS)
-
-
-# ── UI Views ──────────────────────────────────────────────────────────────────
-
-class ResponseView(discord.ui.View):
-    """Persistent action row attached to every LLM response."""
-
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="↺ regenerate", style=discord.ButtonStyle.secondary, custom_id="psychograph:regen")
-    async def regen(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-        bot_row = db.get_message(interaction.message.id)
-        if not bot_row:
-            return
-        user_row = db.get_message(bot_row["parent_msg_id"]) if bot_row["parent_msg_id"] else None
-        if not user_row:
-            return
-
-        # Strip buttons from old message while we work
-        await interaction.message.edit(view=None)
-        db.delete_message(interaction.message.id)
-
-        channel_id = interaction.channel_id
-        persona = ch_persona(channel_id)
-        chain = _db_chain(user_row["parent_msg_id"])
-        system = get_system_prompt(persona, channel_id)
-        messages_payload = [{"role": "system", "content": system}] + chain + [{"role": "user", "content": user_row["content"]}]
-
-        try:
-            gen = llm.complete(messages=messages_payload, provider=current_provider, model=current_model, cfg=config, temperature=0.85)
-            raw, new_msg = await stream_to_discord(gen, interaction.message)
-            thinking, raw_rest = extract_thinking(raw)
-            cleaned = clean_response(raw_rest)
-            cleaned, board_image = extract_board(cleaned)
-            db.save_message(new_msg.id, user_row["discord_msg_id"], channel_id, "assistant", cleaned or "*(no response)*")
-            style = get_style(persona, load_persona_style(persona))
-            thinking_display = format_thinking_spoiler(thinking)
-            if style:
-                chunks = chunk_text(cleaned, limit=EMBED_DESC_LIMIT)
-                await new_msg.edit(content=thinking_display, embed=make_embed(chunks[0], style) if chunks else None, view=ResponseView())
-                for extra in chunks[1:]:
-                    await interaction.message.channel.send(embed=make_embed(extra, style))
-            else:
-                short_display = format_thinking_spoiler(thinking, limit=800)
-                full_content = (short_display + "\n\n" + cleaned) if short_display and cleaned else (short_display or cleaned or "*(no response)*")
-                chunks = chunk_text(full_content)
-                await new_msg.edit(content=chunks[0] if chunks else "*(no response)*", view=ResponseView())
-                for extra in chunks[1:]:
-                    await interaction.message.channel.send(extra)
-            if board_image:
-                await interaction.message.channel.send(file=discord.File(io.BytesIO(board_image), filename="board.png"))
-        except Exception as e:
-            log.error("Regen (button) error: %s", e)
-
-    @discord.ui.button(label="📌 pin", style=discord.ButtonStyle.secondary, custom_id="psychograph:pin")
-    async def pin(self, interaction: discord.Interaction, button: discord.ui.Button):
-        msg = interaction.message
-        content = msg.embeds[0].description if msg.embeds else msg.content
-        if content:
-            db.add_pin(interaction.channel_id, content[:200])
-            await interaction.response.send_message("-# *· pinned ·*", ephemeral=True)
-        else:
-            await interaction.response.send_message("-# *· nothing to pin ·*", ephemeral=True)
-
-
-def _options_embed(channel_id: int) -> discord.Embed:
-    """Build the settings overview embed, tinted with the current persona's colour."""
-    persona = ch_persona(channel_id)
-    verb = ch_verbosity(channel_id)
-    style = get_style(persona, load_persona_style(persona))
-    color = style["color"] if style else 0x2B2D31
-    embed = discord.Embed(title="⚙️ settings", color=color)
-    embed.add_field(name="persona", value=f"`{persona}`", inline=True)
-    embed.add_field(name="verbosity", value=f"**{verb}/5**", inline=True)
-    embed.add_field(name="provider", value=f"`{current_provider}`", inline=True)
-    embed.add_field(name="model", value=f"`{current_model}`", inline=False)
-    embed.set_footer(text=VERBOSITY_LABELS[verb])
-    return embed
-
-
-class PersonaSelect(discord.ui.Select):
-    def __init__(self, channel_id: int):
-        self.channel_id = channel_id
-        names = list_personas()[:25]  # Discord select limit
-        current = ch_persona(channel_id)
-        options = [
-            discord.SelectOption(label=n, value=n, default=(n == current))
-            for n in names
-        ]
-        super().__init__(placeholder="switch persona…", options=options, row=0)
-
-    async def callback(self, interaction: discord.Interaction):
-        name = self.values[0]
-        if load_persona(name) is None:
-            await interaction.response.send_message(f"Persona `{name}` not found.", ephemeral=True)
-            return
-        channel_id = interaction.channel_id
-        if chess_engine.is_any_chess_persona(ch_persona(channel_id)):
-            chess_engine.reset_game(channel_id)
-        db.set_channel_persona(channel_id, name)
-        db.clear_channel(channel_id)
-        if chess_engine.is_any_chess_persona(name):
-            chess_engine.reset_game(channel_id)
-        await interaction.response.edit_message(embed=_options_embed(channel_id), view=OptionsView(channel_id))
-
-
-class OptionsView(discord.ui.View):
-    """Ephemeral settings panel with verbosity selector and persona switcher."""
-
-    def __init__(self, channel_id: int):
-        super().__init__(timeout=120)
-        self.channel_id = channel_id
-        self.add_item(PersonaSelect(channel_id))
-        # Highlight the active verbosity button
-        active = ch_verbosity(channel_id)
-        for child in self.children:
-            if isinstance(child, discord.ui.Button) and child.label.isdigit():
-                child.style = discord.ButtonStyle.success if int(child.label) == active else discord.ButtonStyle.secondary
-
-    def _verb_style(self, level: int) -> discord.ButtonStyle:
-        return discord.ButtonStyle.success if ch_verbosity(self.channel_id) == level else discord.ButtonStyle.secondary
-
-    @discord.ui.button(label="1", style=discord.ButtonStyle.secondary, custom_id="opt:v1", row=1)
-    async def v1(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._set_verbosity(interaction, 1)
-
-    @discord.ui.button(label="2", style=discord.ButtonStyle.secondary, custom_id="opt:v2", row=1)
-    async def v2(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._set_verbosity(interaction, 2)
-
-    @discord.ui.button(label="3", style=discord.ButtonStyle.secondary, custom_id="opt:v3", row=1)
-    async def v3(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._set_verbosity(interaction, 3)
-
-    @discord.ui.button(label="4", style=discord.ButtonStyle.secondary, custom_id="opt:v4", row=1)
-    async def v4(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._set_verbosity(interaction, 4)
-
-    @discord.ui.button(label="5", style=discord.ButtonStyle.secondary, custom_id="opt:v5", row=1)
-    async def v5(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._set_verbosity(interaction, 5)
-
-    async def _set_verbosity(self, interaction: discord.Interaction, level: int):
-        db.set_channel_verbosity(interaction.channel_id, level)
-        await interaction.response.edit_message(embed=_options_embed(interaction.channel_id), view=OptionsView(interaction.channel_id))
-
-    @discord.ui.button(label="♻️ reset context", style=discord.ButtonStyle.danger, custom_id="opt:reset", row=2)
-    async def reset_ctx(self, interaction: discord.Interaction, button: discord.ui.Button):
-        channel_id = interaction.channel_id
-        db.clear_channel(channel_id)
-        if chess_engine.is_any_chess_persona(ch_persona(channel_id)):
-            chess_engine.reset_game(channel_id)
-        await interaction.response.edit_message(embed=_options_embed(channel_id), view=OptionsView(channel_id))
-
 
 def get_system_prompt(persona_name: str, channel_id: int) -> str:
     persona_text = load_persona(persona_name) or f"You are {persona_name}."
     pins = db.get_pins(channel_id)
     pin_section = "\n\n**Pinned notes:**\n" + "\n".join(f"- {p}" for p in pins) if pins else ""
-    return persona_text + pin_section + _build_meta_suffix(ch_verbosity(channel_id))
-
-
-def _build_meta_suffix(verbosity: int) -> str:
     timestamp = datetime.now().strftime("%A, %d %B %Y %H:%M")
-    return (
+    meta = (
         "\n\n---\n"
+        f"**Your name for this session:** {persona_name}\n"
         f"**Current date/time:** {timestamp}\n\n"
         "## Runtime capabilities\n\n"
-        "You have one tool: **web_search** — use it when you need current information "
-        "you cannot answer reliably from training data. Prefer answering directly.\n\n"
-        "**Discord formatting:** URLs render inline — articles auto-preview, "
-        "images display in-chat. Link or embed when it adds something relevant.\n\n"
-        f"## Response length — verbosity {verbosity}/5\n"
-        f"{VERBOSITY_INSTRUCTIONS[verbosity]}"
+        "You have one tool: **web_search** — use it when you need current information.\n\n"
+        f"## Response length — verbosity {ch_verbosity(channel_id)}/5\n"
+        f"{VERBOSITY_INSTRUCTIONS[ch_verbosity(channel_id)]}"
     )
-
-
-_BOARD_TAG = re.compile(r'\[board:\s*([^\]]+)\]', re.IGNORECASE)
-
-_ARTIFACT_PATTERNS = [
-    r"<tool_call>.*?</tool_call>",                          # Qwen, generic
-    r"<tool_response>.*?</tool_response>",                   # Qwen, generic
-    r"<function_calls>.*?</function_calls>",                 # some Claude fine-tunes
-    r"\[TOOL_CALLS\].*?(?=\n\S|\Z)",                         # Mistral
-    r"<\|python_tag\|>.*?(?:<\|eot_id\|>|\Z)",              # Llama 3.1+
-    r"\[TOOL_REQUEST\].*?(?:\[END_TOOL_REQUEST\]|\Z)",       # Gemma-3 / LM Studio
-    r'^\s*\{"name":\s*"(?:web_search|search)".*?\}\s*$',    # bare JSON function leakage
-]
-
-
-def extract_board(text: str) -> tuple[str, bytes | None]:
-    """
-    Strip [board: FEN] tag from text.
-    Returns (text_without_tag, png_bytes) if Pillow is available,
-    or (text_without_tag + ascii_board, None) as a fallback.
-    """
-    m = _BOARD_TAG.search(text)
-    if not m:
-        return text, None
-    fen   = m.group(1).strip()
-    clean = _BOARD_TAG.sub('', text).strip()
-    image = fen_to_image(fen)
-    if image is None:
-        # Pillow unavailable — append ASCII board to the text response
-        board_text = fen_to_board(fen)
-        return (clean + '\n\n' + board_text).strip() if board_text else clean, None
-    return clean, image
-
+    return persona_text + pin_section + meta
 
 def extract_thinking(text: str) -> tuple[str, str]:
-    """Extract <think>…</think> reasoning block.
-    Returns (thinking_text, text_without_think_blocks).
-    Handles both closed blocks and unclosed (model stopped mid-think)."""
     m = re.search(r"<think>(.*?)</think>", text, flags=re.DOTALL)
     if m:
-        thinking = m.group(1).strip()
-        rest = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-        return thinking, rest
+        return m.group(1).strip(), re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
     m = re.search(r"<think>(.*)", text, flags=re.DOTALL)
     if m:
-        thinking = m.group(1).strip()
-        rest = re.sub(r"<think>.*", "", text, flags=re.DOTALL).strip()
-        return thinking, rest
+        return m.group(1).strip(), re.sub(r"<think>.*", "", text, flags=re.DOTALL).strip()
     return "", text
 
-
-_THINKING_SPOILER_LIMIT = 1200   # max chars shown in the expandable spoiler
-
-
-def format_thinking_spoiler(thinking: str, limit: int = _THINKING_SPOILER_LIMIT) -> str | None:
-    """Wrap reasoning text in a Discord spoiler block, or return None if empty."""
-    if not thinking:
-        return None
+def format_thinking_spoiler(thinking: str, limit: int = 1200) -> str | None:
+    if not thinking: return None
     body = thinking[:limit]
     suffix = "\n-# *(truncated)*" if len(thinking) > limit else ""
     return f"-# 💭 *reasoning · click to expand*\n||{body}{suffix}||"
 
+_BOARD_TAG = re.compile(r'\[board:\s*([^\]]+)\]', re.IGNORECASE)
 
-def clean_response(text: str) -> str:
-    for pat in _ARTIFACT_PATTERNS:
-        text = re.sub(pat, "", text, flags=re.DOTALL | re.MULTILINE)
-    return text.strip()
-
-
-def chunk_text(text: str, limit: int = DISCORD_MSG_LIMIT) -> list[str]:
-    if not text:
-        return []
-    if len(text) <= limit:
-        return [text]
-    chunks = []
-    while text:
-        if len(text) <= limit:
-            chunks.append(text)
-            break
-        split = text.rfind("\n", 0, limit) or text.rfind(" ", 0, limit) or limit
-        chunks.append(text[:split])
-        text = text[split:].lstrip()
-    return chunks
-
+def extract_board(text: str) -> tuple[str, bytes | None]:
+    m = _BOARD_TAG.search(text)
+    if not m: return text, None
+    fen = m.group(1).strip()
+    clean = _BOARD_TAG.sub('', text).strip()
+    image = fen_to_image(fen)
+    if image is None:
+        board_text = fen_to_board(fen)
+        return (clean + '\n\n' + board_text).strip() if board_text else clean, None
+    return clean, image
 
 def _db_chain(parent_id: int | None) -> list[dict]:
-    """Walk DB parent links upward, return [{role, content}] in chronological order."""
-    chain, visited = [], set()
+    if not parent_id: return []
     max_msgs = config.get("context", {}).get("max_messages", 40)
-    while parent_id and len(chain) < max_msgs:
-        if parent_id in visited:
-            break
-        visited.add(parent_id)
-        row = db.get_message(parent_id)
-        if not row:
-            break
-        chain.append({"role": row["role"], "content": row["content"]})
-        parent_id = row["parent_msg_id"]
-    chain.reverse()
-    return chain
+    return db.get_message_chain(parent_id, limit=max_msgs)
 
+# ── Core Logic ───────────────────────────────────────────────────────────────
 
-async def build_context(message: discord.Message, bot_id: int) -> list[dict]:
-    """Walk reply chain (DB first, Discord API fallback) → chronological [{role, content}]."""
-    max_msgs = config.get("context", {}).get("max_messages", 40)
-    chain, visited = [], set()
-    parent_id = message.reference.message_id if message.reference else None
-    reset_ts = db.get_channel_reset_ts(message.channel.id)
+async def process_llm_request(channel, messages, persona, parent_msg_id, reply_to=None, temperature=None):
+    provider = bot.current_provider
+    lock = get_llm_lock(provider)
+    
+    # Use contextlib.nullcontext if no lock
+    from contextlib import asynccontextmanager
+    @asynccontextmanager
+    async def maybe_lock(l):
+        if l: async with l: yield
+        else: yield
 
-    while parent_id and len(chain) < max_msgs:
-        if parent_id in visited:
-            break
-        visited.add(parent_id)
-        row = db.get_message(parent_id)
-        if row:
-            chain.append({"role": row["role"], "content": row["content"]})
-            parent_id = row["parent_msg_id"]
-        else:
-            try:
-                d_msg = await message.channel.fetch_message(parent_id)
-                # Stop at any message that predates the last @bot reset — this prevents
-                # cleared context from leaking back in via the Discord API fallback.
-                if reset_ts and d_msg.created_at.timestamp() < reset_ts:
-                    break
-                role = "assistant" if d_msg.author.id == bot_id else "user"
-                text = re.sub(rf"<@!?{bot_id}>", "", d_msg.content).strip() if role == "user" else d_msg.content
-                chain.append({"role": role, "content": text})
-                parent_id = d_msg.reference.message_id if d_msg.reference else None
-            except (discord.NotFound, discord.HTTPException):
-                break
+    async with maybe_lock(lock):
+        is_sim_city = channel.name == "sim-city" if hasattr(channel, 'name') else False
+        webhook = None
+        if is_sim_city:
+            webhook = await bot.get_or_create_webhook(channel)
 
-    chain.reverse()
-    return chain
+        placeholder = None
+        if not webhook:
+            placeholder = await (reply_to.reply if reply_to else channel.send)(_THINKING_SIGNAL)
 
+        full_text, last_edit = "", 0.0
 
-async def stream_to_discord(gen, reply_target: discord.Message) -> tuple[str, discord.Message]:
-    placeholder = await reply_target.reply(random.choice(_THINKING_LINES))
-    full_text, last_edit = "", 0.0
-    try:
-        async for chunk in gen:
-            full_text += chunk
-            now = asyncio.get_event_loop().time()
-            if now - last_edit >= STREAM_EDIT_INTERVAL:
-                # Strip <think> blocks from the live view — the placeholder stays as
-                # "thinking…" while the model reasons, then streams the actual response.
-                display = re.sub(r"<think>.*?</think>", "", full_text, flags=re.DOTALL)
-                display = re.sub(r"<think>.*", "", display, flags=re.DOTALL).strip()
-                if display:
-                    try:
-                        await placeholder.edit(content=display[:DISCORD_MSG_LIMIT])
-                        last_edit = now
-                    except discord.HTTPException:
-                        pass
-    except Exception:
+        start_time = time.time()
+        usage_meta = None
+        timed_out = False
+
         try:
-            await placeholder.delete()
-        except discord.HTTPException:
-            pass
-        raise
-    return full_text, placeholder
+            # Cap at 1000 tokens to prevent rambling
+            gen = llm.complete(messages, bot.current_provider, bot.current_model, config, 
+                              temperature=temperature, max_tokens=1000)
+            async for chunk, meta in gen:
+                if chunk:
+                    full_text += chunk
+                    now = time.time()
+                    
+                    # 2-minute wall-clock timeout
+                    if now - start_time > 120:
+                        timed_out = True
+                        break
 
+                    if placeholder and now - last_edit >= 1.0:
+                        display = re.sub(r"<think>.*?</think>", "", full_text, flags=re.DOTALL)
+                        display = re.sub(r"<think>.*", "", display, flags=re.DOTALL).strip()
+                        if display:
+                            try: await placeholder.edit(content=display[:1990])
+                            except: pass
+                            last_edit = now
+                if meta:
+                    usage_meta = meta
+        except Exception as e:
+            log.error("LLM Error: %s", e)
+            if placeholder:
+                await placeholder.edit(content=f"⚠️ Error: {e}")
+            else:
+                await channel.send(f"⚠️ Error: {e}")
+            return
 
-intents = discord.Intents.default()
-intents.message_content = True
-bot = discord.Client(intents=intents)
+        thinking, raw_rest = extract_thinking(full_text)
+        cleaned, board_image = extract_board(raw_rest)
+        
+        if timed_out:
+            cleaned += "\n\n-# *[generation timed out]*"
+        elif usage_meta and usage_meta.get("completion_tokens", 0) >= 1000:
+            cleaned += "\n\n-# *[token limit reached]*"
+        
+        msg_id_for_db = placeholder.id if placeholder else int(time.time() * 1000) # Fallback for webhook
+        db.save_message(msg_id_for_db, parent_msg_id, channel.id, "assistant", cleaned)
+        if usage_meta:
+            db.log_usage(msg_id_for_db, bot.current_model, bot.current_provider, 
+                         usage_meta["prompt_tokens"], usage_meta["completion_tokens"], usage_meta["duration"])
 
+        style = get_style(persona, load_persona_style(persona))
+        thinking_display = format_thinking_spoiler(thinking)
+        
+        footer_extra = ""
+        if usage_meta:
+            tps = usage_meta["completion_tokens"] / usage_meta["duration"] if usage_meta["duration"] > 0 else 0
+            model_name = usage_meta["model"].split("/")[-1] # Show just the model name, not the full path
+            footer_extra = f" | {model_name} | {usage_meta['completion_tokens']} tok | {tps:.1f} t/s"
 
-async def do_restart() -> None:
+        if webhook:
+            meta = get_persona_metadata(persona)
+            display_name = meta.get("display_name", persona)
+            avatar_url = meta.get("avatar_url")
+            
+            content = (thinking_display + "\n\n" + cleaned) if thinking_display else cleaned
+            if footer_extra:
+                content += f"\n\n-# *{footer_extra.strip(' |')}*"
+
+            sent_msg = await webhook.send(
+                content=content[:1990],
+                username=display_name,
+                avatar_url=avatar_url,
+                wait=True
+            )
+            # Update DB with real ID
+            db.save_message(sent_msg.id, parent_msg_id, channel.id, "assistant", cleaned)
+        elif style:
+            embed = make_embed(cleaned[:EMBED_DESC_LIMIT], style)
+            if footer_extra:
+                embed.set_footer(text=(style.get("footer", "") + footer_extra).strip())
+            await placeholder.edit(content=thinking_display, embed=embed, view=ResponseView(bot_callback=bot.handle_view_interaction))
+        else:
+            content = (thinking_display + "\n\n" + cleaned) if thinking_display else cleaned
+            if footer_extra:
+                content += f"\n\n-# *{footer_extra.strip(' |')}*"
+            await placeholder.edit(content=content[:1990], view=ResponseView(bot_callback=bot.handle_view_interaction))
+
+        if board_image:
+            await channel.send(file=discord.File(io.BytesIO(board_image), filename="board.png"))
+
+async def handle_summarize(channel_id: int) -> str:
+    provider = bot.current_provider
+    lock = get_llm_lock(provider)
+    async def _run():
+        with db._conn:
+            rows = db._conn.execute("SELECT role, content FROM messages WHERE channel_id = ? ORDER BY discord_msg_id DESC LIMIT 20", (channel_id,)).fetchall()
+        text = "\n".join(f"{r['role']}: {r['content']}" for r in reversed(rows))
+        return await llm.summarize(text, provider, bot.current_model, config)
+
+    if lock:
+        async with lock: return await _run()
+    return await _run()
+
+# ── Slash Commands ───────────────────────────────────────────────────────────
+
+@bot.tree.command(name="help", description="Show the bot's command guide")
+async def help_cmd(interaction: discord.Interaction):
+    try:
+        with open("CHEATSHEET.md", "r", encoding="utf-8") as f:
+            content = f.read()
+        embed = discord.Embed(title="📖 bot guide", description=content, color=0x2B2D31)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"Could not load guide: {e}", ephemeral=True)
+
+@bot.tree.command(name="options", description="Open settings for this channel")
+async def options(interaction: discord.Interaction):
+    view = await _get_options_view(interaction.channel_id, interaction.client)
+    await interaction.response.send_message(embed=_options_embed(interaction.channel_id, interaction.client), view=view, ephemeral=True)
+
+@bot.tree.command(name="persona", description="Switch the active persona")
+@app_commands.describe(name="The name of the persona")
+async def persona(interaction: discord.Interaction, name: str):
+    if load_persona(name) is None:
+        await interaction.response.send_message(f"Persona `{name}` not found.", ephemeral=True)
+        return
+    db.set_channel_persona(interaction.channel_id, name)
+    db.clear_channel(interaction.channel_id)
+    await interaction.response.send_message(f"· now speaking as: **{name}** ·", ephemeral=True)
+
+@persona.autocomplete("name")
+async def persona_autocomplete(interaction: discord.Interaction, current: str):
+    return [app_commands.Choice(name=p, value=p) for p in list_personas() if current.lower() in p.lower()][:25]
+
+@bot.tree.command(name="reset", description="Clear conversation history")
+async def reset(interaction: discord.Interaction):
+    db.clear_channel(interaction.channel_id)
+    await interaction.response.send_message("·˚ slate wiped ˚·", ephemeral=True)
+
+@bot.tree.command(name="context", description="Show the current context being sent to the LLM")
+async def show_context(interaction: discord.Interaction):
+    with db._conn:
+        rows = db._conn.execute("SELECT role, content FROM messages WHERE channel_id = ? ORDER BY discord_msg_id DESC LIMIT 10", (interaction.channel_id,)).fetchall()
+    if not rows:
+        await interaction.response.send_message("Context is empty.", ephemeral=True)
+        return
+    body = "\n".join(f"**{r['role']}**: {r['content'][:100]}..." for r in reversed(rows))
+    await interaction.response.send_message(f"**Recent Context:**\n{body}", ephemeral=True)
+
+@bot.tree.command(name="personas", description="List all available personas")
+async def personas_cmd(interaction: discord.Interaction):
+    names = list_personas()
+    active = db.get_channel_persona(interaction.channel_id) or config.get("persona", "mochi")
+    lines = [f"→ **{n}** *(active)*" if n == active else f"  {n}" for n in names]
+    await interaction.response.send_message("· ★ · **personas** · ★ ·\n```\n" + "\n".join(lines) + "\n```", ephemeral=True)
+
+@bot.tree.command(name="prompt", description="Show the current persona's system prompt")
+async def prompt_cmd(interaction: discord.Interaction):
+    active = db.get_channel_persona(interaction.channel_id) or config.get("persona", "mochi")
+    text = load_persona(active) or f"(no persona file for {active})"
+    await interaction.response.send_message(f"**Active persona:** `{active}`\n\n{text}"[:2000], ephemeral=True)
+
+@bot.tree.command(name="verbosity", description="Set the response length (1-5)")
+async def verbosity_cmd(interaction: discord.Interaction, level: int):
+    if 1 <= level <= 5:
+        db.set_channel_verbosity(interaction.channel_id, level)
+        await interaction.response.send_message(f"· verbosity **{level}/5** · {VERBOSITY_LABELS.get(level)}", ephemeral=True)
+    else:
+        await interaction.response.send_message("· level must be between 1 and 5 ·", ephemeral=True)
+
+@bot.tree.command(name="temperature", description="Set model temperature (0.0 - 2.0)")
+async def temperature_cmd(interaction: discord.Interaction, value: float):
+    if 0.0 <= value <= 2.0:
+        db.set_channel_temperature(interaction.channel_id, value)
+        await interaction.response.send_message(f"· temperature set to **{value}** ·", ephemeral=True)
+    else:
+        await interaction.response.send_message("· temperature must be between 0.0 and 2.0 ·", ephemeral=True)
+
+@bot.tree.command(name="level", description="Set Stockfish difficulty level (1-8)")
+async def level_cmd(interaction: discord.Interaction, level: int | None = None):
+    if level is None:
+        depth, elo = chess_engine.CHESS_LEVEL_MAP[bot.chess_level]
+        await interaction.response.send_message(f"· stockfish · **level {bot.chess_level}/8** · {elo} Elo · depth {depth} ·", ephemeral=True)
+        return
+    if 1 <= level <= 8:
+        bot.chess_level = level
+        depth, elo = chess_engine.CHESS_LEVEL_MAP[level]
+        await interaction.response.send_message(f"· difficulty dialled to **level {level}/8** · {elo} Elo · depth {depth} ·", ephemeral=True)
+    else:
+        await interaction.response.send_message("· level must be between 1 and 8 ·", ephemeral=True)
+
+@bot.command(name="provider")
+@commands.is_owner()
+async def provider_prefix(ctx: commands.Context, name: str):
+    """Legacy prefix command for switching providers."""
+    name = name.lower()
+    if name not in config.get("providers", {}):
+        await ctx.send(f"Unknown provider `{name}`.")
+        return
+    bot.current_provider = name
+    config["default_provider"] = name
+    if name == "local":
+        models = await llm.get_local_models(config)
+        bot.current_model = models[0] if models else "local-model"
+    else:
+        models = config["providers"][name].get("models", [])
+        bot.current_model = models[0] if models else "unknown"
+    config["default_model"] = bot.current_model
+    save_config(config)
+    await ctx.send(f"Switched to **{name}** provider, model **{bot.current_model}**.")
+
+@bot.tree.command(name="provider", description="Switch LLM provider")
+async def provider_cmd(interaction: discord.Interaction, name: str):
+    name = name.lower()
+    if name not in config.get("providers", {}):
+        await interaction.response.send_message(f"Unknown provider `{name}`.", ephemeral=True)
+        return
+    interaction.client.current_provider = name
+    config["default_provider"] = name
+    if name == "local":
+        models = await llm.get_local_models(config)
+        interaction.client.current_model = models[0] if models else "local-model"
+    else:
+        models = config["providers"][name].get("models", [])
+        interaction.client.current_model = models[0] if models else "unknown"
+    config["default_model"] = interaction.client.current_model
+    save_config(config)
+    await interaction.response.send_message(f"Switched to **{name}** provider, model **{interaction.client.current_model}**.", ephemeral=True)
+
+@provider_cmd.autocomplete("name")
+async def provider_autocomplete(interaction: discord.Interaction, current: str):
+    providers = list(config.get("providers", {}).keys())
+    return [app_commands.Choice(name=p, value=p) for p in providers if current.lower() in p.lower()]
+
+@bot.tree.command(name="restart", description="Reboot the bot process")
+@commands.is_owner()
+async def restart_cmd(interaction: discord.Interaction):
+    await interaction.response.send_message("·˚ rebooting · back in a moment ˚·", ephemeral=True)
     await asyncio.sleep(0.5)
-    if _INSTANCE_LOCK:
-        _INSTANCE_LOCK.close()
+    if _INSTANCE_LOCK: _INSTANCE_LOCK.close()
     subprocess.Popen([sys.executable] + sys.argv)
     await bot.close()
 
+@bot.tree.command(name="model", description="Switch the current model")
+@app_commands.describe(name="The model ID")
+async def model_cmd(interaction: discord.Interaction, name: str):
+    interaction.client.current_model = name
+    config["default_model"] = name
+    save_config(config)
+    await interaction.response.send_message(f"Model switched to **{name}**.", ephemeral=True)
 
-@bot.event
-async def on_ready():
-    db.init_db()
-    bot.add_view(ResponseView())  # re-register persistent view after restart
-    log.info("Logged in as %s (ID: %s)", bot.user, bot.user.id)
-    if current_provider == "openrouter" and not os.getenv("OPENROUTER_API_KEY"):
-        log.error("OPENROUTER_API_KEY is not set in .env — OpenRouter requests will fail with 401")
-    log.info("Provider: %s  Model: %s  Default persona: %s", current_provider, current_model, config.get("persona", "mochi"))
-    log.info("Ready — mention the bot to chat.")
+@model_cmd.autocomplete("name")
+async def model_autocomplete(interaction: discord.Interaction, current: str):
+    current = current.lower()
+    provider = interaction.client.current_provider
+    if provider == "local":
+        models = await llm.get_local_models(config)
+    elif provider == "openrouter":
+        models = await llm.get_openrouter_models(config)
+    else:
+        models = config["providers"].get(provider, {}).get("models", [])
+    choices = [app_commands.Choice(name=m, value=m) for m in models if current in m.lower()][:25]
+    return choices
 
+# ── Events ───────────────────────────────────────────────────────────────────
 
-async def handle_command(message: discord.Message, cmd: str, *, _out: list[str] | None = None) -> bool:
-    global current_provider, current_model, chess_level
-
-    cmd_lower = cmd.lower().strip()
-
-    async def emit(text: str) -> None:
-        """Buffer text when chaining commands, otherwise send immediately."""
-        if _out is not None:
-            _out.append(text)
-        else:
-            await message.reply(text)
-
-    if cmd_lower == "resign":
-        if not chess_engine.is_any_chess_persona(ch_persona(message.channel.id)):
-            await emit("· no game in progress · no king to topple ·")
-            return True
-        fen = chess_engine.current_fen(message.channel.id)
-        chess_engine.reset_game(message.channel.id)
-        text, board_image = extract_board(f"{random.choice(_RESIGN_MSGS)}\n\n[board: {fen}]")
-        await emit(text)
-        if board_image:
-            await message.channel.send(file=discord.File(io.BytesIO(board_image), filename="board.png"))
-        return True
-
-    if cmd_lower == "reset":
-        db.clear_channel(message.channel.id)
-        if chess_engine.is_any_chess_persona(ch_persona(message.channel.id)):
-            chess_engine.reset_game(message.channel.id)
-        await emit("·˚ slate wiped · starting fresh ˚·")
-        return True
-
-    if cmd_lower == "personas":
-        names = list_personas()
-        lines = [f"→ {n} *(active)*" if n == ch_persona(message.channel.id) else f"  {n}" for n in names]
-        await emit("· ★ · personas · ★ ·\n```\n" + "\n".join(lines) + "\n```")
-        return True
-
-    if cmd_lower.startswith("persona "):
-        name = cmd[8:].strip().lower().replace(" ", "_")
-        if load_persona(name) is None:
-            await emit(f"Persona `{name}` not found. Available: {', '.join(list_personas())}")
-            return True
-        if chess_engine.is_any_chess_persona(ch_persona(message.channel.id)):
-            chess_engine.reset_game(message.channel.id)
-        db.set_channel_persona(message.channel.id, name)
-        db.clear_channel(message.channel.id)
-        if chess_engine.is_any_chess_persona(name):
-            chess_engine.reset_game(message.channel.id)
-        await emit(f"· now speaking as: **{name}** · previous context dissolved ·")
-        return True
-
-    if cmd_lower == "prompt":
-        active = ch_persona(message.channel.id)
-        text = load_persona(active) or f"(no persona file for {active})"
-        for chunk in chunk_text(f"**Active persona:** `{active}`\n\n" + text):
-            await emit(chunk)
-        return True
-
-    if cmd_lower.startswith("verbosity "):
-        val = cmd[10:].strip()
-        if val.isdigit() and 1 <= int(val) <= 5:
-            level = int(val)
-            db.set_channel_verbosity(message.channel.id, level)
-            await emit(f"· verbosity **{level}/5** · {VERBOSITY_LABELS[level]}")
-        else:
-            await emit("· usage: `verbosity <1-5>` ·")
-        return True
-
-    if cmd_lower == "level":
-        depth, elo = CHESS_LEVEL_MAP[chess_level]
-        await emit(f"· stockfish · **level {chess_level}/8** · {elo} Elo · depth {depth} ·")
-        return True
-
-    if cmd_lower.startswith("level "):
-        val = cmd[6:].strip()
-        if val.isdigit() and 1 <= int(val) <= 8:
-            chess_level = int(val)
-            depth, elo = CHESS_LEVEL_MAP[chess_level]
-            await emit(f"· difficulty dialled to **level {chess_level}/8** · {elo} Elo · depth {depth} ·")
-        else:
-            await emit(
-                "· ♟ · level <1-8> · ♟ ·\n```\n"
-                + "\n".join(f"  {l}  depth {d:>2}  {e}" for l, (d, e) in CHESS_LEVEL_MAP.items())
-                + "\n```"
-            )
-        return True
-
-    if cmd_lower == "model":
-        if current_provider == "local":
-            models = await llm.get_local_models(config)
-            body = "\n".join(f"→ **{m}** *(active)*" if m == current_model else f"  {m}" for m in models) if models else "Could not reach LM Studio or no models loaded."
-            await emit(f"**Local models:**\n```\n{body}\n```" if models else body)
-        else:
-            models = config["providers"].get(current_provider, {}).get("models", [])
-            lines = [f"→ **{m}** *(active)*" if m == current_model else f"  {m}" for m in models]
-            await emit(f"**{current_provider} models:**\n```\n" + "\n".join(lines) + "\n```")
-        return True
-
-    if cmd_lower == "model random":
-        if current_provider != "openrouter":
-            await emit("Random model selection is only available for the OpenRouter provider.")
-            return True
-        models = await llm.get_openrouter_models(config, paid_only=True)
-        if not models:
-            await emit("Could not fetch models from OpenRouter (check your API key or network).")
-            return True
-        current_model = random.choice(models)
-        config["default_model"] = current_model
-        save_config(config)
-        await emit(f"🎲 Random model: **{current_model}**")
-        return True
-
-    if cmd_lower in ("model free random", "model random free"):
-        if current_provider != "openrouter":
-            await emit("Random free model selection is only available for the OpenRouter provider.")
-            return True
-        models = await llm.get_openrouter_models(config, free_only=True)
-        if not models:
-            await emit("Could not fetch free models from OpenRouter (check your API key or network).")
-            return True
-        current_model = random.choice(models)
-        config["default_model"] = current_model
-        save_config(config)
-        await emit(f"🎲 Random free model: **{current_model}**")
-        return True
-
-    if cmd_lower == "model free":
-        if current_provider != "openrouter":
-            await emit("Free model listing is only available for the OpenRouter provider.")
-            return True
-        models = await llm.get_openrouter_models(config, free_only=True)
-        if not models:
-            await emit("Could not fetch free models from OpenRouter (check your API key or network).")
-            return True
-        lines = [f"→ **{m}** *(active)*" if m == current_model else f"  {m}" for m in models]
-        body = "\n".join(lines)
-        for chunk in chunk_text(f"**OpenRouter free models:**\n```\n{body}\n```"):
-            await emit(chunk)
-        return True
-
-    if cmd_lower.startswith("model "):
-        current_model = cmd[6:].strip()
-        config["default_model"] = current_model
-        save_config(config)
-        await emit(f"Model switched to **{current_model}**.")
-        return True
-
-    if cmd_lower.startswith("provider "):
-        name = cmd[9:].strip().lower()
-        if name not in config.get("providers", {}):
-            await emit(f"Unknown provider `{name}`. Available: {', '.join(config.get('providers', {}).keys())}")
-            return True
-        current_provider = name
-        config["default_provider"] = name
-        if name == "local":
-            models = await llm.get_local_models(config)
-            current_model = models[0] if models else "local-model"
-        else:
-            models = config["providers"][name].get("models", [])
-            current_model = models[0] if models else "unknown"
-        config["default_model"] = current_model
-        save_config(config)
-        await emit(f"Switched to **{name}** provider, model **{current_model}**.")
-        return True
-
-    if cmd_lower == "restart":
-        await emit("·˚ rebooting · back in a moment ˚·")
-        asyncio.create_task(do_restart())
-        return True
-
-    if cmd_lower == "options":
-        # options always sends directly (has a View, can't be buffered)
-        await message.reply(embed=_options_embed(message.channel.id), view=OptionsView(message.channel.id))
-        return True
-
-    return False
-
+@bot.tree.command(name="resign", description="Resign the current chess game")
+async def resign(interaction: discord.Interaction):
+    persona = db.get_channel_persona(interaction.channel_id) or config.get("persona", "mochi")
+    if not chess_engine.is_any_chess_persona(persona):
+        await interaction.response.send_message("· no game in progress · no king to topple ·", ephemeral=True)
+        return
+    fen = chess_engine.current_fen(interaction.channel_id)
+    chess_engine.reset_game(interaction.channel_id)
+    text, board_image = extract_board(f"{random.choice(_RESIGN_MSGS)}\n\n[board: {fen}]")
+    await interaction.response.send_message(text)
+    if board_image:
+        await interaction.followup.send(file=discord.File(io.BytesIO(board_image), filename="board.png"))
 
 @bot.event
 async def on_message(message: discord.Message):
-    if message.author.bot:
-        return
-    if not (isinstance(message.channel, discord.DMChannel) or bot.user in message.mentions):
-        return
+    await bot.process_commands(message)
+    if message.author.bot and not message.webhook_id: return
+    
+    is_sim_city = message.channel.name == "sim-city" if hasattr(message.channel, 'name') else False
+    if message.webhook_id and not is_sim_city: return
 
-    prompt = re.sub(rf"<@!?{bot.user.id}>", "", message.content).strip()
+    is_mentioned = bot.user in message.mentions
+    is_dm = isinstance(message.channel, discord.DMChannel)
+    
+    target_persona = None
+    prompt = message.content
 
-    if not prompt and not message.attachments:
-        await message.reply("You mentioned me but didn't say anything!")
-        return
-
-    parts = [p.strip() for p in prompt.split(";") if p.strip()]
-    if len(parts) > 1:
-        out: list[str] = []
-        if await handle_command(message, parts[0], _out=out):
-            for part in parts[1:]:
-                if not await handle_command(message, part, _out=out):
-                    out.append(f"*(unknown command: `{part}`)*")
-            if out:
-                await message.reply("\n\n".join(out))
+    if is_sim_city:
+        # Check for [PersonaName] pattern
+        m = re.search(r"^\[(.*?)]", prompt)
+        if m:
+            potential_persona = m.group(1).strip()
+            persona_list = list_personas()
+            if potential_persona.lower() in [p.lower() for p in persona_list]:
+                target_persona = next(p for p in persona_list if p.lower() == potential_persona.lower())
+                prompt = prompt[m.end():].strip()
+        
+        # If no explicit tag, check if it's a reply to one of our previous messages
+        if not target_persona and message.reference:
+            ref = db.get_message(message.reference.message_id)
+            if ref and ref['role'] == 'assistant':
+                target_persona = ch_persona(message.channel.id)
+                
+        if not target_persona and (is_mentioned or is_dm):
+            target_persona = ch_persona(message.channel.id)
+    else:
+        if message.author.bot: return
+        if not (is_dm or is_mentioned):
             return
+        target_persona = ch_persona(message.channel.id)
 
-    if prompt and await handle_command(message, prompt):
+    if not target_persona:
+        # print(f"DEBUG: No target persona for message in {message.channel.name if hasattr(message.channel, 'name') else 'DM'}")
         return
 
-    persona = ch_persona(message.channel.id)
+    prompt = re.sub(rf"<@!?{bot.user.id}>", "", prompt).strip()
+    if not prompt and not message.attachments: 
+        if is_mentioned:
+            await message.reply("You mentioned me but didn't say anything!")
+        return
+
+    persona = target_persona
     is_chess = chess_engine.is_chess_persona(persona)
     is_chess_classic = chess_engine.is_chess_classic_persona(persona)
-
-    # ── Chess: validate user move before calling the LLM ─────────
-    if is_chess and prompt:
-        ok, san_or_err, fen = chess_engine.apply_user_move(message.channel.id, prompt)
+    
+    if (is_chess or is_chess_classic) and prompt:
+        ok, san_or_err, _ = chess_engine.apply_user_move(message.channel.id, prompt)
         if not ok:
             await message.reply(san_or_err)
             return
 
-    # ── Chess-classic: Stockfish via chess-api.com, no LLM ───────
     if is_chess_classic:
-        channel_id = message.channel.id
-        parent_id = message.reference.message_id if message.reference else None
-
-        async def _reply_classic(text: str) -> None:
-            """Send a chess-classic reply, save both sides to DB."""
-            db.save_message(message.id, parent_id, channel_id, "user", prompt)
-            clean, board_image = extract_board(text)
-            try:
-                reply_msg = await message.reply(clean)
-            except discord.HTTPException as e:
-                log.error("chess-classic send failed: %s", e)
+        async with message.channel.typing():
+            depth = 12
+            result = await chess_api.get_stockfish_move(chess_engine.current_fen(message.channel.id), depth=depth)
+            if not result:
+                await message.reply("· the oracle is silent · API unreachable ·")
                 return
-            db.save_message(reply_msg.id, message.id, channel_id, "assistant", clean)
+            chess_engine.apply_bot_move(message.channel.id, result["move"])
+            status = chess_engine.game_status(message.channel.id)
+            reply_text = f"**{result['san']}**"
+            if status: reply_text += f"\n\n{_chess_result_text(status)}"
+            reply_text += f"\n\n[board: {chess_engine.current_fen(message.channel.id)}]"
+            clean, board_image = extract_board(reply_text)
+            await message.reply(clean)
             if board_image:
-                try:
-                    await message.channel.send(
-                        file=discord.File(io.BytesIO(board_image), filename="board.png")
-                    )
-                except discord.HTTPException as e:
-                    log.error("chess-classic board image send failed: %s", e)
-
-        # 0. Game already over from a previous move?
-        status = chess_engine.game_status(channel_id)
-        if status:
-            await _reply_classic(
-                f"{_chess_result_text(status)}\n\n[board: {chess_engine.current_fen(channel_id)}]"
-            )
-            return
-
-        # 1. No move text → show current board
-        if not prompt:
-            await _reply_classic(
-                f"· ♟ · awaiting your move · SAN or UCI · ♟ ·\n\n"
-                f"[board: {chess_engine.current_fen(channel_id)}]"
-            )
-            return
-
-        # 2. Apply the user's move (validates + persists)
-        ok, san_or_err, _ = chess_engine.apply_user_move(channel_id, prompt)
-        if not ok:
-            await message.reply(san_or_err)
-            return
-
-        # 3. Game over after user's move?
-        status = chess_engine.game_status(channel_id)
-        if status:
-            await _reply_classic(
-                f"{_chess_result_text(status)}\n\n[board: {chess_engine.current_fen(channel_id)}]"
-            )
-            return
-
-        # 4. Ask Stockfish for the bot's reply
-        depth, _ = CHESS_LEVEL_MAP[chess_level]
-        result = await chess_api.get_stockfish_move(chess_engine.current_fen(channel_id), depth=depth)
-        if result is None:
-            await message.reply("·˚ the oracle is silent · chess-api.com unreachable · try again ˚·")
-            return
-
-        # 5. Apply the bot's move (validates + persists)
-        ok, san_or_err, _ = chess_engine.apply_bot_move(channel_id, result["move"])
-        if not ok:
-            log.error("Stockfish returned illegal move: %s", result.get("move"))
-            await message.reply(
-                f"Engine error — Stockfish returned an illegal move (`{result.get('move')}`). "
-                "Use `@bot reset` to start over."
-            )
-            return
-
-        # 6. Bot SAN + optional game-over line + board image
-        status = chess_engine.game_status(channel_id)
-        reply_text = f"**{result['san']}**"
-        if status:
-            reply_text += f"\n\n{_chess_result_text(status)}"
-        reply_text += f"\n\n[board: {chess_engine.current_fen(channel_id)}]"
-
-        await _reply_classic(reply_text)
+                await message.channel.send(file=discord.File(io.BytesIO(board_image), filename="board.png"))
         return
 
     system = get_system_prompt(persona, message.channel.id)
-
-    # Inject authoritative board state for chess persona
     if is_chess:
         fen_now = chess_engine.current_fen(message.channel.id)
         status = chess_engine.game_status(message.channel.id)
-        chess_ctx = (
-            f"\n\n## Board state (authoritative — maintained by the engine)\n"
-            f"FEN: `{fen_now}`\n"
-            f"Move: {chess_engine.move_number(message.channel.id)}, "
-            f"{chess_engine.side_to_move(message.channel.id)} to move\n"
+        system += (
+            f"\n\n## Chess Board State\nFEN: `{fen_now}`\n"
             f"Legal moves: {chess_engine.legal_moves_str(message.channel.id)}"
         )
-        if status:
-            chess_ctx += f"\n**Game over: {status}**"
-        system += chess_ctx
-
-    context = await build_context(message, bot.user.id)
-
+        if status: system += f"\n**Game over: {status}**"
+    
+    parent_id = message.reference.message_id if message.reference else None
+    chain = _db_chain(parent_id)
+    db.save_message(message.id, parent_id, message.channel.id, "user", prompt)
     image_blocks = await llm.format_image_blocks(message.attachments)
     user_content = ([{"type": "text", "text": prompt or " "}] + image_blocks) if image_blocks else (prompt or " ")
-
-    messages_payload = [{"role": "system", "content": system}] + context + [{"role": "user", "content": user_content}]
-
-    parent_id = message.reference.message_id if message.reference else None
-    db.save_message(message.id, parent_id, message.channel.id, "user", prompt)
-
-    async with message.channel.typing():
-        try:
-            gen = llm.complete(messages=messages_payload, provider=current_provider, model=current_model, cfg=config)
-            raw, reply_msg = await stream_to_discord(gen, message)
-        except Exception as e:
-            log.error("LLM error: %s", e)
-            await message.reply(f"Error: {e}")
-            db.delete_message(message.id)
-            return
-
-    thinking, raw_rest = extract_thinking(raw)
-    cleaned = clean_response(raw_rest)
-
-    # ── Chess: validate LLM move, retry if illegal ───────────────
-    if is_chess and not chess_engine.game_status(message.channel.id):
-        bot_move_token = chess_engine.extract_bot_move(cleaned)
-        retries = 0
-        while retries < MAX_CHESS_RETRIES:
-            if bot_move_token:
-                ok, san_or_err, fen = chess_engine.apply_bot_move(message.channel.id, bot_move_token)
-                if ok:
-                    # Replace any [board: ...] tag with the authoritative FEN
-                    cleaned = _BOARD_TAG.sub("", cleaned).strip()
-                    cleaned += f"\n\n[board: {fen}]"
-                    break
-            # Illegal or unparseable — retry with feedback
-            retries += 1
-            log.warning("Chess retry %d/%d — illegal move '%s'", retries, MAX_CHESS_RETRIES, bot_move_token)
-            legal = chess_engine.legal_moves_str(message.channel.id)
-            retry_msg = (
-                f"Your move '{bot_move_token}' is illegal. "
-                f"The current FEN is: {chess_engine.current_fen(message.channel.id)}\n"
-                f"Legal moves: {legal}\n"
-                f"Pick one legal move and respond with ONLY that move in SAN."
-            )
-            retry_payload = messages_payload + [
-                {"role": "assistant", "content": cleaned},
-                {"role": "user", "content": retry_msg},
-            ]
-            try:
-                retry_gen = llm.complete(messages=retry_payload, provider=current_provider, model=current_model, cfg=config)
-                retry_raw = ""
-                async for chunk in retry_gen:
-                    retry_raw += chunk
-                _, retry_rest = extract_thinking(retry_raw)
-                cleaned = clean_response(retry_rest)
-                bot_move_token = chess_engine.extract_bot_move(cleaned)
-            except Exception as e:
-                log.error("Chess retry LLM error: %s", e)
-                break
-        else:
-            # All retries exhausted
-            cleaned = f"*(Failed to produce a legal move after {MAX_CHESS_RETRIES} attempts. Use 🔄 to regenerate.)*"
-
-    cleaned, board_image = extract_board(cleaned)
-    if not cleaned and not board_image:
-        await reply_msg.edit(content="*(no response)*")
-        db.delete_message(message.id)
-        return
-
-    db.save_message(reply_msg.id, message.id, message.channel.id, "assistant", cleaned)
-    style = get_style(persona, load_persona_style(persona))
-    is_chess_persona = chess_engine.is_any_chess_persona(persona)
-    response_view = ResponseView() if not is_chess_persona else None
-    thinking_display = format_thinking_spoiler(thinking)
-    if style:
-        # Embed responses: thinking goes in `content` (above the embed), response in description.
-        chunks = chunk_text(cleaned, limit=EMBED_DESC_LIMIT)
-        await reply_msg.edit(content=thinking_display, embed=make_embed(chunks[0], style) if chunks else None, view=response_view)
-        for extra in chunks[1:]:
-            await message.channel.send(embed=make_embed(extra, style))
+    messages_payload = [{"role": "system", "content": system}] + chain + [{"role": "user", "content": user_content}]
+    temp = db.get_channel_temperature(message.channel.id)
+    
+    if is_sim_city:
+        await process_llm_request(message.channel, messages_payload, persona, message.id, reply_to=message, temperature=temp)
     else:
-        # Plain text: prepend a shorter spoiler so both fit within the message limit.
-        short_display = format_thinking_spoiler(thinking, limit=800)
-        full_content = (short_display + "\n\n" + cleaned) if short_display and cleaned else (short_display or cleaned or "-# *…*")
-        chunks = chunk_text(full_content)
-        await reply_msg.edit(content=chunks[0] if chunks else "-# *…*", view=response_view)
-        for extra in chunks[1:]:
-            await message.channel.send(extra)
-    if board_image:
-        await message.channel.send(file=discord.File(io.BytesIO(board_image), filename="board.png"))
-
+        async with message.channel.typing():
+            await process_llm_request(message.channel, messages_payload, persona, message.id, reply_to=message, temperature=temp)
 
 @bot.event
-async def on_reaction_add(reaction: discord.Reaction, user: discord.User):
-    if user.bot or reaction.message.author != bot.user:
-        return
-
-    channel_id = reaction.message.channel.id
-
-    if str(reaction.emoji) == "🔄":
-        bot_row = db.get_message(reaction.message.id)
-        if not bot_row:
-            return
-        user_row = db.get_message(bot_row["parent_msg_id"]) if bot_row["parent_msg_id"] else None
-        if not user_row:
-            return
-
-        db.delete_message(reaction.message.id)
-        persona = ch_persona(channel_id)
-        chain = _db_chain(user_row["parent_msg_id"])
-        system = get_system_prompt(persona, channel_id)
-        messages_payload = [{"role": "system", "content": system}] + chain + [{"role": "user", "content": user_row["content"]}]
-
-        try:
-            async with reaction.message.channel.typing():
-                gen = llm.complete(messages=messages_payload, provider=current_provider, model=current_model, cfg=config, temperature=0.85)
-                raw, new_msg = await stream_to_discord(gen, reaction.message)
-            thinking, raw_rest = extract_thinking(raw)
-            cleaned = clean_response(raw_rest)
-            cleaned, board_image = extract_board(cleaned)
-            db.save_message(new_msg.id, user_row["discord_msg_id"], channel_id, "assistant", cleaned or "*(no response)*")
-            style = get_style(persona, load_persona_style(persona))
-            response_view = ResponseView() if not chess_engine.is_any_chess_persona(persona) else None
-            thinking_display = format_thinking_spoiler(thinking)
-            if style:
-                chunks = chunk_text(cleaned, limit=EMBED_DESC_LIMIT)
-                await new_msg.edit(content=thinking_display, embed=make_embed(chunks[0], style) if chunks else None, view=response_view)
-                for extra in chunks[1:]:
-                    await reaction.message.channel.send(embed=make_embed(extra, style))
-            else:
-                short_display = format_thinking_spoiler(thinking, limit=800)
-                full_content = (short_display + "\n\n" + cleaned) if short_display and cleaned else (short_display or cleaned or "*(no response)*")
-                chunks = chunk_text(full_content)
-                await new_msg.edit(content=chunks[0] if chunks else "*(no response)*", view=response_view)
-                for extra in chunks[1:]:
-                    await reaction.message.channel.send(extra)
-            if board_image:
-                await reaction.message.channel.send(file=discord.File(io.BytesIO(board_image), filename="board.png"))
-        except Exception as e:
-            log.error("Regen error: %s", e)
-
-    elif str(reaction.emoji) == "📌":
-        if not reaction.message.content:
-            return
-        try:
-            db.add_pin(channel_id, reaction.message.content[:200])
-            await reaction.message.add_reaction("✅")
-            log.info("Pinned note for channel %d", channel_id)
-        except Exception as e:
-            log.error("Pin error: %s", e)
-
+async def on_ready():
+    log.info("Logged in as %s", bot.user)
+    # Generate avatars for all personas in the background
+    async def _bg_gen():
+        for p in list_personas():
+            try:
+                await asyncio.to_thread(generate_avatar, p)
+            except Exception as e:
+                log.error(f"Failed to generate avatar for {p}: {e}")
+    asyncio.create_task(_bg_gen())
 
 if __name__ == "__main__":
     token = os.getenv("DISCORD_TOKEN")
-    if not token:
-        raise RuntimeError("DISCORD_TOKEN not set in .env")
+    if not token: raise RuntimeError("DISCORD_TOKEN not set")
+    try:
+        _INSTANCE_LOCK = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        _INSTANCE_LOCK.bind(("127.0.0.1", SINGLETON_PORT))
+    except OSError:
+        log.warning("Another instance is already running. Exiting.")
+        sys.exit(0)
     bot.run(token)
