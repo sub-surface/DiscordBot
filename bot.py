@@ -281,8 +281,11 @@ async def process_llm_request(channel, messages, persona, parent_msg_id, reply_t
     from contextlib import asynccontextmanager
     @asynccontextmanager
     async def maybe_lock(l):
-        if l: async with l: yield
-        else: yield
+        if l:
+            async with l:
+                yield
+        else:
+            yield
 
     async with maybe_lock(lock):
         is_sim_city = channel.name == "sim-city" if hasattr(channel, 'name') else False

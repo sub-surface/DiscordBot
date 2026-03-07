@@ -110,13 +110,12 @@ function checkPort(port) {
 }
 function checkBotPort() {
   return new Promise((resolve) => {
-    const sock = createSocket("udp4")
-    let done = false
-    const finish = (v) => { if (!done) { done = true; resolve(v) } }
-    sock.on("error", (e) => { finish(e.code === "EADDRINUSE") })
-    sock.on("listening", ()  => { sock.close(); finish(false) })
-    sock.bind(47823, "127.0.0.1")
-    setTimeout(() => { try { sock.close() } catch {} finish(false) }, 800)
+    const res = spawnSync("powershell", [
+      "-Command",
+      "Get-WmiObject Win32_Process -Filter 'name=\"python.exe\"' | Where-Object { $_.CommandLine -like '*bot.py*' } | Measure-Object | Select-Object -ExpandProperty Count"
+    ], { encoding: "utf8", timeout: 3000 })
+    const count = parseInt((res.stdout || "").trim(), 10)
+    resolve(!isNaN(count) && count > 0)
   })
 }
 
@@ -212,7 +211,10 @@ async function killBot() {
   if (!botUp) { msg = `${d}▸ bot not running${_}`; return }
   animState = "busy"; msg = `${d}▸ terminating...${_}`; render()
   spawnSync("powershell", ["-Command", "Get-WmiObject Win32_Process -Filter 'name=\"python.exe\"' | Where-Object { $_.CommandLine -like '*bot.py*' } | ForEach-Object { $_.Terminate() }"], { encoding: "utf8", timeout: 6000 })
-  botUp = false; animState = "idle"; msg = `${red}▸ bot terminated${_}`
+  // Wait briefly for processes to die, then verify
+  await new Promise(r => setTimeout(r, 800))
+  botUp = await checkBotPort()
+  animState = "idle"; msg = botUp ? `${red}▸ kill may have failed — check manually${_}` : `${red}▸ bot terminated${_}`
 }
 
 async function shell(cmd, label) {
