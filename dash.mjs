@@ -5,7 +5,6 @@ import { execSync, spawnSync, spawn } from "child_process"
 import { join, dirname } from "path"
 import { fileURLToPath } from "url"
 import { createConnection } from "net"
-import { createSocket } from "dgram"
 import { createInterface } from "readline"
 
 if (!process.stdin.isTTY) { console.error("dash.mjs needs an interactive terminal"); process.exit(1) }
@@ -201,7 +200,8 @@ function startBot() {
   animState = "busy"
   try {
     const logFd = openSync(LOG_PATH, "a")
-    spawn("venv/Scripts/python.exe", ["bot.py"], { cwd: ROOT, detached: true, stdio: ["ignore", logFd, logFd] }).unref()
+    spawn("venv/Scripts/python.exe", ["bot.py"], { cwd: ROOT, detached: true, stdio: ["ignore", logFd, logFd], windowsHide: true }).unref()
+    closeSync(logFd)
     msg = `${g}▸ spawning bot process (logging to bot.log)...${_}`
   } catch (e) { msg = `${red}▸ failed to start: ${e.message}${_}` }
   setTimeout(refresh, 3000)

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:longyield.substack.com)",
+      "WebFetch(domain:www.fa-mag.com)",
+      "WebSearch"
+    ]
+  }
+}
