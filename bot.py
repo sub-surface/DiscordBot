@@ -243,14 +243,15 @@ def get_system_prompt(persona_name: str, channel_id: int, mentions_map: dict = N
         who_is_who = "\n\n## Users in this thread:\n" + "\n".join(lines) + "\n\nTo mention a user so they get a notification, you MUST use their <@ID> tag exactly as shown above. If you just use their name, they won't be notified."
 
     timestamp = datetime.now().strftime("%A, %d %B %Y %H:%M")
+    verb = ch_verbosity(channel_id)
     meta = (
         "\n\n---\n"
         f"**Your name for this session:** {persona_name}\n"
         f"**Current date/time:** {timestamp}\n\n"
         "## Runtime capabilities\n\n"
         "You have one tool: **web_search** — use it when you need current information.\n\n"
-        f"## Response length — verbosity {ch_verbosity(channel_id)}/5\n"
-        f"{VERBOSITY_INSTRUCTIONS[ch_verbosity(channel_id)]}"
+        f"## Response length — verbosity {verb}/5\n"
+        f"{VERBOSITY_INSTRUCTIONS[verb]}"
     )
     return persona_text + pin_section + who_is_who + meta
 
@@ -353,8 +354,8 @@ async def stream_to_placeholder(placeholder: discord.Message, gen) -> tuple[str,
                         await placeholder.edit(content=display[:1990])
                     except Exception:
                         pass
-                    last_edit = now
-                    buffer_since_last_edit = ""
+                last_edit = now
+                buffer_since_last_edit = ""
         if meta:
             usage_meta = meta
 
@@ -449,7 +450,7 @@ async def resolve_reply_target(
             try:
                 return await channel.fetch_message(data["last_msg_id"])
             except Exception:
-                break  # Fall through to history scan
+                continue  # Try next matching entry before falling back to history scan
 
     # Priority 2: scan channel history
     try:
@@ -609,6 +610,7 @@ async def process_llm_request(channel, messages, persona, parent_msg_id, reply_t
         except Exception as e:
             log.error("LLM Error: %s", e)
             await placeholder.edit(content=f"⚠️ Error: {e}")
+            await gen.aclose()
             return
 
         thinking, cleaned = extract_thinking(full_text)
