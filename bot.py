@@ -409,7 +409,7 @@ def resolve_inline_mentions(cleaned: str, mentions_map: dict) -> tuple[str, list
     result = cleaned
     for start, end, tag in sorted(matches, key=lambda x: x[0], reverse=True):
         # Only replace @Name patterns (bare <@ID> tags stay as-is)
-        if result[start] == "@" and result[start:end + 1] != tag:
+        if result[start] == "@" and result[start:end] != tag:
             result = result[:start] + tag + result[end:]
 
     return result, found_mentions
