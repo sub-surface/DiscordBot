@@ -67,12 +67,21 @@ DiscordBot/
 ### `bot.py`
 Entry point. All Discord events, commands, and UI components live here.
 
+**LLM Request Orchestration (v1.5 refactor):**
+- `process_llm_request(channel, messages, persona, parent_msg_id, reply_to=None, temperature=None, mentions_map=None)` — Main orchestrator (~35 lines). Routes to webhook or standard flow; handles streaming, mention resolution, reply redirect, and DB writes.
+- `stream_to_placeholder(placeholder, gen)` — Consumes `llm.complete()` async generator with hybrid throttle (0.3s OR 50 chars, whichever first). Strips `<think>` blocks from live display. 120s wall-clock timeout. Returns `(full_text, usage_meta)`.
+- `resolve_inline_mentions(cleaned, mentions_map)` — Single left-to-right scan finding both `@Name` patterns and bare `<@ID>` tags. Substitutes `@Name` → `<@ID>`. Returns `(text, found_mentions)` ordered by first char position.
+- `resolve_reply_target(found_mentions, mentions_map, channel, guild)` — Uses first mention only. Priority: thread history (via `mentions_map` `last_msg_id`) → channel history scan (limit 100) → `None`.
+- `build_response(cleaned, style, thinking, usage_meta, found_mentions)` — Builds `(content, embed)`. Content always includes pings if `found_mentions` non-empty. Embed footer: `"{footer} | {model} | {N} tok | {tps:.1f} t/s"`.
+- `send_final(placeholder, reply_to, reply_target, content, embed, view, channel)` — Routes reply: edit placeholder if no redirect, delete+reply-to-target if redirect different, fall back to `channel.send()` if target fetch fails. Returns sent `discord.Message`.
+- `send_webhook(channel, messages, persona, parent_msg_id, temperature, provider, model)` — Extracted sim-city webhook path. Generates fully (no streaming), sends via webhook with persona avatar/username, handles own DB writes using real message ID.
+
+**Utilities:**
 - `get_llm_lock(provider)` — returns a `local` lock or `None` (parallel) for cloud providers.
-- `get_system_prompt(persona, channel_id)` — persona text + pinned notes + meta suffix.
+- `get_system_prompt(persona, channel_id, mentions_map=None)` — persona text + pinned notes + "Users in this thread" map (if mentions_map provided) + meta suffix.
 - `ch_persona(channel_id)` — returns active persona; uses `db.get_channel_persona` (cached).
 - `ch_verbosity(channel_id)` — returns active verbosity (cached).
 - `_db_chain(parent_id)` — fetches conversation chain via `db.get_message_chain` (Recursive CTE).
-- `stream_to_discord(gen, reply_target)` — consumes `llm.complete()` generator. **Suppresses `<think>` content during live streaming**.
 - `extract_thinking(text)` — splits raw output into `(thinking_text, rest)`.
 - `format_thinking_spoiler(thinking, limit=1200)` — wraps thinking in Discord spoiler tags.
 - `handle_summarize(channel_id)` — summarizes last 20 messages, respects provider lock.
