@@ -335,29 +335,32 @@ async def stream_to_placeholder(placeholder: discord.Message, gen) -> tuple[str,
     start_time = time.time()
     timed_out = False
 
-    async for chunk, meta in gen:
-        if chunk:
-            full_text += chunk
-            buffer_since_last_edit += chunk
-            now = time.time()
+    try:
+        async for chunk, meta in gen:
+            if chunk:
+                full_text += chunk
+                buffer_since_last_edit += chunk
+                now = time.time()
 
-            if now - start_time > 120:
-                timed_out = True
-                break
+                if now - start_time > 120:
+                    timed_out = True
+                    break
 
-            should_edit = (now - last_edit >= 0.3) or (len(buffer_since_last_edit) >= 50)
-            if should_edit:
-                display = re.sub(r"<think>.*?</think>", "", full_text, flags=re.DOTALL)
-                display = re.sub(r"<think>.*", "", display, flags=re.DOTALL).strip()
-                if display:
-                    try:
-                        await placeholder.edit(content=display[:1990])
-                    except Exception:
-                        pass
-                last_edit = now
-                buffer_since_last_edit = ""
-        if meta:
-            usage_meta = meta
+                should_edit = (now - last_edit >= 0.3) or (len(buffer_since_last_edit) >= 50)
+                if should_edit:
+                    display = re.sub(r"<think>.*?</think>", "", full_text, flags=re.DOTALL)
+                    display = re.sub(r"<think>.*", "", display, flags=re.DOTALL).strip()
+                    if display:
+                        try:
+                            await placeholder.edit(content=display[:1990])
+                        except Exception:
+                            pass
+                    last_edit = now
+                    buffer_since_last_edit = ""
+            if meta:
+                usage_meta = meta
+    finally:
+        await gen.aclose()
 
     if timed_out:
         full_text += "\n\n-# *[generation timed out]*"
