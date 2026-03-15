@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import io
 import logging
 import random
@@ -39,7 +40,7 @@ def get_llm_lock(provider: str) -> asyncio.Lock | None:
     """Return a lock for sequential providers, or None for parallel ones."""
     if provider == "local":
         return _PROVIDER_LOCKS["local"]
-    return None # Parallel by default for cloud providers
+    return None  # Parallel by default for cloud providers
 
 logging.basicConfig(
     level=logging.INFO,
@@ -81,17 +82,17 @@ class PsychographBot(commands.Bot):
             if channel:
                 persona_name = random.choice(list_personas())
                 log.info(f"Heartbeat: {persona_name} is posting in #sim-city")
-                
+
                 # Simple prompt for heartbeat
                 topics = ["the weather", "a random thought", "something you noticed today", "a dream you had", "a piece of news"]
                 prompt = f"Write a short, characterful post about {random.choice(topics)}."
-                
+
                 system = get_system_prompt(persona_name, channel.id)
                 messages = [
                     {"role": "system", "content": system},
                     {"role": "user", "content": prompt}
                 ]
-                
+
                 await process_llm_request(channel, messages, persona_name, None)
                 db.set_last_run("sim_city_heartbeat", now)
                 break
@@ -99,7 +100,7 @@ class PsychographBot(commands.Bot):
     async def get_or_create_webhook(self, channel: discord.TextChannel) -> discord.Webhook | None:
         if not isinstance(channel, discord.TextChannel):
             return None
-            
+
         cached = db.get_channel_webhook(channel.id)
         if cached:
             try:
@@ -114,7 +115,7 @@ class PsychographBot(commands.Bot):
                 if wh.name == "SimCity Webhook":
                     db.save_channel_webhook(channel.id, wh.url, wh.id)
                     return wh
-            
+
             # Create new one if not found
             wh = await channel.create_webhook(name="SimCity Webhook")
             db.save_channel_webhook(channel.id, wh.url, wh.id)
@@ -141,10 +142,19 @@ class PsychographBot(commands.Bot):
         persona = ch_persona(channel_id)
         temp = db.get_channel_temperature(channel_id)
         chain = _db_chain(user_row["parent_msg_id"])
-        system = get_system_prompt(persona, channel_id)
+
+        # Resolve mentions for the history chain + the user's message we are regening
+        mentions_map = resolve_mentions(chain + [user_row], interaction.guild)
+        # Ensure user_row's author is in the map with the correct tag
+        if user_row.get("author_id"):
+            uid = user_row["author_id"]
+            mentions_map[str(uid)] = {"tag": f"<@{uid}>", "last_msg_id": user_row["discord_msg_id"]}
+
+        system = get_system_prompt(persona, channel_id, mentions_map=mentions_map)
         messages_payload = [{"role": "system", "content": system}] + chain + [{"role": "user", "content": user_row["content"]}]
 
-        await process_llm_request(interaction.message.channel, messages_payload, persona, user_row["discord_msg_id"], reply_to=interaction.message, temperature=temp)
+        await process_llm_request(interaction.message.channel, messages_payload, persona, user_row["discord_msg_id"],
+                                  reply_to=interaction.message, temperature=temp, mentions_map=mentions_map)
 
 bot = PsychographBot()
 
@@ -222,10 +232,16 @@ def _chess_result_text(status: str) -> str:
     if "black wins" in s: return random.choice(_LOSS_MSGS)
     return random.choice(_DRAW_MSGS)
 
-def get_system_prompt(persona_name: str, channel_id: int) -> str:
+def get_system_prompt(persona_name: str, channel_id: int, mentions_map: dict = None) -> str:
     persona_text = load_persona(persona_name) or f"You are {persona_name}."
     pins = db.get_pins(channel_id)
     pin_section = "\n\n**Pinned notes:**\n" + "\n".join(f"- {p}" for p in pins) if pins else ""
+
+    who_is_who = ""
+    if mentions_map:
+        lines = [f"- {name}: {tag}" for name, tag in mentions_map.items()]
+        who_is_who = "\n\n## Users in this thread:\n" + "\n".join(lines) + "\n\nTo mention a user so they get a notification, you MUST use their <@ID> tag exactly as shown above. If you just use their name, they won't be notified."
+
     timestamp = datetime.now().strftime("%A, %d %B %Y %H:%M")
     meta = (
         "\n\n---\n"
@@ -236,7 +252,36 @@ def get_system_prompt(persona_name: str, channel_id: int) -> str:
         f"## Response length — verbosity {ch_verbosity(channel_id)}/5\n"
         f"{VERBOSITY_INSTRUCTIONS[ch_verbosity(channel_id)]}"
     )
-    return persona_text + pin_section + meta
+    return persona_text + pin_section + who_is_who + meta
+
+def resolve_mentions(chain: list[dict], guild: discord.Guild | None) -> dict[str, dict]:
+    """Scans message history for Discord tags and resolves them to names/msg_ids."""
+    mapping = {}
+    if not guild: return mapping
+
+    mention_re = re.compile(r"<@!?(\d+)>")
+    for msg in chain:
+        content = msg.get("content", "")
+        if not isinstance(content, str): continue
+        for match in mention_re.finditer(content):
+            uid = int(match.group(1))
+            member = guild.get_member(uid)
+            if member:
+                data = {"tag": f"<@{uid}>", "last_msg_id": msg.get("discord_msg_id")}
+                mapping[member.display_name] = data
+                mapping[member.name] = data
+
+        # Also track by author_id directly from the chain
+        if msg.get("author_id"):
+            uid = msg["author_id"]
+            member = guild.get_member(uid)
+            if member:
+                data = {"tag": f"<@{uid}>", "last_msg_id": msg["discord_msg_id"]}
+                mapping[member.display_name] = data
+                mapping[member.name] = data
+                mapping[str(uid)] = data
+
+    return mapping
 
 def extract_thinking(text: str) -> tuple[str, str]:
     m = re.search(r"<think>(.*?)</think>", text, flags=re.DOTALL)
@@ -271,122 +316,321 @@ def _db_chain(parent_id: int | None) -> list[dict]:
     max_msgs = config.get("context", {}).get("max_messages", 40)
     return db.get_message_chain(parent_id, limit=max_msgs)
 
-# ── Core Logic ───────────────────────────────────────────────────────────────
+# ── Core helpers ─────────────────────────────────────────────────────────────
 
-async def process_llm_request(channel, messages, persona, parent_msg_id, reply_to=None, temperature=None):
+async def stream_to_placeholder(placeholder: discord.Message, gen) -> tuple[str, dict | None]:
+    """Consume the llm.complete() async generator, editing placeholder with hybrid throttle.
+
+    Hybrid throttle: edit when 0.3s elapsed OR 50 chars accumulated, whichever first.
+    Live display strips <think> blocks but does NOT substitute @Name → <@ID>.
+    120-second wall-clock timeout: appends "[generation timed out]" if exceeded.
+    If completion_tokens >= 1000: appends "[token limit reached]".
+    Returns (full_text, usage_meta).
+    """
+    full_text = ""
+    usage_meta = None
+    last_edit = 0.0
+    buffer_since_last_edit = ""
+    start_time = time.time()
+    timed_out = False
+
+    async for chunk, meta in gen:
+        if chunk:
+            full_text += chunk
+            buffer_since_last_edit += chunk
+            now = time.time()
+
+            if now - start_time > 120:
+                timed_out = True
+                break
+
+            should_edit = (now - last_edit >= 0.3) or (len(buffer_since_last_edit) >= 50)
+            if should_edit:
+                display = re.sub(r"<think>.*?</think>", "", full_text, flags=re.DOTALL)
+                display = re.sub(r"<think>.*", "", display, flags=re.DOTALL).strip()
+                if display:
+                    try:
+                        await placeholder.edit(content=display[:1990])
+                    except Exception:
+                        pass
+                    last_edit = now
+                    buffer_since_last_edit = ""
+        if meta:
+            usage_meta = meta
+
+    if timed_out:
+        full_text += "\n\n-# *[generation timed out]*"
+    elif usage_meta and usage_meta.get("completion_tokens", 0) >= 1000:
+        full_text += "\n\n-# *[token limit reached]*"
+
+    return full_text, usage_meta
+
+
+def resolve_inline_mentions(cleaned: str, mentions_map: dict) -> tuple[str, list[str]]:
+    """Single left-to-right scan replacing @Name patterns and collecting <@ID> tags.
+
+    Matches both @Name (from mentions_map keys) and bare <@ID> tags the LLM wrote.
+    All matches merged by character offset (first occurrence position).
+    Returns (substituted_text, found_mentions) where found_mentions is ordered by
+    first character position in the original text.
+    """
+    # Build a list of (start_pos, end_pos, tag) for all matches
+    matches: list[tuple[int, int, str]] = []
+
+    # Match @Name patterns from the mentions_map
+    for name, data in mentions_map.items():
+        tag = data["tag"]
+        pattern = re.compile(rf"@\b{re.escape(name)}\b", re.IGNORECASE)
+        for m in pattern.finditer(cleaned):
+            matches.append((m.start(), m.end(), tag))
+
+    # Match bare <@ID> tags the LLM wrote directly
+    bare_tag_re = re.compile(r"<@!?\d+>")
+    for m in bare_tag_re.finditer(cleaned):
+        matches.append((m.start(), m.end(), m.group(0)))
+
+    if not matches:
+        return cleaned, []
+
+    # Sort by start position, then apply substitutions right-to-left to preserve offsets
+    matches.sort(key=lambda x: x[0])
+
+    # Deduplicate: track which tags we've already seen, ordered by first occurrence
+    seen: dict[str, bool] = {}
+    found_mentions: list[str] = []
+    for _, _, tag in matches:
+        # Normalise tag (strip ! from <@!ID>)
+        normalised = re.sub(r"<@!", "<@", tag)
+        if normalised not in seen:
+            seen[normalised] = True
+            found_mentions.append(normalised)
+
+    # Apply substitutions right-to-left (highest offset first) to keep positions valid
+    result = cleaned
+    for start, end, tag in sorted(matches, key=lambda x: x[0], reverse=True):
+        # Only replace @Name patterns (bare <@ID> tags stay as-is)
+        if result[start] == "@" and result[start:end + 1] != tag:
+            result = result[:start] + tag + result[end:]
+
+    return result, found_mentions
+
+
+async def resolve_reply_target(
+    found_mentions: list[str],
+    mentions_map: dict,
+    channel,
+    guild,
+) -> discord.Message | None:
+    """Resolve the first mentioned user to their most recent message.
+
+    Priority:
+    1. Thread history via mentions_map last_msg_id → channel.fetch_message()
+    2. channel.history(limit=100) scan for that user ID
+    3. None
+
+    Uses ONLY the first element of found_mentions to avoid ambiguous redirects.
+    """
+    if not found_mentions:
+        return None
+
+    first_tag = found_mentions[0]
+    # Normalise tag — strip ! variant
+    first_tag = re.sub(r"<@!", "<@", first_tag)
+    # Extract numeric user ID
+    id_match = re.search(r"<@(\d+)>", first_tag)
+    if not id_match:
+        return None
+    user_id = int(id_match.group(1))
+
+    # Priority 1: look up last_msg_id in mentions_map
+    for data in mentions_map.values():
+        tag = re.sub(r"<@!", "<@", data.get("tag", ""))
+        if tag == first_tag and data.get("last_msg_id"):
+            try:
+                return await channel.fetch_message(data["last_msg_id"])
+            except Exception:
+                break  # Fall through to history scan
+
+    # Priority 2: scan channel history
+    try:
+        async for msg in channel.history(limit=100):
+            if msg.author.id == user_id:
+                return msg
+    except Exception:
+        pass
+
+    return None
+
+
+def build_response(
+    cleaned: str,
+    style: dict,
+    thinking: str,
+    usage_meta: dict | None,
+    found_mentions: list[str],
+) -> tuple[str, discord.Embed]:
+    """Build the content string and embed for the final Discord message.
+
+    content: space-joined pings from found_mentions + thinking spoiler.
+    embed: make_embed with footer "{persona_footer} | {model_name} | {N} tok | {tps:.1f} t/s".
+    Always returns an embed (no plain-text path).
+    """
+    thinking_display = format_thinking_spoiler(thinking)
+
+    # Content field: pings (always if present) + thinking spoiler
+    parts = []
+    if found_mentions:
+        parts.append(" ".join(found_mentions))
+    if thinking_display:
+        parts.append(thinking_display)
+    content = "\n".join(parts) if parts else None
+
+    # Build embed
+    embed = make_embed(cleaned[:EMBED_DESC_LIMIT], style)
+
+    # Footer
+    persona_footer = style.get("footer", "").strip() if style else ""
+    if usage_meta:
+        tps = usage_meta["completion_tokens"] / usage_meta["duration"] if usage_meta.get("duration", 0) > 0 else 0
+        model_name = usage_meta["model"].split("/")[-1]
+        tok_str = f"{usage_meta['completion_tokens']} tok"
+        footer_parts = [p for p in [persona_footer, model_name, tok_str, f"{tps:.1f} t/s"] if p]
+        embed.set_footer(text=" | ".join(footer_parts))
+    elif persona_footer:
+        embed.set_footer(text=persona_footer)
+
+    return content, embed
+
+
+async def send_final(
+    placeholder: discord.Message,
+    reply_to: discord.Message | None,
+    reply_target: discord.Message | None,
+    content: str | None,
+    embed: discord.Embed,
+    view,
+    channel,
+) -> discord.Message:
+    """Send or edit the final response, redirecting to reply_target if different from reply_to.
+
+    Case 1: reply_target is None OR same message as reply_to → edit placeholder in-place.
+    Case 2: reply_target is a different message → delete placeholder, reply to reply_target.
+            Falls back to channel.send() if reply raises.
+    Returns the discord.Message that was actually sent/edited.
+    """
+    redirect = (
+        reply_target is not None
+        and (reply_to is None or reply_target.id != reply_to.id)
+    )
+
+    if not redirect:
+        await placeholder.edit(content=content, embed=embed, view=view)
+        return placeholder
+
+    # Delete placeholder and send to the new target
+    try:
+        await placeholder.delete()
+    except Exception:
+        pass
+
+    try:
+        return await reply_target.reply(content=content, embed=embed, view=view)
+    except Exception:
+        return await channel.send(content=content, embed=embed, view=view)
+
+
+async def send_webhook(channel, messages, persona, parent_msg_id, temperature, provider, model):
+    """Generate fully (no streaming) and send via webhook for sim-city channel.
+
+    Handles its own db.save_message() and db.log_usage() using the real sent_msg.id.
+    """
+    webhook = await bot.get_or_create_webhook(channel)
+    if not webhook:
+        log.error("send_webhook: could not obtain webhook for %s", channel)
+        return
+
+    full_text = ""
+    usage_meta = None
+    gen = llm.complete(messages, provider, model, config, temperature=temperature, max_tokens=1000)
+    async for chunk, meta in gen:
+        if chunk:
+            full_text += chunk
+        if meta:
+            usage_meta = meta
+
+    thinking, raw_rest = extract_thinking(full_text)
+    cleaned, _ = extract_board(raw_rest)
+
+    thinking_display = format_thinking_spoiler(thinking)
+    footer_extra = ""
+    if usage_meta:
+        tps = usage_meta["completion_tokens"] / usage_meta["duration"] if usage_meta.get("duration", 0) > 0 else 0
+        model_name = usage_meta["model"].split("/")[-1]
+        footer_extra = f" | {model_name} | {usage_meta['completion_tokens']} tok | {tps:.1f} t/s"
+
+    meta_info = get_persona_metadata(persona)
+    display_name = meta_info.get("display_name", persona)
+    avatar_url = meta_info.get("avatar_url")
+
+    content = (thinking_display + "\n\n" + cleaned) if thinking_display else cleaned
+    if footer_extra:
+        content += f"\n\n-# *{footer_extra.strip(' |')}*"
+
+    sent_msg = await webhook.send(
+        content=content[:1990],
+        username=display_name,
+        avatar_url=avatar_url,
+        wait=True,
+    )
+
+    db.save_message(sent_msg.id, parent_msg_id, channel.id, "assistant", cleaned)
+    if usage_meta:
+        db.log_usage(sent_msg.id, model, provider,
+                     usage_meta["prompt_tokens"], usage_meta["completion_tokens"], usage_meta["duration"])
+
+
+# ── Orchestrator ─────────────────────────────────────────────────────────────
+
+async def process_llm_request(channel, messages, persona, parent_msg_id, reply_to=None, temperature=None, mentions_map=None):
     provider = bot.current_provider
     lock = get_llm_lock(provider)
-    
-    # Use contextlib.nullcontext if no lock
-    from contextlib import asynccontextmanager
-    @asynccontextmanager
-    async def maybe_lock(l):
-        if l:
-            async with l:
-                yield
-        else:
-            yield
 
-    async with maybe_lock(lock):
-        is_sim_city = channel.name == "sim-city" if hasattr(channel, 'name') else False
-        webhook = None
+    async with (lock if lock else contextlib.AsyncExitStack()):
+        is_sim_city = getattr(channel, 'name', None) == "sim-city"
         if is_sim_city:
-            webhook = await bot.get_or_create_webhook(channel)
-
-        placeholder = None
-        if not webhook:
-            placeholder = await (reply_to.reply if reply_to else channel.send)(_THINKING_SIGNAL)
-
-        full_text, last_edit = "", 0.0
-
-        start_time = time.time()
-        usage_meta = None
-        timed_out = False
-
-        try:
-            # Cap at 1000 tokens to prevent rambling
-            gen = llm.complete(messages, bot.current_provider, bot.current_model, config, 
-                              temperature=temperature, max_tokens=1000)
-            async for chunk, meta in gen:
-                if chunk:
-                    full_text += chunk
-                    now = time.time()
-                    
-                    # 2-minute wall-clock timeout
-                    if now - start_time > 120:
-                        timed_out = True
-                        break
-
-                    if placeholder and now - last_edit >= 1.0:
-                        display = re.sub(r"<think>.*?</think>", "", full_text, flags=re.DOTALL)
-                        display = re.sub(r"<think>.*", "", display, flags=re.DOTALL).strip()
-                        if display:
-                            try: await placeholder.edit(content=display[:1990])
-                            except: pass
-                            last_edit = now
-                if meta:
-                    usage_meta = meta
-        except Exception as e:
-            log.error("LLM Error: %s", e)
-            if placeholder:
-                await placeholder.edit(content=f"⚠️ Error: {e}")
-            else:
-                await channel.send(f"⚠️ Error: {e}")
+            await send_webhook(channel, messages, persona, parent_msg_id, temperature, provider, bot.current_model)
             return
 
-        thinking, raw_rest = extract_thinking(full_text)
-        cleaned, board_image = extract_board(raw_rest)
-        
-        if timed_out:
-            cleaned += "\n\n-# *[generation timed out]*"
-        elif usage_meta and usage_meta.get("completion_tokens", 0) >= 1000:
-            cleaned += "\n\n-# *[token limit reached]*"
-        
-        msg_id_for_db = placeholder.id if placeholder else int(time.time() * 1000) # Fallback for webhook
-        db.save_message(msg_id_for_db, parent_msg_id, channel.id, "assistant", cleaned)
-        if usage_meta:
-            db.log_usage(msg_id_for_db, bot.current_model, bot.current_provider, 
-                         usage_meta["prompt_tokens"], usage_meta["completion_tokens"], usage_meta["duration"])
+        gen = llm.complete(messages, provider, bot.current_model, config, temperature=temperature, max_tokens=1000)
+        placeholder = await (reply_to.reply if reply_to else channel.send)(_THINKING_SIGNAL)
+
+        try:
+            full_text, meta = await stream_to_placeholder(placeholder, gen)
+        except Exception as e:
+            log.error("LLM Error: %s", e)
+            await placeholder.edit(content=f"⚠️ Error: {e}")
+            return
+
+        thinking, cleaned = extract_thinking(full_text)
+        cleaned, board_image = extract_board(cleaned)
+        cleaned, found_mentions = resolve_inline_mentions(cleaned, mentions_map or {})
+
+        guild = getattr(channel, 'guild', None)
+        reply_target = await resolve_reply_target(found_mentions, mentions_map or {}, channel, guild)
 
         style = get_style(persona, load_persona_style(persona))
-        thinking_display = format_thinking_spoiler(thinking)
-        
-        footer_extra = ""
-        if usage_meta:
-            tps = usage_meta["completion_tokens"] / usage_meta["duration"] if usage_meta["duration"] > 0 else 0
-            model_name = usage_meta["model"].split("/")[-1] # Show just the model name, not the full path
-            footer_extra = f" | {model_name} | {usage_meta['completion_tokens']} tok | {tps:.1f} t/s"
+        view = ResponseView(bot_callback=bot.handle_view_interaction)
+        content, embed = build_response(cleaned, style, thinking, meta, found_mentions)
 
-        if webhook:
-            meta = get_persona_metadata(persona)
-            display_name = meta.get("display_name", persona)
-            avatar_url = meta.get("avatar_url")
-            
-            content = (thinking_display + "\n\n" + cleaned) if thinking_display else cleaned
-            if footer_extra:
-                content += f"\n\n-# *{footer_extra.strip(' |')}*"
-
-            sent_msg = await webhook.send(
-                content=content[:1990],
-                username=display_name,
-                avatar_url=avatar_url,
-                wait=True
-            )
-            # Update DB with real ID
-            db.save_message(sent_msg.id, parent_msg_id, channel.id, "assistant", cleaned)
-        elif style:
-            embed = make_embed(cleaned[:EMBED_DESC_LIMIT], style)
-            if footer_extra:
-                embed.set_footer(text=(style.get("footer", "") + footer_extra).strip())
-            await placeholder.edit(content=thinking_display, embed=embed, view=ResponseView(bot_callback=bot.handle_view_interaction))
-        else:
-            content = (thinking_display + "\n\n" + cleaned) if thinking_display else cleaned
-            if footer_extra:
-                content += f"\n\n-# *{footer_extra.strip(' |')}*"
-            await placeholder.edit(content=content[:1990], view=ResponseView(bot_callback=bot.handle_view_interaction))
+        sent_msg = await send_final(placeholder, reply_to, reply_target, content, embed, view, channel)
+        db.save_message(sent_msg.id, parent_msg_id, channel.id, "assistant", cleaned)
+        if meta:
+            db.log_usage(sent_msg.id, bot.current_model, provider,
+                         meta["prompt_tokens"], meta["completion_tokens"], meta["duration"])
 
         if board_image:
-            await channel.send(file=discord.File(io.BytesIO(board_image), filename="board.png"))
+            await channel.send(file=discord.File(io.BytesIO(board_image), filename="board.png"), reference=sent_msg)
+
 
 async def handle_summarize(channel_id: int) -> str:
     provider = bot.current_provider
@@ -581,13 +825,13 @@ async def resign(interaction: discord.Interaction):
 async def on_message(message: discord.Message):
     await bot.process_commands(message)
     if message.author.bot and not message.webhook_id: return
-    
+
     is_sim_city = message.channel.name == "sim-city" if hasattr(message.channel, 'name') else False
     if message.webhook_id and not is_sim_city: return
 
     is_mentioned = bot.user in message.mentions
     is_dm = isinstance(message.channel, discord.DMChannel)
-    
+
     target_persona = None
     prompt = message.content
 
@@ -600,13 +844,13 @@ async def on_message(message: discord.Message):
             if potential_persona.lower() in [p.lower() for p in persona_list]:
                 target_persona = next(p for p in persona_list if p.lower() == potential_persona.lower())
                 prompt = prompt[m.end():].strip()
-        
+
         # If no explicit tag, check if it's a reply to one of our previous messages
         if not target_persona and message.reference:
             ref = db.get_message(message.reference.message_id)
             if ref and ref['role'] == 'assistant':
                 target_persona = ch_persona(message.channel.id)
-                
+
         if not target_persona and (is_mentioned or is_dm):
             target_persona = ch_persona(message.channel.id)
     else:
@@ -616,11 +860,10 @@ async def on_message(message: discord.Message):
         target_persona = ch_persona(message.channel.id)
 
     if not target_persona:
-        # print(f"DEBUG: No target persona for message in {message.channel.name if hasattr(message.channel, 'name') else 'DM'}")
         return
 
     prompt = re.sub(rf"<@!?{bot.user.id}>", "", prompt).strip()
-    if not prompt and not message.attachments: 
+    if not prompt and not message.attachments:
         if is_mentioned:
             await message.reply("You mentioned me but didn't say anything!")
         return
@@ -628,7 +871,7 @@ async def on_message(message: discord.Message):
     persona = target_persona
     is_chess = chess_engine.is_chess_persona(persona)
     is_chess_classic = chess_engine.is_chess_classic_persona(persona)
-    
+
     if (is_chess or is_chess_classic) and prompt:
         ok, san_or_err, _ = chess_engine.apply_user_move(message.channel.id, prompt)
         if not ok:
@@ -653,7 +896,19 @@ async def on_message(message: discord.Message):
                 await message.channel.send(file=discord.File(io.BytesIO(board_image), filename="board.png"))
         return
 
-    system = get_system_prompt(persona, message.channel.id)
+    parent_id = message.reference.message_id if message.reference else None
+    chain = _db_chain(parent_id)
+
+    # Resolve mentions from the history chain and the current message
+    mentions_map = resolve_mentions(chain, message.guild)
+    for m in message.mentions:
+        if m.id != bot.user.id:
+            data = {"tag": f"<@{m.id}>", "last_msg_id": message.id}
+            mentions_map[m.display_name] = data
+            mentions_map[m.name] = data
+            mentions_map[str(m.id)] = data
+
+    system = get_system_prompt(persona, message.channel.id, mentions_map=mentions_map)
     if is_chess:
         fen_now = chess_engine.current_fen(message.channel.id)
         status = chess_engine.game_status(message.channel.id)
@@ -662,20 +917,20 @@ async def on_message(message: discord.Message):
             f"Legal moves: {chess_engine.legal_moves_str(message.channel.id)}"
         )
         if status: system += f"\n**Game over: {status}**"
-    
-    parent_id = message.reference.message_id if message.reference else None
-    chain = _db_chain(parent_id)
-    db.save_message(message.id, parent_id, message.channel.id, "user", prompt)
+
+    db.save_message(message.id, parent_id, message.channel.id, "user", prompt, author_id=message.author.id)
     image_blocks = await llm.format_image_blocks(message.attachments)
     user_content = ([{"type": "text", "text": prompt or " "}] + image_blocks) if image_blocks else (prompt or " ")
     messages_payload = [{"role": "system", "content": system}] + chain + [{"role": "user", "content": user_content}]
     temp = db.get_channel_temperature(message.channel.id)
-    
+
     if is_sim_city:
-        await process_llm_request(message.channel, messages_payload, persona, message.id, reply_to=message, temperature=temp)
+        await process_llm_request(message.channel, messages_payload, persona, message.id,
+                                  reply_to=message, temperature=temp, mentions_map=mentions_map)
     else:
         async with message.channel.typing():
-            await process_llm_request(message.channel, messages_payload, persona, message.id, reply_to=message, temperature=temp)
+            await process_llm_request(message.channel, messages_payload, persona, message.id,
+                                      reply_to=message, temperature=temp, mentions_map=mentions_map)
 
 @bot.event
 async def on_ready():
