@@ -613,7 +613,6 @@ async def process_llm_request(channel, messages, persona, parent_msg_id, reply_t
         except Exception as e:
             log.error("LLM Error: %s", e)
             await placeholder.edit(content=f"⚠️ Error: {e}")
-            await gen.aclose()
             return
 
         thinking, cleaned = extract_thinking(full_text)
