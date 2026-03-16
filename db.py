@@ -93,11 +93,11 @@ def init_db() -> None:
         if "temperature" not in cs_cols:
             _conn.execute("ALTER TABLE channel_settings ADD COLUMN temperature REAL")
 
-def save_message(discord_msg_id: int, parent_msg_id: int | None, channel_id: int, role: str, content: str) -> None:
+def save_message(discord_msg_id: int, parent_msg_id: int | None, channel_id: int, role: str, content: str, author_id: int | None = None) -> None:
     with _conn:
         _conn.execute(
-            "INSERT OR REPLACE INTO messages (discord_msg_id, parent_msg_id, channel_id, role, content) VALUES (?, ?, ?, ?, ?)",
-            (discord_msg_id, parent_msg_id, channel_id, role, content),
+            "INSERT OR REPLACE INTO messages (discord_msg_id, parent_msg_id, channel_id, author_id, role, content) VALUES (?, ?, ?, ?, ?, ?)",
+            (discord_msg_id, parent_msg_id, channel_id, author_id, role, content),
         )
 
 def get_message(discord_msg_id: int) -> dict | None:
