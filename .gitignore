@@ -5,3 +5,10 @@ __pycache__/
 history.db
 history.db.old
 .worktrees/
+
+# runtime logs
+bot.log
+*.log
+
+# local Claude IDE state
+.claude/settings.local.json

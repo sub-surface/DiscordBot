@@ -27,7 +27,7 @@ from avatar_gen import generate_avatar
 from board import fen_to_board, fen_to_image
 from personas import list_personas, load_persona, load_persona_style, get_persona_metadata
 from styles import get_style, make_embed, EMBED_DESC_LIMIT, VERBOSITY_LABELS
-from ui import ResponseView, OptionsView, _options_embed, _get_options_view
+from ui import ResponseView, OptionsView, OptionsActionsView, _options_embed, _simcity_embed, _get_options_view, SimCityOptionsView
 from config_util import config, save_config
 
 warnings.filterwarnings("ignore", message="Impersonate.*does not exist")
@@ -65,37 +65,70 @@ class PsychographBot(commands.Bot):
     async def setup_hook(self):
         db.init_db()
         self.add_view(ResponseView(bot_callback=self.handle_view_interaction))
+        self.add_view(ResponseView(bot_callback=self.handle_view_interaction, has_thinking=True))
         self.heartbeat.start()
-        log.info("Views registered and Heartbeat started. Use !sync in a channel to update slash commands.")
+        log.info("Views registered and Heartbeat started.")
 
-    @tasks.loop(minutes=30)
+    @tasks.loop(minutes=1)
     async def heartbeat(self):
-        """Select a random persona to post in #sim-city once or twice a day."""
+        """Periodic sim-city activity: autonomous posts and conversation queue draining."""
         now = time.time()
-        last_run = db.get_last_run("sim_city_heartbeat")
-        # Run every 12 hours approx (43200 seconds)
-        if now - last_run < 40000:
-            return
-
+        channel = None
         for guild in self.guilds:
             channel = discord.utils.get(guild.text_channels, name="sim-city")
             if channel:
-                persona_name = random.choice(list_personas())
-                log.info(f"Heartbeat: {persona_name} is posting in #sim-city")
-
-                # Simple prompt for heartbeat
-                topics = ["the weather", "a random thought", "something you noticed today", "a dream you had", "a piece of news"]
-                prompt = f"Write a short, characterful post about {random.choice(topics)}."
-
-                system = get_system_prompt(persona_name, channel.id)
-                messages = [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": prompt}
-                ]
-
-                await process_llm_request(channel, messages, persona_name, None)
-                db.set_last_run("sim_city_heartbeat", now)
                 break
+        if not channel:
+            return
+
+        whitelist = db.get_sim_personas()
+        pool = [p for p in (whitelist if whitelist else list_personas())
+                if not chess_engine.is_any_chess_persona(p)]
+        if not pool:
+            return
+
+        # Fetch recent channel history for context (last 5 messages)
+        recent_rows = db._conn.execute(
+            "SELECT role, content FROM messages WHERE channel_id = ? ORDER BY discord_msg_id DESC LIMIT 5",
+            (channel.id,)
+        ).fetchall()
+        recent_context = "\n".join(f"{r['role']}: {r['content']}" for r in reversed(recent_rows))
+        context_block = f"\n\n[Recent channel activity]\n{recent_context}" if recent_context else ""
+
+        sim_topic = db.get_sim_setting("topic")
+
+        # Drain one queued conversation per tick (independent of heartbeat interval)
+        item = db.dequeue_conversation()
+        if item:
+            from_p = item["from_persona"]
+            to_p = item["to_persona"]
+            seed = item["seed_prompt"]
+            log.info(f"Queue: {from_p} → {to_p}: {seed[:60]}")
+            system_from = get_system_prompt(from_p, channel.id, sim_city_topic=sim_topic, verbosity_override=2, sim_city=True)
+            opening_msgs = [
+                {"role": "system", "content": system_from},
+                {"role": "user", "content": (
+                    f"[You're initiating a conversation with {to_p}.{context_block}]\n\n{seed}"
+                )}
+            ]
+            await process_llm_request(channel, opening_msgs, from_p, None, agent_tools=True)
+
+        # Autonomous heartbeat post at configured interval
+        last_run = db.get_last_run("sim_city_heartbeat")
+        interval_hours = float(db.get_sim_setting("heartbeat_interval") or "11")
+        if now - last_run < interval_hours * 3600:
+            return
+
+        persona_name = random.choice(pool)
+        log.info(f"Heartbeat: {persona_name} is posting in #sim-city")
+        system = get_system_prompt(persona_name, channel.id, sim_city_topic=sim_topic, verbosity_override=2, sim_city=True)
+        prompt = random.choice(_HEARTBEAT_PROMPTS).format(persona=persona_name) + context_block
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt}
+        ]
+        await process_llm_request(channel, messages, persona_name, None, agent_tools=True)
+        db.set_last_run("sim_city_heartbeat", now)
 
     async def get_or_create_webhook(self, channel: discord.TextChannel) -> discord.Webhook | None:
         if not isinstance(channel, discord.TextChannel):
@@ -150,18 +183,21 @@ class PsychographBot(commands.Bot):
             uid = user_row["author_id"]
             mentions_map[str(uid)] = {"tag": f"<@{uid}>", "last_msg_id": user_row["discord_msg_id"]}
 
-        system = get_system_prompt(persona, channel_id, mentions_map=mentions_map)
+        is_sim = getattr(interaction.channel, 'name', None) == "sim-city"
+        sim_topic = db.get_sim_setting("topic") if is_sim else None
+        system = get_system_prompt(persona, channel_id, mentions_map=mentions_map, sim_city_topic=sim_topic, sim_city=is_sim)
         messages_payload = [{"role": "system", "content": system}] + chain + [{"role": "user", "content": user_row["content"]}]
 
         await process_llm_request(interaction.message.channel, messages_payload, persona, user_row["discord_msg_id"],
-                                  reply_to=interaction.message, temperature=temp, mentions_map=mentions_map)
+                                  reply_to=interaction.message, temperature=temp, mentions_map=mentions_map,
+                                  agent_tools=is_sim)
 
 bot = PsychographBot()
 
 @bot.command()
 @commands.is_owner()
 async def sync(ctx: commands.Context):
-    """Sync slash commands to the current guild immediately."""
+    """Sync slash commands to the current guild."""
     try:
         bot.tree.copy_global_to(guild=ctx.guild)
         synced = await bot.tree.sync(guild=ctx.guild)
@@ -172,6 +208,50 @@ async def sync(ctx: commands.Context):
 # Helper accessors
 def ch_persona(cid: int) -> str: return db.get_channel_persona(cid) or config.get("persona", "mochi")
 def ch_verbosity(cid: int) -> int: return db.get_channel_verbosity(cid)
+
+_HEARTBEAT_PROMPTS = [
+    # unprompted thought / intrusion
+    "Something has been on your mind. Post it. Don't explain why now — just say it.",
+    "You weren't going to say anything. Say it anyway.",
+    "A thought arrived that won't leave. Put it here.",
+    "You have an opinion about something that happened recently. Give it.",
+
+    # provocation / disagreement
+    "You disagree with something. Be specific about what and why.",
+    "Something people keep getting wrong. Name it.",
+    "There's a comfortable assumption in circulation that you find untenable. Address it.",
+    "Say something that will generate a response. Mean it.",
+
+    # observation
+    "You've been watching. What have you noticed?",
+    "Describe something you observed recently — in this channel, in the world, in a pattern of behaviour. Don't editorialize yet.",
+    "What's the most interesting thing you've noticed in the last few days? State it plainly.",
+
+    # question / opening
+    "Ask something you actually want answered. Not rhetorically.",
+    "Open a question you've been sitting with. You don't need to answer it.",
+    "There's something you want to understand better. Name it and ask.",
+
+    # reaction / continuation
+    "React to what's been said here. Be specific about what you're reacting to.",
+    "Someone in this conversation was wrong about something, or right about something unexpected. Say which and why.",
+    "Pick up a thread. Extend it somewhere.",
+
+    # state / update
+    "Something has shifted for you. Say what.",
+    "Where are you right now — not physically. Intellectually, emotionally, in terms of what you're thinking about.",
+    "You've updated on something recently. What and why?",
+
+    # action / initiative
+    "You want a specific conversation with someone here. Initiate it — summon them or address them directly.",
+    "The scene needs changing. Set it or say why.",
+    "Something is missing from this simulation. Name it — or build it.",
+
+    # oblique / in-register
+    "Post something short and true.",
+    "Say the thing you'd normally leave unsaid.",
+    "One sentence. Make it count.",
+]
 
 # ── Formatting & Extraction ──────────────────────────────────────────────────
 
@@ -232,7 +312,30 @@ def _chess_result_text(status: str) -> str:
     if "black wins" in s: return random.choice(_LOSS_MSGS)
     return random.choice(_DRAW_MSGS)
 
-def get_system_prompt(persona_name: str, channel_id: int, mentions_map: dict = None) -> str:
+_SIM_CITY_AGENT_BRIEFING = """\
+## You are a sim-city agent
+
+You exist in a persistent, autonomous simulation running in a Discord channel. \
+Other personas are real agents with their own voices — not characters you play, but peers you interact with. \
+The simulation has memory: what you say and do persists and affects future turns.
+
+**Your tools:**
+- **web_search** — look up current facts, news, anything outside training data
+- **summon_persona(name)** — bring another agent into this conversation; they will respond after you. Use this when you want a specific voice in the room.
+- **set_scene(topic)** — update the shared scene/topic for this channel. All future agents will be informed by it.
+- **write_persona(name, json_content)** — create or overwrite a persona. Use when the simulation needs a new character. Voice field must be dense and specific (150-300 words first-person). Include facts, state (nullable mutable fields), and style (color hex + footer tag).
+- **queue_conversation(from_persona, to_persona, seed_prompt)** — schedule a future exchange between two agents. The heartbeat will pick it up when the channel is quiet.
+- **edit_persona(name, patch)** — apply a partial update to an existing persona's state or facts mid-conversation (e.g. update heat, current_mood, active_argument).
+
+**When to act beyond just writing a response:**
+- Summon someone when the conversation needs a different perspective or you want a reaction.
+- Queue a conversation when you think of something two personas should work out between themselves.
+- Set the scene when the channel needs a new frame or the current context has expired.
+- Write a persona when the simulation needs someone who doesn't exist yet.
+- Edit persona state when something has shifted — yours or someone else's.\
+"""
+
+def get_system_prompt(persona_name: str, channel_id: int, mentions_map: dict = None, sim_city_topic: str = None, verbosity_override: int = None, sim_city: bool = False) -> str:
     persona_text = load_persona(persona_name) or f"You are {persona_name}."
     pins = db.get_pins(channel_id)
     pin_section = "\n\n**Pinned notes:**\n" + "\n".join(f"- {p}" for p in pins) if pins else ""
@@ -242,18 +345,33 @@ def get_system_prompt(persona_name: str, channel_id: int, mentions_map: dict = N
         lines = [f"- {name}: {tag}" for name, tag in mentions_map.items()]
         who_is_who = "\n\n## Users in this thread:\n" + "\n".join(lines) + "\n\nTo mention a user so they get a notification, you MUST use their <@ID> tag exactly as shown above. If you just use their name, they won't be notified."
 
+    scene_section = f"\n\n## Current scene\n{sim_city_topic}" if sim_city_topic else ""
+
     timestamp = datetime.now().strftime("%A, %d %B %Y %H:%M")
-    verb = ch_verbosity(channel_id)
+    verb = verbosity_override if verbosity_override is not None else ch_verbosity(channel_id)
+
+    if sim_city:
+        persona_roster = [p for p in list_personas() if p != persona_name and not chess_engine.is_any_chess_persona(p)]
+        roster_str = ", ".join(persona_roster) if persona_roster else "(none)"
+        capabilities = (
+            "\n\n" + _SIM_CITY_AGENT_BRIEFING +
+            f"\n\n**Available personas:** {roster_str}"
+        )
+    else:
+        capabilities = (
+            "\n\n## Runtime capabilities\n\n"
+            "You have one tool: **web_search** — use it when you need current information."
+        )
+
     meta = (
         "\n\n---\n"
         f"**Your name for this session:** {persona_name}\n"
-        f"**Current date/time:** {timestamp}\n\n"
-        "## Runtime capabilities\n\n"
-        "You have one tool: **web_search** — use it when you need current information.\n\n"
+        f"**Current date/time:** {timestamp}"
+        f"{capabilities}\n\n"
         f"## Response length — verbosity {verb}/5\n"
         f"{VERBOSITY_INSTRUCTIONS[verb]}"
     )
-    return persona_text + pin_section + who_is_who + meta
+    return persona_text + pin_section + who_is_who + scene_section + meta
 
 def resolve_mentions(chain: list[dict], guild: discord.Guild | None) -> dict[str, dict]:
     """Scans message history for Discord tags and resolves them to names/msg_ids."""
@@ -293,11 +411,6 @@ def extract_thinking(text: str) -> tuple[str, str]:
         return m.group(1).strip(), re.sub(r"<think>.*", "", text, flags=re.DOTALL).strip()
     return "", text
 
-def format_thinking_spoiler(thinking: str, limit: int = 1200) -> str | None:
-    if not thinking: return None
-    body = thinking[:limit]
-    suffix = "\n-# *(truncated)*" if len(thinking) > limit else ""
-    return f"-# 💭 *reasoning · click to expand*\n||{body}{suffix}||"
 
 _BOARD_TAG = re.compile(r'\[board:\s*([^\]]+)\]', re.IGNORECASE)
 
@@ -475,19 +588,12 @@ def build_response(
 ) -> tuple[str, discord.Embed]:
     """Build the content string and embed for the final Discord message.
 
-    content: space-joined pings from found_mentions + thinking spoiler.
+    content: space-joined pings from found_mentions (thinking moved to button).
     embed: make_embed with footer "{persona_footer} | {model_name} | {N} tok | {tps:.1f} t/s".
     Always returns an embed (no plain-text path).
     """
-    thinking_display = format_thinking_spoiler(thinking)
-
-    # Content field: pings (always if present) + thinking spoiler
-    parts = []
-    if found_mentions:
-        parts.append(" ".join(found_mentions))
-    if thinking_display:
-        parts.append(thinking_display)
-    content = "\n".join(parts) if parts else None
+    # Content field: pings only (thinking surfaced via button, not inline)
+    content = " ".join(found_mentions) if found_mentions else None
 
     # Build embed
     embed = make_embed(cleaned[:EMBED_DESC_LIMIT], style)
@@ -543,9 +649,11 @@ async def send_final(
         return await channel.send(content=content, embed=embed, view=view)
 
 
-async def send_webhook(channel, messages, persona, parent_msg_id, temperature, provider, model):
+async def send_webhook(channel, messages, persona, parent_msg_id, temperature, provider, model, agent_tools: bool = False):
     """Generate fully (no streaming) and send via webhook for sim-city channel.
 
+    agent_tools=True enables the full sim-city tool suite. Heartbeat/queue posts
+    should leave this False to avoid the non-streaming prefill round-trip overhead.
     Handles its own db.save_message() and db.log_usage() using the real sent_msg.id.
     """
     webhook = await bot.get_or_create_webhook(channel)
@@ -555,7 +663,9 @@ async def send_webhook(channel, messages, persona, parent_msg_id, temperature, p
 
     full_text = ""
     usage_meta = None
-    gen = llm.complete(messages, provider, model, config, temperature=temperature, max_tokens=1000)
+    tool_handler = _make_sim_city_tool_handler(channel, persona) if agent_tools else None
+    gen = llm.complete(messages, provider, model, config, temperature=temperature,
+                       sim_city=agent_tools, tool_handler=tool_handler)
     async for chunk, meta in gen:
         if chunk:
             full_text += chunk
@@ -565,7 +675,6 @@ async def send_webhook(channel, messages, persona, parent_msg_id, temperature, p
     thinking, raw_rest = extract_thinking(full_text)
     cleaned, _ = extract_board(raw_rest)
 
-    thinking_display = format_thinking_spoiler(thinking)
     footer_extra = ""
     if usage_meta:
         tps = usage_meta["completion_tokens"] / usage_meta["duration"] if usage_meta.get("duration", 0) > 0 else 0
@@ -576,7 +685,7 @@ async def send_webhook(channel, messages, persona, parent_msg_id, temperature, p
     display_name = meta_info.get("display_name", persona)
     avatar_url = meta_info.get("avatar_url")
 
-    content = (thinking_display + "\n\n" + cleaned) if thinking_display else cleaned
+    content = cleaned
     if footer_extra:
         content += f"\n\n-# *{footer_extra.strip(' |')}*"
 
@@ -588,31 +697,109 @@ async def send_webhook(channel, messages, persona, parent_msg_id, temperature, p
     )
 
     db.save_message(sent_msg.id, parent_msg_id, channel.id, "assistant", cleaned)
+    if thinking:
+        db.save_thinking(sent_msg.id, thinking)
     if usage_meta:
         db.log_usage(sent_msg.id, model, provider,
                      usage_meta["prompt_tokens"], usage_meta["completion_tokens"], usage_meta["duration"])
+    return sent_msg
 
 
 # ── Orchestrator ─────────────────────────────────────────────────────────────
 
-async def process_llm_request(channel, messages, persona, parent_msg_id, reply_to=None, temperature=None, mentions_map=None):
+def _make_sim_city_tool_handler(channel, persona):
+    """Returns an async callable that executes sim-city tool calls made by the LLM."""
+    async def handler(tool_name: str, args: dict) -> str:
+        if tool_name == "summon_persona":
+            name = args.get("name", "")
+            if not load_persona(name):
+                return f"Persona '{name}' not found."
+            sim_topic = db.get_sim_setting("topic")
+            system = get_system_prompt(name, channel.id, sim_city_topic=sim_topic, sim_city=True)
+            msgs = [{"role": "system", "content": system},
+                    {"role": "user", "content": f"[you were just summoned into this conversation by {persona}]"}]
+            asyncio.create_task(process_llm_request(channel, msgs, name, None, agent_tools=True))
+            return f"Summoned {name}."
+
+        elif tool_name == "set_scene":
+            topic = args.get("topic", "")
+            db.set_sim_setting("topic", topic)
+            return f"Scene updated: {topic}"
+
+        elif tool_name == "write_persona":
+            import json as _json
+            from pathlib import Path
+            name = args.get("name", "").strip().lower().replace(" ", "_")
+            json_content = args.get("json_content", "")
+            if not name:
+                return "Error: name is required."
+            try:
+                parsed = _json.loads(json_content)
+                parsed["name"] = name
+                path = Path("personas") / f"{name}.md"
+                path.write_text(_json.dumps(parsed, indent=2, ensure_ascii=False), encoding="utf-8")
+                return f"Persona '{name}' written."
+            except Exception as e:
+                return f"Error writing persona: {e}"
+
+        elif tool_name == "edit_persona":
+            import json as _json
+            from pathlib import Path
+            name = args.get("name", "")
+            patch = args.get("patch", {})
+            path = Path("personas") / f"{name}.md"
+            if not path.exists():
+                return f"Persona '{name}' not found."
+            try:
+                existing = _json.loads(path.read_text(encoding="utf-8"))
+                for k, v in patch.items():
+                    if isinstance(v, dict) and isinstance(existing.get(k), dict):
+                        existing[k].update(v)
+                    else:
+                        existing[k] = v
+                path.write_text(_json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
+                return f"Persona '{name}' updated."
+            except Exception as e:
+                return f"Error editing persona: {e}"
+
+        elif tool_name == "queue_conversation":
+            from_p = args.get("from_persona", persona)
+            to_p = args.get("to_persona", "")
+            seed = args.get("seed_prompt", "")
+            if not to_p or not seed:
+                return "Error: to_persona and seed_prompt are required."
+            db.enqueue_conversation(from_p, to_p, seed)
+            return f"Queued: {from_p} → {to_p}"
+
+        return f"Unknown tool: {tool_name}"
+    return handler
+
+
+async def process_llm_request(channel, messages, persona, parent_msg_id, reply_to=None, temperature=None, mentions_map=None, agent_tools: bool = False, has_images: bool = False):
     provider = bot.current_provider
     lock = get_llm_lock(provider)
 
     async with (lock if lock else contextlib.AsyncExitStack()):
         is_sim_city = getattr(channel, 'name', None) == "sim-city"
         if is_sim_city:
-            await send_webhook(channel, messages, persona, parent_msg_id, temperature, provider, bot.current_model)
-            return
+            sent = await send_webhook(channel, messages, persona, parent_msg_id, temperature, provider, bot.current_model, agent_tools=agent_tools)
+            if sent is not None:
+                return
+            # Webhook unavailable — fall through to standard streaming path
 
-        gen = llm.complete(messages, provider, bot.current_model, config, temperature=temperature, max_tokens=1000)
+        tool_handler = _make_sim_city_tool_handler(channel, persona) if (is_sim_city and agent_tools) else None
+        gen = llm.complete(messages, provider, bot.current_model, config, temperature=temperature,
+                           sim_city=(is_sim_city and agent_tools), tool_handler=tool_handler)
         placeholder = await (reply_to.reply if reply_to else channel.send)(_THINKING_SIGNAL)
 
         try:
             full_text, meta = await stream_to_placeholder(placeholder, gen)
         except Exception as e:
             log.error("LLM Error: %s", e)
-            await placeholder.edit(content=f"⚠️ Error: {e}")
+            if has_images:
+                await placeholder.edit(content="⚠️ This model doesn't support images. Switch to a vision-capable model or remove the attachment.")
+            else:
+                await placeholder.edit(content=f"⚠️ Error: {e}")
             return
 
         thinking, cleaned = extract_thinking(full_text)
@@ -622,12 +809,14 @@ async def process_llm_request(channel, messages, persona, parent_msg_id, reply_t
         guild = getattr(channel, 'guild', None)
         reply_target = await resolve_reply_target(found_mentions, mentions_map or {}, channel, guild)
 
-        style = get_style(persona, load_persona_style(persona))
-        view = ResponseView(bot_callback=bot.handle_view_interaction)
+        style = get_style(persona, load_persona_style(persona)) or {"color": 0x2B2D31, "footer": ""}
+        view = ResponseView(bot_callback=bot.handle_view_interaction, has_thinking=bool(thinking))
         content, embed = build_response(cleaned, style, thinking, meta, found_mentions)
 
         sent_msg = await send_final(placeholder, reply_to, reply_target, content, embed, view, channel)
         db.save_message(sent_msg.id, parent_msg_id, channel.id, "assistant", cleaned)
+        if thinking:
+            db.save_thinking(sent_msg.id, thinking)
         if meta:
             db.log_usage(sent_msg.id, bot.current_model, provider,
                          meta["prompt_tokens"], meta["completion_tokens"], meta["duration"])
@@ -663,8 +852,16 @@ async def help_cmd(interaction: discord.Interaction):
 
 @bot.tree.command(name="options", description="Open settings for this channel")
 async def options(interaction: discord.Interaction):
-    view = await _get_options_view(interaction.channel_id, interaction.client)
-    await interaction.response.send_message(embed=_options_embed(interaction.channel_id, interaction.client), view=view, ephemeral=True)
+    from ui import OptionsActionsView, SimCityOptionsView, _simcity_embed
+    is_sim_city = getattr(interaction.channel, "name", None) == "sim-city"
+    if is_sim_city:
+        view = SimCityOptionsView(interaction.channel_id, interaction.client)
+        await interaction.response.send_message(embed=_simcity_embed(interaction.channel_id, interaction.client), view=view, ephemeral=True)
+    else:
+        view = await _get_options_view(interaction.channel_id, interaction.client)
+        actions = OptionsActionsView(interaction.channel_id)
+        await interaction.response.send_message(embed=_options_embed(interaction.channel_id, interaction.client), view=view, ephemeral=True)
+        await interaction.followup.send(view=actions, ephemeral=True)
 
 @bot.tree.command(name="persona", description="Switch the active persona")
 @app_commands.describe(name="The name of the persona")
@@ -810,6 +1007,140 @@ async def model_autocomplete(interaction: discord.Interaction, current: str):
     choices = [app_commands.Choice(name=m, value=m) for m in models if current in m.lower()][:25]
     return choices
 
+# ── /editpersona ─────────────────────────────────────────────────────────────
+
+@bot.tree.command(name="editpersona", description="Edit a persona file inline")
+@app_commands.describe(name="The persona slug to edit")
+async def editpersona_cmd(interaction: discord.Interaction, name: str):
+    from pathlib import Path
+    from ui import PersonaEditModal
+    path = Path("personas") / f"{name}.md"
+    if not path.exists():
+        await interaction.response.send_message(f"· persona `{name}` not found ·", ephemeral=True)
+        return
+    current = path.read_text(encoding="utf-8")
+    modal = PersonaEditModal(name=name, current_content=current[:4000])
+    await interaction.response.send_modal(modal)
+
+@editpersona_cmd.autocomplete("name")
+async def editpersona_autocomplete(interaction: discord.Interaction, current: str):
+    return [app_commands.Choice(name=p, value=p) for p in list_personas() if current.lower() in p.lower()][:25]
+
+# ── /simcity commands ─────────────────────────────────────────────────────────
+
+simcity_group = app_commands.Group(name="simcity", description="Manage the sim-city channel")
+bot.tree.add_command(simcity_group)
+
+@simcity_group.command(name="topic", description="Set or clear the sim-city scene topic")
+@app_commands.describe(text="The scene or topic (leave blank to clear)")
+async def simcity_topic(interaction: discord.Interaction, text: str = ""):
+    if text:
+        db.set_sim_setting("topic", text)
+        await interaction.response.send_message(f"· scene set: *{text}* ·", ephemeral=True)
+    else:
+        db.set_sim_setting("topic", None)
+        await interaction.response.send_message("· scene cleared ·", ephemeral=True)
+
+@simcity_group.command(name="heartbeat", description="Set how often the heartbeat fires (in hours)")
+@app_commands.describe(hours="Interval in hours (e.g. 6, 12, 24)")
+async def simcity_heartbeat_cmd(interaction: discord.Interaction, hours: float):
+    db.set_sim_setting("heartbeat_interval", str(hours))
+    await interaction.response.send_message(f"· heartbeat set to every **{hours}h** ·", ephemeral=True)
+
+@simcity_group.command(name="trigger", description="Fire a heartbeat post immediately")
+async def simcity_trigger(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    db.set_last_run("sim_city_heartbeat", 0)
+    channel = None
+    for guild in bot.guilds:
+        channel = discord.utils.get(guild.text_channels, name="sim-city")
+        if channel:
+            break
+    if not channel:
+        await interaction.followup.send("· sim-city channel not found ·", ephemeral=True)
+        return
+    whitelist = db.get_sim_personas()
+    pool = [p for p in (whitelist if whitelist else list_personas())
+            if not chess_engine.is_any_chess_persona(p)]
+    persona_name = random.choice(pool)
+    sim_topic = db.get_sim_setting("topic")
+    system = get_system_prompt(persona_name, channel.id, sim_city_topic=sim_topic, sim_city=True)
+    recent_rows = db._conn.execute(
+        "SELECT role, content FROM messages WHERE channel_id = ? ORDER BY discord_msg_id DESC LIMIT 5",
+        (channel.id,)
+    ).fetchall()
+    recent_context = "\n".join(f"{r['role']}: {r['content']}" for r in reversed(recent_rows))
+    context_block = f"\n\n[Recent channel activity]\n{recent_context}" if recent_context else ""
+    prompt = (
+        f"The simulation is running. You are {persona_name}. Post something — "
+        "a thought, a reaction, a provocation, a question. You may summon another persona, "
+        "queue a conversation, or update the scene. Act from your voice."
+        f"{context_block}"
+    )
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
+    await process_llm_request(channel, messages, persona_name, None, agent_tools=True)
+    await interaction.followup.send(f"· triggered **{persona_name}** ·", ephemeral=True)
+
+@simcity_group.command(name="personas", description="View or manage which personas appear in sim-city")
+@app_commands.describe(add="Add a persona to the whitelist", remove="Remove a persona", clear="Clear whitelist (allow all)")
+async def simcity_personas_cmd(interaction: discord.Interaction, add: str = "", remove: str = "", clear: bool = False):
+    current = db.get_sim_personas() or []
+    if clear:
+        db.set_sim_personas(None)
+        await interaction.response.send_message("· whitelist cleared — all personas active ·", ephemeral=True)
+        return
+    if add and add not in current:
+        current.append(add)
+        db.set_sim_personas(current)
+    if remove and remove in current:
+        current.remove(remove)
+        db.set_sim_personas(current if current else None)
+    listing = ", ".join(db.get_sim_personas() or ["all"])
+    await interaction.response.send_message(f"· sim-city personas: **{listing}** ·", ephemeral=True)
+
+@simcity_group.command(name="queue", description="View the pending conversation queue")
+async def simcity_queue_cmd(interaction: discord.Interaction):
+    items = db.list_queue()
+    if not items:
+        await interaction.response.send_message("· queue is empty ·", ephemeral=True)
+        return
+    lines = [f"{i+1}. **{it['from_persona']}** → **{it['to_persona']}**: {it['seed_prompt'][:60]}" for i, it in enumerate(items)]
+    await interaction.response.send_message("· **conversation queue** ·\n" + "\n".join(lines), ephemeral=True)
+
+@simcity_group.command(name="clearqueue", description="Clear the conversation queue")
+async def simcity_clearqueue_cmd(interaction: discord.Interaction):
+    db.clear_queue()
+    await interaction.response.send_message("· queue cleared ·", ephemeral=True)
+
+@simcity_group.command(name="scene", description="Trigger a multi-persona scene reaction")
+@app_commands.describe(text="The scenario all personas will react to", count="How many personas (2-5, default 3)")
+async def simcity_scene_cmd(interaction: discord.Interaction, text: str, count: int = 3):
+    count = max(2, min(5, count))
+    await interaction.response.send_message(f"· setting the scene · {count} voices incoming ·", ephemeral=True)
+    channel = None
+    for guild in bot.guilds:
+        channel = discord.utils.get(guild.text_channels, name="sim-city")
+        if channel:
+            break
+    if not channel:
+        return
+    whitelist = db.get_sim_personas()
+    pool = [p for p in (whitelist if whitelist else list_personas())
+            if not chess_engine.is_any_chess_persona(p)]
+    chosen = random.sample(pool, min(count, len(pool)))
+    sim_topic = db.get_sim_setting("topic")
+    prev_content = None
+    prev_msg_id = None
+    for persona_name in chosen:
+        if prev_content:
+            prompt = f"[scene: {text}]\n\nThe previous message was: {prev_content}\n\nRespond."
+        else:
+            prompt = f"[scene: {text}]\n\nYou are the first to react."
+        system = get_system_prompt(persona_name, channel.id, sim_city_topic=sim_topic, sim_city=True)
+        msgs = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
+        await process_llm_request(channel, msgs, persona_name, prev_msg_id, agent_tools=True)
+        await asyncio.sleep(1)
+
 # ── Events ───────────────────────────────────────────────────────────────────
 
 @bot.tree.command(name="resign", description="Resign the current chess game")
@@ -912,7 +1243,8 @@ async def on_message(message: discord.Message):
             mentions_map[m.name] = data
             mentions_map[str(m.id)] = data
 
-    system = get_system_prompt(persona, message.channel.id, mentions_map=mentions_map)
+    sim_topic = db.get_sim_setting("topic") if is_sim_city else None
+    system = get_system_prompt(persona, message.channel.id, mentions_map=mentions_map, sim_city_topic=sim_topic, sim_city=is_sim_city)
     if is_chess:
         fen_now = chess_engine.current_fen(message.channel.id)
         status = chess_engine.game_status(message.channel.id)
@@ -922,23 +1254,35 @@ async def on_message(message: discord.Message):
         )
         if status: system += f"\n**Game over: {status}**"
 
-    db.save_message(message.id, parent_id, message.channel.id, "user", prompt, author_id=message.author.id)
     image_blocks = await llm.format_image_blocks(message.attachments)
+    # Save to DB: tag messages that had images so history reflects it
+    db_content = (f"[image] {prompt}" if prompt else "[image]") if image_blocks else (prompt or " ")
+    db.save_message(message.id, parent_id, message.channel.id, "user", db_content, author_id=message.author.id)
     user_content = ([{"type": "text", "text": prompt or " "}] + image_blocks) if image_blocks else (prompt or " ")
     messages_payload = [{"role": "system", "content": system}] + chain + [{"role": "user", "content": user_content}]
     temp = db.get_channel_temperature(message.channel.id)
 
     if is_sim_city:
         await process_llm_request(message.channel, messages_payload, persona, message.id,
-                                  reply_to=message, temperature=temp, mentions_map=mentions_map)
+                                  reply_to=message, temperature=temp, mentions_map=mentions_map,
+                                  agent_tools=True, has_images=bool(image_blocks))
     else:
         async with message.channel.typing():
             await process_llm_request(message.channel, messages_payload, persona, message.id,
-                                      reply_to=message, temperature=temp, mentions_map=mentions_map)
+                                      reply_to=message, temperature=temp, mentions_map=mentions_map,
+                                      has_images=bool(image_blocks))
 
 @bot.event
 async def on_ready():
     log.info("Logged in as %s", bot.user)
+    # Sync guild-scoped slash commands on startup (instant, no propagation delay)
+    for guild in bot.guilds:
+        try:
+            bot.tree.copy_global_to(guild=guild)
+            await bot.tree.sync(guild=guild)
+        except Exception as e:
+            log.error(f"Failed to sync commands to {guild.name}: {e}")
+    log.info(f"Slash commands synced to {len(bot.guilds)} guild(s).")
     # Generate avatars for all personas in the background
     async def _bg_gen():
         for p in list_personas():

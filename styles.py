@@ -146,11 +146,13 @@ VERBOSITY_LABELS = {
 }
 
 
-def get_style(persona_name: str, persona_style: dict | None = None) -> dict | None:
-    """Return style dict from persona data or fallback registry. None = no embed."""
+_DEFAULT_STYLE = {"color": 0x2B2D31, "footer": ""}
+
+def get_style(persona_name: str, persona_style: dict | None = None) -> dict:
+    """Return style dict from persona data or fallback registry."""
     if persona_style:
         return persona_style
-    return PERSONA_STYLES.get(persona_name)
+    return PERSONA_STYLES.get(persona_name) or _DEFAULT_STYLE
 
 
 def make_embed(text: str, style: dict) -> discord.Embed:

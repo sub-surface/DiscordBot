@@ -22,8 +22,10 @@ def init_db() -> None:
                 discord_msg_id  INTEGER PRIMARY KEY,
                 parent_msg_id   INTEGER,
                 channel_id      INTEGER NOT NULL,
+                author_id       INTEGER,
                 role            TEXT NOT NULL,
                 content         TEXT NOT NULL,
+                thinking        TEXT,
                 ts              DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -85,8 +87,29 @@ def init_db() -> None:
                 last_run_ts     REAL
             )
         """)
+
+        _conn.execute("""
+            CREATE TABLE IF NOT EXISTS sim_city_settings (
+                key     TEXT PRIMARY KEY,
+                value   TEXT
+            )
+        """)
+
+        _conn.execute("""
+            CREATE TABLE IF NOT EXISTS sim_city_queue (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_persona    TEXT NOT NULL,
+                to_persona      TEXT NOT NULL,
+                seed_prompt     TEXT NOT NULL,
+                ts              DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         
         # Migration: add columns to existing tables that predate them
+        if "author_id" not in cols:
+            _conn.execute("ALTER TABLE messages ADD COLUMN author_id INTEGER")
+        if "thinking" not in cols:
+            _conn.execute("ALTER TABLE messages ADD COLUMN thinking TEXT")
         cs_cols = [r["name"] for r in _conn.execute("PRAGMA table_info(channel_settings)").fetchall()]
         if "reset_ts" not in cs_cols:
             _conn.execute("ALTER TABLE channel_settings ADD COLUMN reset_ts REAL")
@@ -107,6 +130,20 @@ def get_message(discord_msg_id: int) -> dict | None:
     ).fetchone()
     return dict(row) if row else None
 
+def save_thinking(discord_msg_id: int, thinking: str) -> None:
+    with _conn:
+        _conn.execute(
+            "UPDATE messages SET thinking = ? WHERE discord_msg_id = ?",
+            (thinking, discord_msg_id),
+        )
+
+def get_thinking(discord_msg_id: int) -> str | None:
+    row = _conn.execute(
+        "SELECT thinking FROM messages WHERE discord_msg_id = ?",
+        (discord_msg_id,),
+    ).fetchone()
+    return row["thinking"] if row else None
+
 def delete_message(discord_msg_id: int) -> None:
     with _conn:
         _conn.execute("DELETE FROM messages WHERE discord_msg_id = ?", (discord_msg_id,))
@@ -114,20 +151,20 @@ def delete_message(discord_msg_id: int) -> None:
 def get_message_chain(start_msg_id: int, limit: int = 40) -> list[dict]:
     """Fetch a chain of parent messages using a Recursive CTE."""
     query = """
-    WITH RECURSIVE chain(discord_msg_id, parent_msg_id, role, content, depth) AS (
-        SELECT discord_msg_id, parent_msg_id, role, content, 0
-        FROM messages 
+    WITH RECURSIVE chain(discord_msg_id, parent_msg_id, author_id, role, content, depth) AS (
+        SELECT discord_msg_id, parent_msg_id, author_id, role, content, 0
+        FROM messages
         WHERE discord_msg_id = ?
         UNION ALL
-        SELECT m.discord_msg_id, m.parent_msg_id, m.role, m.content, c.depth + 1
+        SELECT m.discord_msg_id, m.parent_msg_id, m.author_id, m.role, m.content, c.depth + 1
         FROM messages m
         JOIN chain c ON m.discord_msg_id = c.parent_msg_id
         WHERE c.depth < ?
     )
-    SELECT role, content FROM chain ORDER BY depth DESC;
+    SELECT discord_msg_id, author_id, role, content FROM chain ORDER BY depth DESC;
     """
     rows = _conn.execute(query, (start_msg_id, limit)).fetchall()
-    return [{"role": r["role"], "content": r["content"]} for r in rows]
+    return [{"discord_msg_id": r["discord_msg_id"], "author_id": r["author_id"], "role": r["role"], "content": r["content"]} for r in rows]
 
 def add_pin(channel_id: int, content: str) -> None:
     with _conn:
@@ -294,3 +331,60 @@ def get_latest_usage(msg_id: int) -> dict | None:
         (msg_id,),
     ).fetchone()
     return dict(row) if row else None
+
+# ── Sim-city settings ──────────────────────────────────────────────────────────
+
+def get_sim_setting(key: str) -> str | None:
+    row = _conn.execute("SELECT value FROM sim_city_settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+def set_sim_setting(key: str, value: str | None) -> None:
+    if value is None:
+        with _conn:
+            _conn.execute("DELETE FROM sim_city_settings WHERE key = ?", (key,))
+    else:
+        with _conn:
+            _conn.execute(
+                "INSERT INTO sim_city_settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+
+def get_sim_personas() -> list[str] | None:
+    """Returns whitelist of personas for sim-city, or None if all personas allowed."""
+    raw = get_sim_setting("persona_whitelist")
+    if not raw:
+        return None
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+def set_sim_personas(names: list[str] | None) -> None:
+    set_sim_setting("persona_whitelist", ",".join(names) if names else None)
+
+# ── Sim-city queue ─────────────────────────────────────────────────────────────
+
+def enqueue_conversation(from_persona: str, to_persona: str, seed_prompt: str) -> None:
+    with _conn:
+        _conn.execute(
+            "INSERT INTO sim_city_queue (from_persona, to_persona, seed_prompt) VALUES (?, ?, ?)",
+            (from_persona, to_persona, seed_prompt),
+        )
+
+def dequeue_conversation() -> dict | None:
+    row = _conn.execute(
+        "SELECT id, from_persona, to_persona, seed_prompt FROM sim_city_queue ORDER BY ts ASC LIMIT 1"
+    ).fetchone()
+    if not row:
+        return None
+    with _conn:
+        _conn.execute("DELETE FROM sim_city_queue WHERE id = ?", (row["id"],))
+    return dict(row)
+
+def list_queue() -> list[dict]:
+    rows = _conn.execute(
+        "SELECT id, from_persona, to_persona, seed_prompt, ts FROM sim_city_queue ORDER BY ts ASC"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+def clear_queue() -> None:
+    with _conn:
+        _conn.execute("DELETE FROM sim_city_queue")

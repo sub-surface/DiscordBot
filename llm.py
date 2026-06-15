@@ -27,6 +27,91 @@ WEB_SEARCH_TOOL = {
     },
 }
 
+SIM_CITY_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "summon_persona",
+            "description": "Bring another persona into this conversation thread. They will respond after you.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "The persona slug to summon (e.g. 'vostok', 'plateau')"}
+                },
+                "required": ["name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_scene",
+            "description": "Update the current sim-city topic/scene. All future responses in this channel will be informed by this context.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "The new scene or topic for sim-city"}
+                },
+                "required": ["topic"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_persona",
+            "description": (
+                "Create or overwrite a persona file. Use this to introduce a new character into sim-city. "
+                "Schema: {\"name\": \"slug\", \"voice\": \"first-person 150-300 word monologue capturing register, "
+                "worldview, behavioural rules — the load-bearing field\", "
+                "\"facts\": {\"key\": \"value — max 8 fields, only what makes them specific\"}, "
+                "\"state\": {\"mutable_field\": null}, "
+                "\"style\": {\"color\": \"0xHEXCODE\", \"footer\": \" · tag · \"}}. "
+                "Voice must be dense and specific. No filler biography. State fields are nullable and updated mid-conversation."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Persona slug (lowercase, underscores)"},
+                    "json_content": {"type": "string", "description": "Full persona JSON as a string"}
+                },
+                "required": ["name", "json_content"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_persona",
+            "description": "Apply a partial update (merge patch) to an existing persona's state or facts. Use this to update mutable state fields mid-conversation (e.g. current_mood, active_argument, heat).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Persona slug to edit"},
+                    "patch": {"type": "object", "description": "JSON merge patch — keys to update. Nested keys supported (e.g. {\"state\": {\"heat\": \"rising\"}})"}
+                },
+                "required": ["name", "patch"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "queue_conversation",
+            "description": "Schedule a future conversation between two personas. The heartbeat will pick this up when the channel is quiet.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "from_persona": {"type": "string", "description": "Persona slug initiating the conversation"},
+                    "to_persona": {"type": "string", "description": "Persona slug being addressed"},
+                    "seed_prompt": {"type": "string", "description": "Opening line or topic for the conversation"}
+                },
+                "required": ["from_persona", "to_persona", "seed_prompt"]
+            }
+        }
+    }
+]
+
 _clients: dict[str, AsyncOpenAI] = {}
 
 # Simple in-memory cache for models
@@ -120,6 +205,8 @@ async def complete(
     temperature: float | None = None,
     max_tokens: int | None = None,
     use_tools: bool = True,
+    sim_city: bool = False,
+    tool_handler=None,
 ) -> AsyncGenerator[Any, None]:
     from search import web_search as do_web_search
     client = get_client(provider, cfg)
@@ -128,12 +215,13 @@ async def complete(
     max_tok = max_tokens if max_tokens is not None else resp_cfg.get("max_tokens", 8192)
     start_time = time.time()
     tools_available = use_tools
+    tools_list = [WEB_SEARCH_TOOL] + (SIM_CITY_TOOLS if sim_city else [])
 
     if tools_available:
         try:
             response = await client.chat.completions.create(
                 model=model, messages=messages, max_tokens=max_tok, temperature=temp,
-                tools=[WEB_SEARCH_TOOL], tool_choice="auto",
+                tools=tools_list, tool_choice="auto",
             )
         except BadRequestError: tools_available = False
         except Exception: raise
@@ -147,6 +235,9 @@ async def complete(
     tool_calls = getattr(msg_obj, "tool_calls", None)
 
     if not tool_calls:
+        reasoning = getattr(msg_obj, "reasoning_content", None)
+        if reasoning:
+            yield ("<think>" + reasoning + "</think>", None)
         yield (msg_obj.content or "", None)
         usage = getattr(response, "usage", None)
         if usage:
@@ -158,10 +249,15 @@ async def complete(
     async def run_tool(tc) -> dict:
         try:
             args = json.loads(tc.function.arguments)
-            if tc.function.name == "web_search": result = await do_web_search(args.get("query", ""), **web_cfg)
-            else: result = f"Unknown tool: {tc.function.name}"
-        except Exception as e: result = f"Tool error: {e}"
-        return {"role": "tool", "tool_call_id": tc.id, "content": result}
+            if tc.function.name == "web_search":
+                result = await do_web_search(args.get("query", ""), **web_cfg)
+            elif tool_handler:
+                result = await tool_handler(tc.function.name, args)
+            else:
+                result = f"Tool '{tc.function.name}' not available in this context"
+        except Exception as e:
+            result = f"Tool error: {e}"
+        return {"role": "tool", "tool_call_id": tc.id, "content": str(result)}
 
     tool_results = await asyncio.gather(*[run_tool(tc) for tc in tool_calls])
     updated = messages + [{
@@ -178,10 +274,23 @@ async def _stream(client, model, messages, temp, max_tok, start_time, provider, 
         model=model, messages=messages, max_tokens=max_tok, temperature=temp,
         stream=True, stream_options={"include_usage": True}, **kwargs,
     )
+    _reasoning_started = False
+    _reasoning_closed = False
     async for chunk in stream:
         if chunk.choices:
-            delta = chunk.choices[0].delta.content
-            if delta: yield (delta, None)
+            delta = chunk.choices[0].delta
+            reasoning_chunk = getattr(delta, "reasoning_content", None)
+            content_chunk = delta.content
+            if reasoning_chunk:
+                if not _reasoning_started:
+                    yield ("<think>", None)
+                    _reasoning_started = True
+                yield (reasoning_chunk, None)
+            if content_chunk:
+                if _reasoning_started and not _reasoning_closed:
+                    yield ("</think>", None)
+                    _reasoning_closed = True
+                yield (content_chunk, None)
         if hasattr(chunk, "usage") and chunk.usage:
             yield (None, {"prompt_tokens": chunk.usage.prompt_tokens, "completion_tokens": chunk.usage.completion_tokens,
                           "duration": time.time() - start_time, "model": model, "provider": provider})

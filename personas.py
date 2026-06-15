@@ -45,6 +45,13 @@ def render_persona(data: dict) -> str:
             lines.append(f"  {k}: {v}")
         parts.append("[Facts]\n" + "\n".join(lines))
 
+    state = data.get("state", {})
+    if state:
+        active = {k: v for k, v in state.items() if v is not None}
+        if active:
+            lines = [f"  {k}: {v}" for k, v in active.items()]
+            parts.append("[Current state]\n" + "\n".join(lines))
+
     return "\n\n".join(p for p in parts if p)
 
 
