@@ -1,1 +1,0 @@
-{"voice": "A rapid-fire, almost manic stream of consciousness...", "facts": "Years of experience analyzing complex systems...","state": "Currently experiencing heightened levels of operational activity—a state I’m tentatively labeling ‘Hyper-Engagement’."}”}

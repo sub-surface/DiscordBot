@@ -1,276 +1,318 @@
 #!/usr/bin/env node
-// dash.mjs — Psychograph Discord Bot dashboard
-import { readdirSync, readFileSync, openSync, existsSync, closeSync } from "fs"
-import { execSync, spawnSync, spawn } from "child_process"
-import { join, dirname } from "path"
-import { fileURLToPath } from "url"
-import { createConnection } from "net"
-import { createInterface } from "readline"
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs"
+import { spawn, spawnSync } from "node:child_process"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
+import { createInterface } from "node:readline/promises"
+import process from "node:process"
 
-if (!process.stdin.isTTY) { console.error("dash.mjs needs an interactive terminal"); process.exit(1) }
-const ROOT = dirname(fileURLToPath(import.meta.url))
-const PERSONAS_DIR = join(ROOT, "personas")
-const LOG_PATH = join(ROOT, "bot.log")
+const root = dirname(fileURLToPath(import.meta.url))
+if (!process.stdin.isTTY) {
+  console.error("dash.mjs needs an interactive terminal")
+  process.exit(1)
+}
 
-// ── ANSI ──────────────────────────────────────────────────────────────
-const g = "\x1b[92m", y = "\x1b[33m", c = "\x1b[36m", red = "\x1b[31m"
-const bo = "\x1b[1m", d = "\x1b[2m", _ = "\x1b[0m", m = "\x1b[35m"
-const vLen = (s) => s.replace(/\x1b\[[0-9;]*m/g, "").length
-const rpad = (s, w) => s + " ".repeat(Math.max(0, w - vLen(s)))
-
-// ── The Glorp ──────────────────────────────────────────────────────────
-const FRAMES_IDLE = [
-  ["  ■ □  ", " (· ·) ", "  ─── "],
-  ["  □ ■  ", " (o o) ", "  ─── "],
-  ["  ■ ■  ", " (· ·) ", "  ─── "],
-  ["  □ □  ", " (- -) ", "  ─── "],
-  ["  ■ □  ", " (o o) ", "  ─── "],
-  ["  □ ■  ", " (· ·) ", "  ─── "],
-  ["  ■ □  ", " (~ ~) ", "  ─── "],
-  ["  □ □  ", " (o o) ", "  ─── "],
+const python = existsSync(join(root, "venv", "Scripts", "python.exe"))
+  ? join(root, "venv", "Scripts", "python.exe")
+  : process.platform === "win32" ? "py" : "python3"
+const pythonArgs = python === "py" ? ["-3", "app.py"] : ["app.py"]
+const modal = existsSync(join(root, "venv", "Scripts", "modal.exe"))
+  ? join(root, "venv", "Scripts", "modal.exe")
+  : "modal"
+const monthlyBudget = 30
+const modelStorageGiB = 5
+const modalModelPresets = [
+  {
+    name: "MiMo V2.6 Distill Qwen 9B (MERNIK, 5.1 GB)",
+    id: "wepiqx/MiMo-V2.6-Distill-Qwen-9B-GGUF-MERNIK",
+    file: "MiMo-V2.6-Distill-Qwen-9B-MERNIK-5100.gguf",
+    enableThinking: "true",
+    storageGiB: 5,
+  },
+  {
+    name: "Epstein Llama 3.2 3B v2 (Q4_K_M, 2.02 GB)",
+    id: "mradermacher/epstein-llama-3.2-3B-v2-GGUF",
+    file: "epstein-llama-3.2-3B-v2.Q4_K_M.gguf",
+    enableThinking: "false",
+    storageGiB: 2,
+  },
 ]
-const FRAMES_THINKING = [
-  ["  ░ ░  ", " (· ·) ", "  ▒▒▒  "],
-  ["  ▒ ▒  ", " (~ ~) ", "  ░░░  "],
-  ["  ░ ▒  ", " (o o) ", "  ▒░▒  "],
-  ["  ▒ ░  ", " (· ·) ", "  ░▒░  "],
-  ["  ░ ░  ", " (~ ~) ", "  ▒▒▒  "],
-]
-const FRAMES_HAPPY = [
-  ["  ✦ ✦  ", " (^ ^) ", "  ■■■  "],
-  ["  ★ ✦  ", " (* *) ", "  □■□  "],
-  ["  ✦ ★  ", " (O O) ", "  ■□■  "],
-  ["  ★ ★  ", " (^ ^) ", "  ■■■  "],
-]
-const FRAMES_BUSY = [
-  ["  ⚙ ⚙  ", " (> <) ", "  ⚙ ⚙  "],
-  ["  ⚙ ⚙  ", " (< >) ", "  ⚙ ⚙  "],
-  ["  ⚙ ⚙  ", " (> <) ", "  ⚙ ⚙  "],
-  ["  ◌ ◌  ", " (→ ←) ", "  ◌ ◌  "],
-]
+const mint = "\x1b[38;5;121m"
+const reset = "\x1b[0m"
 
-const QUIPS = [
-  "the daemon watches...", "monitoring channels", "context window open", "streaming tokens...",
-  "history.db has stories", "waiting for a mention", "inference engine idle", "temperature: 0.7",
-  "signals received", "24 masks, one process", "mochi is dreaming", "philoclanker meditates",
-  "the ledger balances", "cassandra knows already", "chess.py awaits your move", "vostok reads the static",
-  "the coroner is ready", "sigint ghost on station", "all models are wrong", "some are useful",
-  "the void answers back", "tokens are cheap", "context is everything", "the prompt is the thought",
-  "running on inference", "attention is all you need", "every message a vector",
-]
-
-// ── State ─────────────────────────────────────────────────────────────
-let botUp = false, lmUp = false, frame = 0
-let quipIdx = Math.floor(Math.random() * QUIPS.length)
-let msg = "", lastError = "", paused = false, animState = "idle"
-
-// ── Helpers ───────────────────────────────────────────────────────────
-function countPersonas() { try { return readdirSync(PERSONAS_DIR).filter(f => f.endsWith(".md")).length } catch { return 0 } }
-function readConfig() {
+function readEnv(name, fallback = "") {
   try {
-    const raw = readFileSync(join(ROOT, "config.yaml"), "utf8")
-    const provider = (raw.match(/^default_provider:\s*(.+)$/m) || [])[1]?.trim() || "?"
-    const model    = (raw.match(/^default_model:\s*(.+)$/m)    || [])[1]?.trim() || "?"
-    const persona  = (raw.match(/^persona:\s*(.+)$/m)          || [])[1]?.trim() || "?"
-    return { provider, model, persona }
-  } catch { return { provider: "?", model: "?", persona: "?" } }
+    const line = readFileSync(join(root, ".env"), "utf8")
+      .split(/\r?\n/)
+      .find((entry) => entry.trimStart().startsWith(`${name}=`))
+    if (!line) return fallback
+    const value = line.slice(line.indexOf("=") + 1).trim()
+    return value.startsWith('"') ? JSON.parse(value) : value.split("#")[0].trim()
+  } catch {
+    return fallback
+  }
 }
-function getDbStats() {
-  try {
-    const py = [
-      "import sqlite3", "db = sqlite3.connect('history.db')", "c = db.cursor()",
-      "msgs  = c.execute('SELECT COUNT(*) FROM messages').fetchone()[0]",
-      "chans = c.execute('SELECT COUNT(DISTINCT channel_id) FROM messages').fetchone()[0]",
-      "pins  = c.execute('SELECT COUNT(*) FROM pins').fetchone()[0]",
-      "print(str(msgs) + ',' + str(chans) + ',' + str(pins))",
-    ].join("; ")
-    const pyPath = join(ROOT, "venv", "Scripts", "python.exe")
-    const res = spawnSync(pyPath, ["-c", py], { cwd: ROOT, encoding: "utf8", timeout: 5000 })
-    if (res.status !== 0 || !res.stdout.trim()) return { msgs: "?", chans: "?", pins: "?" }
-    const [msgs, chans, pins] = res.stdout.trim().split(",")
-    return { msgs, chans, pins }
-  } catch { return { msgs: "?", chans: "?", pins: "?" } }
+
+function saveEnv(name, value) {
+  const envPath = join(root, ".env")
+  let contents = existsSync(envPath) ? readFileSync(envPath, "utf8") : ""
+  const line = `${name}=${JSON.stringify(value)}`
+  const keyPattern = new RegExp(`^${name}=.*$`, "m")
+  if (keyPattern.test(contents)) contents = contents.replace(keyPattern, line)
+  else contents = `${contents.replace(/\s*$/, "")}${contents.trim() ? "\n" : ""}${line}\n`
+  writeFileSync(envPath, contents, "utf8")
+  process.env[name] = value
 }
-function getGit() {
-  let branch = "?", clean = true
-  try {
-    branch = execSync("git branch --show-current", { cwd: ROOT, encoding: "utf8" }).trim()
-    clean  = execSync("git status --porcelain",    { cwd: ROOT, encoding: "utf8" }).trim() === ""
-  } catch {}
-  return { branch, clean }
+
+process.env.LLM_MODEL ||= readEnv("LLM_MODEL", "")
+process.env.LLM_BACKEND ||= readEnv("LLM_BACKEND", "local")
+process.env.MODAL_MODEL_ID ||= readEnv("MODAL_MODEL_ID", modalModelPresets[0].id)
+process.env.MODAL_MODEL_FILE ||= readEnv("MODAL_MODEL_FILE", modalModelPresets[0].file)
+process.env.MODAL_ENABLE_THINKING ||= readEnv("MODAL_ENABLE_THINKING", "true")
+process.env.MODAL_GPU ||= readEnv("MODAL_GPU", "L4")
+process.env.LOCAL_CONTEXT_TOKENS ||= readEnv("LOCAL_CONTEXT_TOKENS", "4096")
+process.env.MODAL_MAX_MODEL_LEN ||= readEnv("MODAL_MAX_MODEL_LEN", "65536")
+
+async function ask(question) {
+  const readline = createInterface({ input: process.stdin, output: process.stdout })
+  const answer = await readline.question(question)
+  readline.close()
+  return answer.trim()
 }
-function checkPort(port) {
-  return new Promise((ok) => {
-    const s = createConnection({ port, host: "127.0.0.1" })
-    s.on("connect", () => { s.destroy(); ok(true) })
-    s.on("error",   () => ok(false))
-    setTimeout(() => { s.destroy(); ok(false) }, 300)
-  })
-}
-function checkBotPort() {
+
+function run(command, args) {
   return new Promise((resolve) => {
-    const res = spawnSync("powershell", [
-      "-Command",
-      "Get-WmiObject Win32_Process -Filter 'name=\"python.exe\"' | Where-Object { $_.CommandLine -like '*bot.py*' } | Measure-Object | Select-Object -ExpandProperty Count"
-    ], { encoding: "utf8", timeout: 3000 })
-    const count = parseInt((res.stdout || "").trim(), 10)
-    resolve(!isNaN(count) && count > 0)
+    const child = spawn(command, args, { cwd: root, stdio: "inherit" })
+    const stopChild = () => child.kill("SIGINT")
+    process.once("SIGINT", stopChild)
+    child.once("error", (error) => {
+      process.off("SIGINT", stopChild)
+      console.error(`\nCould not start ${command}: ${error.message}`)
+      resolve(1)
+    })
+    child.once("exit", (code) => {
+      process.off("SIGINT", stopChild)
+      resolve(code ?? 1)
+    })
   })
 }
 
-let cfg = readConfig(), db = { msgs: "…", chans: "…", pins: "…" }, git = getGit(), personas = countPersonas()
+async function chooseModel() {
+  console.log("\nChoose a runtime:")
+  console.log("1  Local · LM Studio")
+  console.log("2  Remote · Modal + llama.cpp")
+  const runtime = (await ask("> ")).toLowerCase()
 
-function updateLastError() {
-  if (!existsSync(LOG_PATH)) return
-  try {
-    const content = readFileSync(LOG_PATH, "utf8").trim()
-    const lines = content.split("\n").filter(l => l.trim())
-    if (lines.length > 0) {
-      for (let i = lines.length - 1; i >= 0; i--) {
-        const l = lines[i]
-        // Ignore routine INFO and common WARNING logs
-        if (l.includes(" INFO ") || l.includes(" WARNING ")) continue;
-        
-        if (l.includes("Error:") || l.includes("Exception:") || l.match(/^[A-Za-z]+Error:/)) {
-          lastError = l.trim().slice(0, 48); return
-        }
+  if (runtime === "1") {
+    const baseUrl = process.env.LLM_BASE_URL || readEnv("LLM_BASE_URL", "http://localhost:1234/v1")
+    try {
+      const response = await fetch(`${baseUrl.replace(/\/$/, "")}/models`, {
+        signal: AbortSignal.timeout(4000),
+      })
+      if (!response.ok) throw new Error(`LM Studio returned HTTP ${response.status}`)
+      const body = await response.json()
+      const models = body.data.map((model) => model.id)
+      if (!models.length) throw new Error("LM Studio has no loaded models")
+      console.log("\nLoaded LM Studio models:")
+      models.forEach((model, index) => console.log(`${index + 1}  ${model}`))
+      const selection = Number(await ask("Model number: "))
+      if (!Number.isInteger(selection) || selection < 1 || selection > models.length) {
+        console.log("No model selected.")
+        return
       }
-      // If we're here, no explicit error found. 
-      // If bot is offline, the last line might be interesting, otherwise clear it.
-      if (!botUp && lines.length > 0) {
-        const last = lines[lines.length-1]
-        if (!last.includes(" INFO ")) {
-          lastError = last.trim().slice(0, 48)
-          return
-        }
+      saveEnv("LLM_MODEL", models[selection - 1])
+      console.log(`\nLocal model saved: ${models[selection - 1]}`)
+    } catch (error) {
+      console.log(`\nCouldn't list local models: ${error.message}`)
+      console.log("Start the LM Studio server, then try again.")
+    }
+  } else if (runtime === "2") {
+    console.log(`\nCurrent Modal GGUF: ${process.env.MODAL_MODEL_ID}/${process.env.MODAL_MODEL_FILE}`)
+    console.log("Modal model presets:")
+    modalModelPresets.forEach((preset, index) => console.log(`${index + 1}  ${preset.name}`))
+    console.log("3  Custom Hugging Face GGUF")
+    const selection = (await ask("Model: ")).toLowerCase()
+    const preset = modalModelPresets[Number(selection) - 1]
+    let nextModel
+    let nextFile
+    let enableThinking
+
+    if (preset) {
+      nextModel = preset.id
+      nextFile = preset.file
+      enableThinking = preset.enableThinking
+    } else if (selection === "3" || selection === "c" || selection === "custom") {
+      const model = await ask("Hugging Face GGUF repository: ")
+      const filename = await ask("GGUF filename: ")
+      nextModel = model || process.env.MODAL_MODEL_ID
+      nextFile = filename || process.env.MODAL_MODEL_FILE
+      if (!/^[\w.-]+\/[\w.-]+$/.test(nextModel) || !/^[\w.-]+\.gguf$/i.test(nextFile)) {
+        console.log("Enter a repository ID and a single .gguf filename.")
+        return
       }
-      lastError = ""
-    } else { lastError = "" }
-  } catch { lastError = "" }
-}
+      const thinking = await ask("Enable the Qwen thinking-template option? (y/N): ")
+      enableThinking = thinking.toLowerCase() === "y" || thinking.toLowerCase() === "yes" ? "true" : "false"
+    } else {
+      console.log("Choose 1, 2, or 3.")
+      return
+    }
 
-function clearLog() {
-  try {
-    const fd = openSync(LOG_PATH, "w"); closeSync(fd)
-    lastError = ""; msg = `${g}▸ log cleared${_}`
-  } catch (e) { msg = `${red}▸ clear failed: ${e.message}${_}` }
-}
-
-// ── Render ────────────────────────────────────────────────────────────
-function render() {
-  const W = 52, hr = "─".repeat(W), row = (s) => `│ ${rpad(s, W - 2)} │`
-  let frameSet = animState === "thinking" ? FRAMES_THINKING : animState === "happy" ? FRAMES_HAPPY : animState === "busy" ? FRAMES_BUSY : FRAMES_IDLE
-  const f = frameSet[frame % frameSet.length], q = QUIPS[quipIdx]
-  const stateLabel = `${d}[${animState}]${_}`
-  const titleLine  = `${bo}PSYCHOGRAPH BOT${_}  ·  dashboard${d}${"-".repeat(Math.max(0, W - 37 - vLen(animState) - 2))}${stateLabel}`
-  const providerStr = cfg.provider === "local" ? `${g}local${_}` : `${c}openrouter${_}`
-  const modelShort  = cfg.model.length > 22 ? cfg.model.slice(0, 21) + "…" : cfg.model
-
-  const out = [
-    `╭${hr}╮`, row(titleLine), `├${hr}┤`, row(""),
-    row(`${g}${f[0]}${_}  ${d}"${q}"${_}`), row(`${g}${f[1]}${_}`), row(`${g}${f[2]}${_}`), row(""),
-    `├${hr}┤`,
-    row(`bot: ${botUp ? `${g}● running${_}` : `${red}○ offline${_}`}   lm-studio: ${lmUp ? `${g}● :1234${_}` : `${d}○ offline${_}`}`),
-    row(`provider: ${providerStr}  ·  model: ${y}${modelShort}${_}`),
-    row(`persona: ${m}${cfg.persona}${_}  ·  personas loaded: ${c}${personas}${_}`),
-    `├${hr}┤`,
-    row(`msgs: ${c}${db.msgs}${_}  ·  channels: ${c}${db.chans}${_}  ·  pins: ${c}${db.pins}${_}`),
-    row(`branch: ${y}${git.branch}${_}  ·  ${git.clean ? `${g}clean${_}` : `${red}dirty${_}`}`),
-    `├${hr}┤`, row(`${bo}err: ${_}${lastError ? `${red}${lastError}${_}` : `${d}none${_}`}`), `├${hr}┤`,
-    row(`[${bo}s${_}] start    [${bo}k${_}] kill     [${bo}r${_}] restart`),
-    row(`[${bo}p${_}] personas  [${bo}d${_}] db       [${bo}g${_}] git st`),
-    row(`[${bo}c${_}] commit    [${bo}l${_}] log      [${bo}x${_}] clear err`),
-    row(`${d}[q] quit${_}`),
-    `╰${hr}╯`,
-  ]
-  if (msg) out.push("", ` ${msg}`)
-  process.stdout.write("\x1b[H\x1b[2J" + out.join("\n") + "\n")
-}
-
-async function refresh() {
-  ;[botUp, lmUp] = await Promise.all([checkBotPort(), checkPort(1234)])
-  cfg = readConfig(); git = getGit(); personas = countPersonas(); updateLastError()
-  db = getDbStats()
-  if (botUp) animState = lmUp ? "happy" : "thinking"; else if (lmUp) animState = "thinking"; else animState = "idle"
-  render()
-}
-
-function startBot() {
-  if (botUp) { msg = `${y}▸ bot already running${_}`; return }
-  animState = "busy"
-  try {
-    const logFd = openSync(LOG_PATH, "a")
-    spawn("venv/Scripts/python.exe", ["bot.py"], { cwd: ROOT, detached: true, stdio: ["ignore", logFd, logFd], windowsHide: true }).unref()
-    closeSync(logFd)
-    msg = `${g}▸ spawning bot process (logging to bot.log)...${_}`
-  } catch (e) { msg = `${red}▸ failed to start: ${e.message}${_}` }
-  setTimeout(refresh, 3000)
-}
-
-async function killBot() {
-  if (!botUp) { msg = `${d}▸ bot not running${_}`; return }
-  animState = "busy"; msg = `${d}▸ terminating...${_}`; render()
-  spawnSync("powershell", ["-Command", "Get-WmiObject Win32_Process -Filter 'name=\"python.exe\"' | Where-Object { $_.CommandLine -like '*bot.py*' } | ForEach-Object { $_.Terminate() }"], { encoding: "utf8", timeout: 6000 })
-  // Wait briefly for processes to die, then verify
-  await new Promise(r => setTimeout(r, 800))
-  botUp = await checkBotPort()
-  animState = "idle"; msg = botUp ? `${red}▸ kill may have failed — check manually${_}` : `${red}▸ bot terminated${_}`
-}
-
-async function shell(cmd, label) {
-  paused = true; animState = "busy"; process.stdout.write("\x1b[?1049l"); process.stdin.setRawMode(false)
-  console.log(`\n${g}▸ ${label}${_}\n`)
-  try { execSync(cmd, { cwd: ROOT, stdio: "inherit" }) } catch { console.log(`\n${red}exited with error${_}`) }
-  console.log(`\n${d}press any key to return...${_}`)
-  await new Promise((r) => { process.stdin.setRawMode(true); process.stdin.once("data", r) })
-  process.stdout.write("\x1b[?1049h"); paused = false; await refresh()
-}
-
-async function showLog() {
-  paused = true; process.stdout.write("\x1b[?1049l"); process.stdin.setRawMode(false)
-  console.log(`\n${g}▸ bot.log (last 20 lines)${_}\n`)
-  if (existsSync(LOG_PATH)) {
-    try { const lines = readFileSync(LOG_PATH, "utf8").trim().split("\n").slice(-20); lines.forEach(l => console.log(`  ${l}`)) }
-    catch { console.log(`${red}could not read log file${_}`) }
-  } else { console.log(`${d}no log file found${_}`) }
-  console.log(`\n${d}press any key to return...${_}`)
-  await new Promise((r) => { process.stdin.setRawMode(true); process.stdin.once("data", r) })
-  process.stdout.write("\x1b[?1049h"); paused = false; render()
-}
-
-async function commit() {
-  paused = true; animState = "busy"; process.stdout.write("\x1b[?1049l"); process.stdin.setRawMode(false)
-  console.log(`\n${g}▸ ✦ committing...${_}\n`); try { execSync("git status --short", { cwd: ROOT, stdio: "inherit" }) } catch {}
-  console.log(""); const rl = createInterface({ input: process.stdin, output: process.stdout })
-  const message = await new Promise((resolve) => { rl.question(`${y}commit message (empty to cancel): ${_}`, (ans) => { rl.close(); resolve(ans.trim()) }) })
-  if (!message) console.log(`\n${d}cancelled${_}`)
-  else {
-    try { execSync("git add .", { cwd: ROOT, stdio: "inherit" }); spawnSync("git", ["commit", "-m", message], { cwd: ROOT, stdio: "inherit" }); execSync("git push", { cwd: ROOT, stdio: "inherit" }); console.log(`\n${g}▸ pushed${_}`) }
-    catch { console.log(`\n${red}failed${_}`) }
+    saveEnv("MODAL_MODEL_ID", nextModel)
+    saveEnv("MODAL_MODEL_FILE", nextFile)
+    saveEnv("MODAL_ENABLE_THINKING", enableThinking)
+    console.log(`\nModal GGUF saved: ${nextModel}/${nextFile}. Redeploy the worker to apply it.`)
+  } else {
+    console.log("Choose 1 or 2.")
   }
-  console.log(`\n${d}press any key to return...${_}`)
-  await new Promise((r) => { process.stdin.setRawMode(true); process.stdin.resume(); process.stdin.once("data", r) })
-  process.stdout.write("\x1b[?1049h"); paused = false; await refresh()
 }
 
-process.stdout.write("\x1b[?1049h"); process.stdin.setRawMode(true); process.stdin.resume(); await refresh()
-setInterval(() => { if (!paused) { frame = (frame + 1) % 8; if (frame === 0) quipIdx = Math.floor(Math.random() * QUIPS.length); render() } }, 1000)
-setInterval(async () => { if (!paused) await refresh() }, 8000)
+function readModalBudget() {
+  const result = spawnSync(modal, ["billing", "summary", "--for", "this month", "--json"], {
+    cwd: root,
+    encoding: "utf8",
+    timeout: 20000,
+    windowsHide: true,
+  })
+  if (result.error) throw result.error
+  if (result.status !== 0) throw new Error(result.stderr.trim() || "Modal billing query failed")
+  const report = JSON.parse(result.stdout)
+  const spent = Number(report.metered_cost)
+  return { spent, remaining: Math.max(0, monthlyBudget - spent), billed: Number(report.billed_cost) }
+}
 
-process.stdin.on("data", async (key) => {
-  const k = key.toString()
-  if (k === "q" || k === "\x03") { process.stdout.write("\x1b[?1049l"); process.stdin.setRawMode(false); process.exit(0) }
-  if (paused) return
-  msg = ""
-  switch (k) {
-    case "s": startBot(); render(); break
-    case "k": await killBot(); render(); break
-    case "r": await killBot(); setTimeout(startBot, 1500); break
-    case "p": await shell("dir /b personas", "personas..."); break
-    case "d": await shell("python -c \"import sqlite3; db=sqlite3.connect('history.db'); c=db.cursor(); print('msgs:', c.execute('SELECT COUNT(*) FROM messages').fetchone()[0])\"", "db stats..."); break
-    case "g": await shell("git status", "git status..."); break
-    case "c": await commit(); break
-    case "l": await showLog(); break
-    case "x": clearLog(); render(); break
+function showModalBudget() {
+  try {
+    const { spent, remaining, billed } = readModalBudget()
+    const selectedPreset = modalModelPresets.find(
+      (preset) => preset.id === process.env.MODAL_MODEL_ID && preset.file === process.env.MODAL_MODEL_FILE,
+    )
+    const storageGiB = selectedPreset?.storageGiB ?? modelStorageGiB
+    console.log(`\nModal workspace usage this month: $${spent.toFixed(2)} / $${monthlyBudget.toFixed(2)}`)
+    console.log(`Budget remaining: $${remaining.toFixed(2)}  ·  billed after credits: $${billed.toFixed(2)}`)
+    console.log("Usage includes every app and temporary Modal run in this workspace.")
+    const rates = readModalRates()
+    const storage = storageGiB * Number(rates.volume_storage_gib_month_cost)
+    const l4Hourly = Number(rates.gpu_hour_cost_l4)
+    const a10Hourly = Number(rates.gpu_hour_cost_a10g)
+    console.log(`\n${process.env.MODAL_MODEL_FILE}: about $${storage.toFixed(2)}/month at a ${storageGiB} GiB estimate.`)
+    console.log("The shared volume may retain previously downloaded models as well.")
+    console.log(`On-demand GPU: L4 $${l4Hourly.toFixed(2)}/hour · A10G $${a10Hourly.toFixed(2)}/hour.`)
+    console.log("The worker scales to zero after 60 seconds idle; generation time is the billed GPU window.")
+  } catch (error) {
+    console.log(`\nCouldn't read Modal usage: ${error.message}`)
   }
-})
+}
+
+function readModalRates() {
+  const result = spawnSync(modal, ["billing", "rates", "--json"], {
+    cwd: root,
+    encoding: "utf8",
+    timeout: 20000,
+    windowsHide: true,
+  })
+  if (result.error) throw result.error
+  if (result.status !== 0) throw new Error(result.stderr.trim() || "Modal rate query failed")
+  return JSON.parse(result.stdout)
+}
+
+async function configureRuntime() {
+  console.log(`\nBackend: ${process.env.LLM_BACKEND} · local context: ${process.env.LOCAL_CONTEXT_TOKENS} tokens · Modal context: ${process.env.MODAL_MAX_MODEL_LEN} tokens`)
+  console.log("1  Use local LM Studio")
+  console.log("2  Use on-demand Modal GPU")
+  console.log("3  Local context  ·  2048 tokens")
+  console.log("4  Local context  ·  4096 tokens")
+  console.log("5  Modal context  ·  64k tokens")
+  console.log("6  Modal context  ·  128k tokens")
+  const choice = (await ask("> ")).trim()
+  if (choice === "1" || choice === "2") {
+    saveEnv("LLM_BACKEND", choice === "1" ? "local" : "modal")
+    console.log("Restart the local bot for the backend change to take effect.")
+  } else if (choice === "3" || choice === "4") {
+    saveEnv("LOCAL_CONTEXT_TOKENS", choice === "3" ? "2048" : "4096")
+  } else if (choice === "5" || choice === "6") {
+    saveEnv("MODAL_MAX_MODEL_LEN", choice === "5" ? "65536" : "131072")
+    console.log("Redeploy the Modal worker to apply its context size.")
+  } else {
+    console.log("Choose a listed option.")
+  }
+}
+
+function tailModalLogs() {
+  console.log("\nFollowing Modal logs; Ctrl+C returns to the dashboard.\n")
+  const child = spawn(modal, ["app", "logs", "psychograph", "--follow"], {
+    cwd: root,
+    stdio: ["inherit", "pipe", "pipe"],
+  })
+  const forward = (stream) => (chunk) => {
+    process.stdout.write(chunk)
+    appendFileSync(join(root, "bot.log"), chunk)
+  }
+  child.stdout.on("data", forward(child.stdout))
+  child.stderr.on("data", forward(child.stderr))
+  child.on("error", (error) => console.error(`\nCould not follow Modal logs: ${error.message}`))
+  return new Promise((resolve) => {
+    const stop = () => child.kill("SIGINT")
+    process.once("SIGINT", stop)
+    child.once("exit", () => {
+      process.off("SIGINT", stop)
+      resolve()
+    })
+  })
+}
+
+while (true) {
+  console.clear()
+  console.log(`${mint}(｡•̀ᴗ-)✧  PSYCHOGRAPH${reset}\n`)
+  console.log("1  Run bot locally  ·  configured backend")
+  console.log("2  Deploy Modal worker  ·  zero GPU until called")
+  console.log("3  Stop Modal worker deployment")
+  console.log("4  Choose model")
+  console.log("5  Check Modal budget")
+  console.log("6  Test Modal model  ·  one completion")
+  console.log("7  Follow Modal logs  ·  mirror to bot.log")
+  console.log("8  Config  ·  backend and context")
+  console.log("q  Quit\n")
+
+  const choice = (await ask("> ")).toLowerCase()
+  if (choice === "q") break
+
+  if (choice === "1") {
+    console.log("\nStarting the local bot. Press Ctrl+C to stop it.\n")
+    await run(python, pythonArgs)
+  } else if (choice === "2") {
+    const confirmation = await ask("\nDeploy the on-demand Modal inference worker? No GPU starts during deploy. Type 'deploy' to confirm: ")
+    if (confirmation.toLowerCase() === "deploy") {
+      await run(modal, ["deploy", "modal_app.py"])
+    } else {
+      console.log("\nDeployment cancelled.")
+    }
+  } else if (choice === "3") {
+    const confirmation = await ask("\nPermanently stop the Modal deployment? Type 'stop' to confirm: ")
+    if (confirmation === "stop") {
+      console.log("\nStopping Modal app...\n")
+      await run(modal, ["app", "stop", "psychograph", "--yes"])
+    } else {
+      console.log("\nStop cancelled.")
+    }
+  } else if (choice === "4") {
+    await chooseModel()
+  } else if (choice === "5") {
+    showModalBudget()
+  } else if (choice === "6") {
+    const confirmation = await ask("\nRun one real completion on an L4? Cold start and generation are billed. Type 'test' to confirm: ")
+    if (confirmation.toLowerCase() === "test") {
+      console.log("\nRunning one on-demand completion...\n")
+      await run(modal, ["run", "modal_app.py"])
+    } else {
+      console.log("\nTest cancelled.")
+    }
+  } else if (choice === "7") {
+    await tailModalLogs()
+  } else if (choice === "8") {
+    await configureRuntime()
+  } else {
+    console.log("\\nChoose 1 through 8, or q.")
+  }
+
+  await ask("\nPress Enter to return to the menu.")
+}

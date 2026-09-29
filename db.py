@@ -1,199 +1,129 @@
+from __future__ import annotations
+
+import os
 import sqlite3
-import time
 from pathlib import Path
-from contextlib import contextmanager
 
-DB_PATH = Path(__file__).parent / "history.db"
-
-# Persistent connection for the lifetime of the process
+DB_PATH = Path(os.getenv("DB_PATH", Path(__file__).parent / "history.db")).expanduser()
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 _conn.row_factory = sqlite3.Row
+_persona_cache: dict[int, str | None] = {}
+
 
 def init_db() -> None:
     with _conn:
-        # Migration: ensure messages table is up to date
-        cols = [r["name"] for r in _conn.execute("PRAGMA table_info(messages)").fetchall()]
-        if cols and "discord_msg_id" not in cols:
-            _conn.execute("DROP TABLE messages")
-            _conn.execute("DROP INDEX IF EXISTS idx_channel")
-
-        _conn.execute("""
-            CREATE TABLE IF NOT EXISTS messages (
-                discord_msg_id  INTEGER PRIMARY KEY,
-                parent_msg_id   INTEGER,
-                channel_id      INTEGER NOT NULL,
-                author_id       INTEGER,
-                role            TEXT NOT NULL,
-                content         TEXT NOT NULL,
-                thinking        TEXT,
-                ts              DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        _conn.execute("CREATE INDEX IF NOT EXISTS idx_channel ON messages(channel_id, discord_msg_id)")
-        
-        _conn.execute("""
-            CREATE TABLE IF NOT EXISTS pins (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                channel_id  INTEGER NOT NULL,
-                content     TEXT NOT NULL,
-                ts              DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        _conn.execute("""
-            CREATE TABLE IF NOT EXISTS chess_games (
-                channel_id  INTEGER PRIMARY KEY,
-                fen         TEXT NOT NULL,
-                move_stack  TEXT NOT NULL DEFAULT '',
-                started_ts  DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_ts  DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        _conn.execute("""
-            CREATE TABLE IF NOT EXISTS channel_settings (
-                channel_id  INTEGER PRIMARY KEY,
-                persona     TEXT,
-                verbosity   INTEGER NOT NULL DEFAULT 2,
-                reset_ts    REAL,
-                temperature REAL
-            )
-        """)
-
-        _conn.execute("""
-            CREATE TABLE IF NOT EXISTS usage_logs (
-                id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                discord_msg_id  INTEGER,
-                model           TEXT,
-                provider        TEXT,
-                prompt_tokens   INTEGER,
-                completion_tokens INTEGER,
-                total_time      REAL,
-                ts              DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        _conn.execute("""
-            CREATE TABLE IF NOT EXISTS channel_webhooks (
-                channel_id      INTEGER PRIMARY KEY,
-                webhook_url     TEXT NOT NULL,
-                webhook_id      INTEGER
-            )
-        """)
-
-        _conn.execute("""
-            CREATE TABLE IF NOT EXISTS heartbeats (
-                task_name       TEXT PRIMARY KEY,
-                last_run_ts     REAL
-            )
-        """)
-
-        _conn.execute("""
-            CREATE TABLE IF NOT EXISTS sim_city_settings (
-                key     TEXT PRIMARY KEY,
-                value   TEXT
-            )
-        """)
-
-        _conn.execute("""
-            CREATE TABLE IF NOT EXISTS sim_city_queue (
-                id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                from_persona    TEXT NOT NULL,
-                to_persona      TEXT NOT NULL,
-                seed_prompt     TEXT NOT NULL,
-                ts              DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # Migration: add columns to existing tables that predate them
-        if "author_id" not in cols:
+        _conn.execute(
+            """CREATE TABLE IF NOT EXISTS messages (
+                discord_msg_id INTEGER PRIMARY KEY,
+                parent_msg_id INTEGER,
+                channel_id INTEGER NOT NULL,
+                author_id INTEGER,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                thinking TEXT,
+                ts DATETIME DEFAULT CURRENT_TIMESTAMP
+            )"""
+        )
+        columns = {row["name"] for row in _conn.execute("PRAGMA table_info(messages)")}
+        if "author_id" not in columns:
             _conn.execute("ALTER TABLE messages ADD COLUMN author_id INTEGER")
-        if "thinking" not in cols:
+        if "thinking" not in columns:
             _conn.execute("ALTER TABLE messages ADD COLUMN thinking TEXT")
-        cs_cols = [r["name"] for r in _conn.execute("PRAGMA table_info(channel_settings)").fetchall()]
-        if "reset_ts" not in cs_cols:
-            _conn.execute("ALTER TABLE channel_settings ADD COLUMN reset_ts REAL")
-        if "temperature" not in cs_cols:
-            _conn.execute("ALTER TABLE channel_settings ADD COLUMN temperature REAL")
+        _conn.execute("CREATE INDEX IF NOT EXISTS idx_channel ON messages(channel_id, discord_msg_id)")
+        _conn.execute(
+            """CREATE TABLE IF NOT EXISTS channel_settings (
+                channel_id INTEGER PRIMARY KEY,
+                persona TEXT,
+                verbosity TEXT
+            )"""
+        )
+        settings_columns = {row["name"] for row in _conn.execute("PRAGMA table_info(channel_settings)")}
+        if "verbosity" not in settings_columns:
+            _conn.execute("ALTER TABLE channel_settings ADD COLUMN verbosity TEXT")
+        _conn.execute(
+            """CREATE TABLE IF NOT EXISTS chess_games (
+                channel_id INTEGER PRIMARY KEY,
+                fen TEXT NOT NULL,
+                move_stack TEXT NOT NULL DEFAULT '',
+                started_ts DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_ts DATETIME DEFAULT CURRENT_TIMESTAMP
+            )"""
+        )
 
-def save_message(discord_msg_id: int, parent_msg_id: int | None, channel_id: int, role: str, content: str, author_id: int | None = None) -> None:
+
+def save_message(
+    discord_msg_id: int,
+    parent_msg_id: int | None,
+    channel_id: int,
+    role: str,
+    content: str,
+    author_id: int | None = None,
+) -> None:
     with _conn:
         _conn.execute(
-            "INSERT OR REPLACE INTO messages (discord_msg_id, parent_msg_id, channel_id, author_id, role, content) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO messages "
+            "(discord_msg_id, parent_msg_id, channel_id, author_id, role, content) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             (discord_msg_id, parent_msg_id, channel_id, author_id, role, content),
         )
 
-def get_message(discord_msg_id: int) -> dict | None:
-    row = _conn.execute(
-        "SELECT discord_msg_id, parent_msg_id, channel_id, role, content FROM messages WHERE discord_msg_id = ?",
-        (discord_msg_id,),
-    ).fetchone()
-    return dict(row) if row else None
-
-def save_thinking(discord_msg_id: int, thinking: str) -> None:
-    with _conn:
-        _conn.execute(
-            "UPDATE messages SET thinking = ? WHERE discord_msg_id = ?",
-            (thinking, discord_msg_id),
-        )
-
-def get_thinking(discord_msg_id: int) -> str | None:
-    row = _conn.execute(
-        "SELECT thinking FROM messages WHERE discord_msg_id = ?",
-        (discord_msg_id,),
-    ).fetchone()
-    return row["thinking"] if row else None
-
-def delete_message(discord_msg_id: int) -> None:
-    with _conn:
-        _conn.execute("DELETE FROM messages WHERE discord_msg_id = ?", (discord_msg_id,))
 
 def get_message_chain(start_msg_id: int, limit: int = 40) -> list[dict]:
-    """Fetch a chain of parent messages using a Recursive CTE."""
-    query = """
-    WITH RECURSIVE chain(discord_msg_id, parent_msg_id, author_id, role, content, depth) AS (
-        SELECT discord_msg_id, parent_msg_id, author_id, role, content, 0
-        FROM messages
-        WHERE discord_msg_id = ?
-        UNION ALL
-        SELECT m.discord_msg_id, m.parent_msg_id, m.author_id, m.role, m.content, c.depth + 1
-        FROM messages m
-        JOIN chain c ON m.discord_msg_id = c.parent_msg_id
-        WHERE c.depth < ?
-    )
-    SELECT discord_msg_id, author_id, role, content FROM chain ORDER BY depth DESC;
-    """
-    rows = _conn.execute(query, (start_msg_id, limit)).fetchall()
-    return [{"discord_msg_id": r["discord_msg_id"], "author_id": r["author_id"], "role": r["role"], "content": r["content"]} for r in rows]
-
-def add_pin(channel_id: int, content: str) -> None:
-    with _conn:
-        _conn.execute("INSERT INTO pins (channel_id, content) VALUES (?, ?)", (channel_id, content[:200]))
-
-def get_pins(channel_id: int) -> list[str]:
     rows = _conn.execute(
-        "SELECT content FROM pins WHERE channel_id = ? ORDER BY ts DESC LIMIT 5",
-        (channel_id,),
+        """WITH RECURSIVE chain(discord_msg_id, parent_msg_id, author_id, role, content, depth) AS (
+            SELECT discord_msg_id, parent_msg_id, author_id, role, content, 0
+            FROM messages WHERE discord_msg_id = ?
+            UNION ALL
+            SELECT m.discord_msg_id, m.parent_msg_id, m.author_id, m.role, m.content, c.depth + 1
+            FROM messages m JOIN chain c ON m.discord_msg_id = c.parent_msg_id
+            WHERE c.depth < ?
+        )
+        SELECT discord_msg_id, author_id, role, content FROM chain ORDER BY depth DESC""",
+        (start_msg_id, limit),
     ).fetchall()
-    return [row["content"] for row in rows]
+    return [dict(row) for row in rows]
+
 
 def clear_channel(channel_id: int) -> None:
     with _conn:
         _conn.execute("DELETE FROM messages WHERE channel_id = ?", (channel_id,))
+
+
+def get_channel_persona(channel_id: int) -> str | None:
+    if channel_id not in _persona_cache:
+        row = _conn.execute(
+            "SELECT persona FROM channel_settings WHERE channel_id = ?", (channel_id,)
+        ).fetchone()
+        _persona_cache[channel_id] = row["persona"] if row else None
+    return _persona_cache[channel_id]
+
+
+def set_channel_persona(channel_id: int, persona: str) -> None:
+    with _conn:
         _conn.execute(
-            "INSERT INTO channel_settings (channel_id, reset_ts) VALUES (?, ?) "
-            "ON CONFLICT(channel_id) DO UPDATE SET reset_ts = excluded.reset_ts",
-            (channel_id, time.time()),
+            "INSERT INTO channel_settings (channel_id, persona) VALUES (?, ?) "
+            "ON CONFLICT(channel_id) DO UPDATE SET persona = excluded.persona",
+            (channel_id, persona),
+        )
+    _persona_cache[channel_id] = persona
+
+
+def get_channel_verbosity(channel_id: int) -> str | None:
+    row = _conn.execute(
+        "SELECT verbosity FROM channel_settings WHERE channel_id = ?", (channel_id,)
+    ).fetchone()
+    return row["verbosity"] if row else None
+
+
+def set_channel_verbosity(channel_id: int, verbosity: str) -> None:
+    with _conn:
+        _conn.execute(
+            "INSERT INTO channel_settings (channel_id, verbosity) VALUES (?, ?) "
+            "ON CONFLICT(channel_id) DO UPDATE SET verbosity = excluded.verbosity",
+            (channel_id, verbosity),
         )
 
-def get_channel_reset_ts(channel_id: int) -> float | None:
-    row = _conn.execute(
-        "SELECT reset_ts FROM channel_settings WHERE channel_id = ?",
-        (channel_id,),
-    ).fetchone()
-    return row["reset_ts"] if row else None
-
-# ── Chess game persistence ──────────────────────────────────────────
 
 def save_chess_game(channel_id: int, fen: str, move_stack: str) -> None:
     with _conn:
@@ -203,188 +133,14 @@ def save_chess_game(channel_id: int, fen: str, move_stack: str) -> None:
             (channel_id, fen, move_stack),
         )
 
+
 def get_chess_game(channel_id: int) -> dict | None:
     row = _conn.execute(
-        "SELECT channel_id, fen, move_stack FROM chess_games WHERE channel_id = ?",
-        (channel_id,),
+        "SELECT channel_id, fen, move_stack FROM chess_games WHERE channel_id = ?", (channel_id,)
     ).fetchone()
     return dict(row) if row else None
+
 
 def delete_chess_game(channel_id: int) -> None:
     with _conn:
         _conn.execute("DELETE FROM chess_games WHERE channel_id = ?", (channel_id,))
-
-# ── Per-channel settings ───────────────────────────────────────────────────────
-
-_CHANNEL_CACHE = {}
-
-def get_channel_persona(channel_id: int) -> str | None:
-    if channel_id in _CHANNEL_CACHE and "persona" in _CHANNEL_CACHE[channel_id]:
-        return _CHANNEL_CACHE[channel_id]["persona"]
-        
-    row = _conn.execute(
-        "SELECT persona FROM channel_settings WHERE channel_id = ?",
-        (channel_id,),
-    ).fetchone()
-    
-    p = row[0] if row else None
-    _CHANNEL_CACHE.setdefault(channel_id, {})["persona"] = p
-    return p
-
-def set_channel_persona(channel_id: int, persona: str) -> None:
-    with _conn:
-        _conn.execute(
-            "INSERT INTO channel_settings (channel_id, persona) VALUES (?, ?) "
-            "ON CONFLICT(channel_id) DO UPDATE SET persona = excluded.persona",
-            (channel_id, persona),
-        )
-    _CHANNEL_CACHE.setdefault(channel_id, {})["persona"] = persona
-
-def get_channel_verbosity(channel_id: int) -> int:
-    if channel_id in _CHANNEL_CACHE and "verbosity" in _CHANNEL_CACHE[channel_id]:
-        return _CHANNEL_CACHE[channel_id]["verbosity"]
-        
-    row = _conn.execute(
-        "SELECT verbosity FROM channel_settings WHERE channel_id = ?",
-        (channel_id,),
-    ).fetchone()
-    
-    v = row["verbosity"] if row else 2
-    _CHANNEL_CACHE.setdefault(channel_id, {})["verbosity"] = v
-    return v
-
-def set_channel_verbosity(channel_id: int, verbosity: int) -> None:
-    with _conn:
-        _conn.execute(
-            "INSERT INTO channel_settings (channel_id, verbosity) VALUES (?, ?) "
-            "ON CONFLICT(channel_id) DO UPDATE SET verbosity = excluded.verbosity",
-            (channel_id, verbosity),
-        )
-    _CHANNEL_CACHE.setdefault(channel_id, {})["verbosity"] = verbosity
-
-def get_channel_temperature(channel_id: int) -> float | None:
-    if channel_id in _CHANNEL_CACHE and "temp" in _CHANNEL_CACHE[channel_id]:
-        return _CHANNEL_CACHE[channel_id]["temp"]
-        
-    row = _conn.execute(
-        "SELECT temperature FROM channel_settings WHERE channel_id = ?",
-        (channel_id,),
-    ).fetchone()
-    
-    t = row["temperature"] if row else None
-    _CHANNEL_CACHE.setdefault(channel_id, {})["temp"] = t
-    return t
-
-def set_channel_temperature(channel_id: int, temperature: float) -> None:
-    with _conn:
-        _conn.execute(
-            "INSERT INTO channel_settings (channel_id, temperature) VALUES (?, ?) "
-            "ON CONFLICT(channel_id) DO UPDATE SET temperature = excluded.temperature",
-            (channel_id, temperature),
-        )
-    _CHANNEL_CACHE.setdefault(channel_id, {})["temp"] = temperature
-
-# ── Webhook persistence ──────────────────────────────────────────────
-
-def save_channel_webhook(channel_id: int, webhook_url: str, webhook_id: int | None = None) -> None:
-    with _conn:
-        _conn.execute(
-            "INSERT OR REPLACE INTO channel_webhooks (channel_id, webhook_url, webhook_id) VALUES (?, ?, ?)",
-            (channel_id, webhook_url, webhook_id),
-        )
-
-def get_channel_webhook(channel_id: int) -> dict | None:
-    row = _conn.execute(
-        "SELECT webhook_url, webhook_id FROM channel_webhooks WHERE channel_id = ?",
-        (channel_id,),
-    ).fetchone()
-    return dict(row) if row else None
-
-# ── Heartbeat tracking ─────────────────────────────────────────────
-
-def get_last_run(task_name: str) -> float:
-    row = _conn.execute("SELECT last_run_ts FROM heartbeats WHERE task_name = ?", (task_name,)).fetchone()
-    return row[0] if row else 0.0
-
-def set_last_run(task_name: str, ts: float) -> None:
-    with _conn:
-        _conn.execute(
-            "INSERT INTO heartbeats (task_name, last_run_ts) VALUES (?, ?) "
-            "ON CONFLICT(task_name) DO UPDATE SET last_run_ts = excluded.last_run_ts",
-            (task_name, ts),
-        )
-
-# ── Usage Logging ─────────────────────────────────────────────────────────────
-
-def log_usage(msg_id: int, model: str, provider: str, prompt_tok: int, comp_tok: int, duration: float) -> None:
-    with _conn:
-        _conn.execute(
-            "INSERT INTO usage_logs (discord_msg_id, model, provider, prompt_tokens, completion_tokens, total_time) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (msg_id, model, provider, prompt_tok, comp_tok, duration),
-        )
-
-def get_latest_usage(msg_id: int) -> dict | None:
-    row = _conn.execute(
-        "SELECT model, provider, prompt_tokens, completion_tokens, total_time FROM usage_logs "
-        "WHERE discord_msg_id = ? ORDER BY ts DESC LIMIT 1",
-        (msg_id,),
-    ).fetchone()
-    return dict(row) if row else None
-
-# ── Sim-city settings ──────────────────────────────────────────────────────────
-
-def get_sim_setting(key: str) -> str | None:
-    row = _conn.execute("SELECT value FROM sim_city_settings WHERE key = ?", (key,)).fetchone()
-    return row["value"] if row else None
-
-def set_sim_setting(key: str, value: str | None) -> None:
-    if value is None:
-        with _conn:
-            _conn.execute("DELETE FROM sim_city_settings WHERE key = ?", (key,))
-    else:
-        with _conn:
-            _conn.execute(
-                "INSERT INTO sim_city_settings (key, value) VALUES (?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                (key, value),
-            )
-
-def get_sim_personas() -> list[str] | None:
-    """Returns whitelist of personas for sim-city, or None if all personas allowed."""
-    raw = get_sim_setting("persona_whitelist")
-    if not raw:
-        return None
-    return [p.strip() for p in raw.split(",") if p.strip()]
-
-def set_sim_personas(names: list[str] | None) -> None:
-    set_sim_setting("persona_whitelist", ",".join(names) if names else None)
-
-# ── Sim-city queue ─────────────────────────────────────────────────────────────
-
-def enqueue_conversation(from_persona: str, to_persona: str, seed_prompt: str) -> None:
-    with _conn:
-        _conn.execute(
-            "INSERT INTO sim_city_queue (from_persona, to_persona, seed_prompt) VALUES (?, ?, ?)",
-            (from_persona, to_persona, seed_prompt),
-        )
-
-def dequeue_conversation() -> dict | None:
-    row = _conn.execute(
-        "SELECT id, from_persona, to_persona, seed_prompt FROM sim_city_queue ORDER BY ts ASC LIMIT 1"
-    ).fetchone()
-    if not row:
-        return None
-    with _conn:
-        _conn.execute("DELETE FROM sim_city_queue WHERE id = ?", (row["id"],))
-    return dict(row)
-
-def list_queue() -> list[dict]:
-    rows = _conn.execute(
-        "SELECT id, from_persona, to_persona, seed_prompt, ts FROM sim_city_queue ORDER BY ts ASC"
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-def clear_queue() -> None:
-    with _conn:
-        _conn.execute("DELETE FROM sim_city_queue")

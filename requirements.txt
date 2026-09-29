@@ -1,8 +1,7 @@
 discord.py
 python-dotenv
 openai
-aiohttp
-ddgs
 pyyaml
 Pillow
 chess
+modal

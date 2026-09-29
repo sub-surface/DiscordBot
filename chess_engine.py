@@ -159,26 +159,6 @@ def reset_game(channel_id: int) -> None:
     db.delete_chess_game(channel_id)
 
 
-def is_chess_persona(persona_name: str) -> bool:
-    """True if the active persona is the LLM-based chess persona."""
-    return persona_name.lower() == "chess"
-
-
-def is_chess_classic_persona(persona_name: str) -> bool:
-    """True if the active persona is the API-based chess-classic persona."""
-    return persona_name.lower() == "chess-classic"
-
-
-def is_any_chess_persona(persona_name: str) -> bool:
-    """True for any chess persona (LLM or API)."""
-    return is_chess_persona(persona_name) or is_chess_classic_persona(persona_name)
-
-
 def move_number(channel_id: int) -> int:
     """Current full-move number."""
     return get_board(channel_id).fullmove_number
-
-
-def side_to_move(channel_id: int) -> str:
-    board = get_board(channel_id)
-    return "White" if board.turn == chess.WHITE else "Black"

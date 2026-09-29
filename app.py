@@ -1,0 +1,333 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import re
+import shutil
+from pathlib import Path
+from collections.abc import Sequence
+
+import discord
+import yaml
+from discord import app_commands
+from discord.ext import commands
+from dotenv import load_dotenv
+
+import db
+import inference
+from chess_game import ChessCommands, board_embed, play_move
+from personas import list_personas, load_persona
+
+ROOT = Path(__file__).resolve().parent
+load_dotenv(ROOT / ".env")
+with (ROOT / "config.yaml").open(encoding="utf-8") as config_file:
+    CONFIG = yaml.safe_load(config_file)
+
+CONFIG.setdefault("providers", {}).setdefault("local", {})["base_url"] = os.getenv(
+    "LLM_BASE_URL", CONFIG.get("providers", {}).get("local", {}).get("base_url", "http://localhost:1234/v1")
+)
+DEFAULT_MODEL = os.getenv("LLM_MODEL") or "mimo-v2.6-distill-qwen-9b-mernik"
+DEFAULT_PERSONA = CONFIG.get("persona", "mochi")
+MODAL_MODEL_ID = os.getenv("MODAL_MODEL_ID", "wepiqx/MiMo-V2.6-Distill-Qwen-9B-GGUF-MERNIK")
+MODAL_MODEL_FILE = os.getenv("MODAL_MODEL_FILE", "MiMo-V2.6-Distill-Qwen-9B-MERNIK-5100.gguf")
+LOCAL_CONTEXT_TOKENS = int(os.getenv("LOCAL_CONTEXT_TOKENS", "4096"))
+LOCAL_MAX_OUTPUT_TOKENS = int(os.getenv("LOCAL_MAX_OUTPUT_TOKENS", "768"))
+LLM_BACKEND = os.getenv("LLM_BACKEND", "local").lower()
+VERBOSITY_INSTRUCTIONS = {
+    "concise": "Keep replies brief, usually one to three short sentences. Skip preambles and repetition.",
+    "balanced": "Use a natural level of detail: answer fully without padding or unnecessary digressions.",
+    "detailed": "Give a thorough, well-structured answer with useful reasoning and examples where appropriate.",
+}
+log = logging.getLogger("psychograph")
+
+
+def _estimate_prompt_tokens(messages: Sequence[dict]) -> int:
+    return sum((len(str(message.get("content", "")).encode("utf-8")) + 2) // 3 + 4 for message in messages)
+
+
+def fit_context(
+    system_prompt: str,
+    history: Sequence[dict],
+    user_prompt: str,
+    context_limit: int,
+    output_limit: int,
+) -> tuple[list[dict], str | None]:
+    messages = [{"role": "system", "content": system_prompt}]
+    messages.extend({"role": item["role"], "content": item["content"]} for item in history)
+    messages.append({"role": "user", "content": user_prompt})
+    initial_tokens = _estimate_prompt_tokens(messages)
+    input_budget = max(256, context_limit - output_limit)
+    trimmed_turns = 0
+
+    while len(messages) > 2 and _estimate_prompt_tokens(messages) > input_budget:
+        del messages[1:min(3, len(messages) - 1)]
+        trimmed_turns += 1
+
+    if _estimate_prompt_tokens(messages) > input_budget:
+        fixed_tokens = _estimate_prompt_tokens([messages[0], {"role": "user", "content": ""}])
+        user_budget = max(64, (input_budget - fixed_tokens) * 3)
+        encoded_prompt = user_prompt.encode("utf-8")
+        if len(encoded_prompt) > user_budget:
+            shortened = encoded_prompt[-user_budget:].decode("utf-8", errors="ignore")
+            messages[-1]["content"] = "[Earlier part of this message omitted to fit the local context limit.]\n" + shortened
+            trimmed_turns += 1
+
+    if trimmed_turns:
+        notice = f"-# ⚠ Context limit ({context_limit:,} tokens): older conversation was trimmed. Use /reset for a fresh thread."
+    elif initial_tokens + output_limit >= context_limit * 0.8:
+        notice = f"-# ⚠ Context is near its {context_limit:,}-token limit; consider /reset before continuing."
+    else:
+        notice = None
+    return messages, notice
+
+
+class PsychographBot(commands.Bot):
+    def __init__(self) -> None:
+        intents = discord.Intents.default()
+        intents.message_content = True
+        super().__init__(command_prefix=commands.when_mentioned, intents=intents)
+        self._local_model_lock = asyncio.Lock()
+
+    async def setup_hook(self) -> None:
+        db.init_db()
+        await self.add_cog(ChessCommands(self))
+        await self.tree.sync()
+
+    async def generate(self, messages: list[dict]) -> str:
+        async with self._local_model_lock:
+            if LLM_BACKEND == "modal":
+                return await inference.complete_remote(
+                    messages,
+                    DEFAULT_MODEL,
+                    max_tokens=int(os.getenv("MODAL_MAX_OUTPUT_TOKENS", "2048")),
+                    temperature=float(os.getenv("LLM_TEMPERATURE", "1.0")),
+                    top_p=float(os.getenv("LLM_TOP_P", "0.95")),
+                )
+            parts: list[str] = []
+            async for chunk in inference.stream(
+                messages,
+                DEFAULT_MODEL,
+                CONFIG,
+                max_tokens=LOCAL_MAX_OUTPUT_TOKENS,
+            ):
+                parts.append(chunk)
+        return "".join(parts).strip()
+
+    async def on_message(self, message: discord.Message) -> None:
+        if message.author.bot or self.user is None:
+            return
+
+        is_dm = isinstance(message.channel, discord.DMChannel)
+        is_mentioned = self.user in message.mentions
+        reply_id = message.reference.message_id if message.reference else None
+        is_bot_reply = False
+        if reply_id:
+            referenced = message.reference.resolved
+            if referenced is None:
+                try:
+                    referenced = await message.channel.fetch_message(reply_id)
+                except (discord.HTTPException, AttributeError):
+                    referenced = None
+            is_bot_reply = bool(referenced and referenced.author.id == self.user.id)
+
+        if not (is_dm or is_mentioned or is_bot_reply):
+            return
+
+        prompt = re.sub(rf"<@!?{self.user.id}>", "", message.content).strip()
+        if not prompt:
+            await message.reply("Send me a message along with the mention.", mention_author=False)
+            return
+
+        persona = db.get_channel_persona(message.channel.id) or DEFAULT_PERSONA
+        if persona == "chess":
+            summary, file = await play_move(self, message.channel, prompt)
+            reply = {"embed": board_embed("Chess", summary, bool(file)), "mention_author": False}
+            if file:
+                reply["file"] = file
+            await message.reply(**reply)
+            return
+
+        parent_id = reply_id
+        chain = db.get_message_chain(parent_id) if parent_id else []
+        db.save_message(message.id, parent_id, message.channel.id, "user", prompt, message.author.id)
+        persona_prompt = load_persona(persona) or f"You are {persona}."
+        system_prompt = (
+            f"{persona_prompt}\n\n"
+            f"{VERBOSITY_INSTRUCTIONS.get(db.get_channel_verbosity(message.channel.id) or 'balanced', VERBOSITY_INSTRUCTIONS['balanced'])}\n\n"
+            "You are chatting in Discord. Respond directly to the user's latest message."
+        )
+        context_limit = int(os.getenv("MODAL_MAX_MODEL_LEN", "65536")) if LLM_BACKEND == "modal" else LOCAL_CONTEXT_TOKENS
+        output_limit = int(os.getenv("MODAL_MAX_OUTPUT_TOKENS", "2048")) if LLM_BACKEND == "modal" else LOCAL_MAX_OUTPUT_TOKENS
+        messages, context_notice = fit_context(system_prompt, chain, prompt, context_limit, output_limit)
+
+        placeholder = await message.reply("…", mention_author=False)
+        try:
+            response = await self.generate(messages)
+            response = response or "I don't have a response for that."
+            saved_chunks = [response[index:index + 1900] for index in range(0, len(response), 1900)]
+            chunks = saved_chunks.copy()
+            if context_notice:
+                if len(chunks[-1]) + len(context_notice) + 2 <= 1900:
+                    chunks[-1] += f"\n\n{context_notice}"
+                else:
+                    chunks.append(context_notice)
+            sent = await placeholder.edit(content=chunks[0])
+            db.save_message(sent.id, message.id, message.channel.id, "assistant", saved_chunks[0])
+            for index, chunk in enumerate(chunks[1:], start=1):
+                parent_message_id = sent.id
+                sent = await message.channel.send(chunk, reference=sent)
+                if index < len(saved_chunks):
+                    db.save_message(sent.id, parent_message_id, message.channel.id, "assistant", saved_chunks[index])
+        except Exception:
+            log.exception("Response failed in channel %s", message.channel.id)
+            await placeholder.edit(content="I couldn't reach the model. Check the bot and model server logs.")
+
+
+bot = PsychographBot()
+
+
+@bot.tree.command(name="persona", description="Show or choose this channel's persona")
+@app_commands.describe(name="Leave blank to view the current persona and available choices")
+async def persona_command(interaction: discord.Interaction, name: str | None = None) -> None:
+    current = db.get_channel_persona(interaction.channel_id) or DEFAULT_PERSONA
+    if name is None:
+        available = ", ".join(list_personas())
+        await interaction.response.send_message(
+            f"Current persona: **{current}**\nAvailable: {available}", ephemeral=True
+        )
+        return
+    if load_persona(name) is None:
+        await interaction.response.send_message("That persona does not exist.", ephemeral=True)
+        return
+    db.set_channel_persona(interaction.channel_id, name)
+    await interaction.response.send_message(f"This channel now uses **{name}**.", ephemeral=True)
+
+
+@persona_command.autocomplete("name")
+async def persona_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    return [
+        app_commands.Choice(name=name, value=name)
+        for name in list_personas()
+        if current.casefold() in name.casefold()
+    ][:25]
+
+
+@bot.tree.command(name="verbosity", description="Show or set reply detail for this channel")
+@app_commands.describe(level="How detailed future replies should be")
+@app_commands.choices(level=[
+    app_commands.Choice(name="Concise", value="concise"),
+    app_commands.Choice(name="Balanced", value="balanced"),
+    app_commands.Choice(name="Detailed", value="detailed"),
+])
+async def verbosity_command(interaction: discord.Interaction, level: str | None = None) -> None:
+    current = db.get_channel_verbosity(interaction.channel_id) or "balanced"
+    if level is None:
+        await interaction.response.send_message(
+            f"Reply detail is **{current}**. Choose concise, balanced, or detailed to change it.",
+            ephemeral=True,
+        )
+        return
+    db.set_channel_verbosity(interaction.channel_id, level)
+    await interaction.response.send_message(
+        f"Future replies in this channel will be **{level}**.", ephemeral=True
+    )
+
+
+@bot.tree.command(name="model", description="Show the configured inference model")
+async def model_command(interaction: discord.Interaction) -> None:
+    if LLM_BACKEND == "modal":
+        model = f"{MODAL_MODEL_ID}/{MODAL_MODEL_FILE}"
+        note = "This is the bot's configured target, not a live worker check. Model changes require dashboard selection and redeployment."
+    else:
+        model = DEFAULT_MODEL
+        note = "This is the configured LM Studio model."
+    await interaction.response.send_message(
+        f"Backend: **{LLM_BACKEND}**\nModel: `{model}`\n{note}", ephemeral=True
+    )
+
+
+async def _read_modal_billing() -> dict:
+    local_modal = ROOT / "venv" / "Scripts" / "modal.exe"
+    executable = str(local_modal) if local_modal.exists() else shutil.which("modal")
+    if not executable:
+        raise RuntimeError("Modal CLI is not installed in the bot environment.")
+    process = await asyncio.create_subprocess_exec(
+        executable,
+        "billing",
+        "summary",
+        "--for",
+        "this month",
+        "--json",
+        cwd=ROOT,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=20)
+    except asyncio.TimeoutError:
+        process.kill()
+        await process.communicate()
+        raise RuntimeError("Modal billing query timed out.") from None
+    if process.returncode:
+        detail = stderr.decode(errors="replace").strip()
+        raise RuntimeError(detail or "Modal billing query failed.")
+    return json.loads(stdout.decode())
+
+
+@bot.tree.command(name="cost", description="Show this month's Modal workspace usage")
+@app_commands.default_permissions(manage_guild=True)
+async def cost_command(interaction: discord.Interaction) -> None:
+    if interaction.guild and not interaction.permissions.manage_guild:
+        await interaction.response.send_message(
+            "You need Manage Server permission to view workspace costs.", ephemeral=True
+        )
+        return
+    if LLM_BACKEND != "modal":
+        await interaction.response.send_message(
+            "Modal cost reporting is available when the bot uses the Modal backend.", ephemeral=True
+        )
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    try:
+        report = await _read_modal_billing()
+        metered = float(report.get("metered_cost", 0))
+        billed = float(report.get("billed_cost", 0))
+        await interaction.followup.send(
+            f"Modal workspace usage this month: **${metered:.2f} metered**, **${billed:.2f} billed after credits**. "
+            "This is workspace-wide across Modal apps, not just Psychograph.",
+            ephemeral=True,
+        )
+    except (RuntimeError, ValueError, json.JSONDecodeError) as error:
+        log.exception("Modal billing lookup failed")
+        await interaction.followup.send(f"Couldn't read Modal costs: {error}", ephemeral=True)
+
+
+@bot.tree.command(name="status", description="Show this channel's settings and bot backend")
+async def status_command(interaction: discord.Interaction) -> None:
+    persona = db.get_channel_persona(interaction.channel_id) or DEFAULT_PERSONA
+    verbosity = db.get_channel_verbosity(interaction.channel_id) or "balanced"
+    model = f"{MODAL_MODEL_ID}/{MODAL_MODEL_FILE}" if LLM_BACKEND == "modal" else DEFAULT_MODEL
+    await interaction.response.send_message(
+        f"Persona: **{persona}**\nReply detail: **{verbosity}**\nBackend: **{LLM_BACKEND}**\nModel target: `{model}`",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="reset", description="Clear this channel's conversation history")
+async def reset_command(interaction: discord.Interaction) -> None:
+    db.clear_channel(interaction.channel_id)
+    await interaction.response.send_message("Conversation history cleared.", ephemeral=True)
+
+
+def main() -> None:
+    token = os.getenv("DISCORD_TOKEN")
+    if not token:
+        raise RuntimeError("DISCORD_TOKEN is not set")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    bot.run(token)
+
+
+if __name__ == "__main__":
+    main()

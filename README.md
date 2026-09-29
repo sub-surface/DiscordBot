@@ -1,208 +1,61 @@
-# Psychograph Discord Bot
+# Psychograph
 
-A multi-persona Discord bot backed by local LLMs via **LM Studio** or cloud models via **OpenRouter**. Each persona is a distinct character with its own voice, expertise, and embed styling. Context follows Discord reply chains — multiple independent conversations can coexist in the same channel.
-
----
-
-## Quick Start
-
-**1. Install dependencies**
-```bash
-cd DiscordBot
-python -m venv venv
-venv/Scripts/activate      # Windows
-pip install -r requirements.txt
-```
-
-**2. Set your Discord token**
-
-Copy `.env.example` to `.env` and fill in your token:
-```
-DISCORD_TOKEN=your_token_here
-```
-
-**3. Configure in `config.yaml`**
-
-The defaults point to a local LM Studio instance. Change `default_provider`, `default_model`, or `persona` as needed.
-
-**4. Run**
-```bash
-python bot.py
-```
-
-or for the dashboard (experimental):
-```bash
-node dash.mjs
-```
-
-
----
-
-## Usage
-
-Mention the bot to start a conversation:
-```
-@bot what do you make of the Epstein network?
-```
-
-Reply to a bot message to continue the same thread. Multiple independent conversations can run in the same channel — context follows reply chains, not channel history.
-
-Attach images to any message and the bot will see them (requires a vision-capable model in LM Studio, e.g. Qwen2.5-VL).
-
----
+A small Discord bot that responds in DMs, when mentioned, or when someone replies to it. Choose a persona per channel. Run inference locally with LM Studio or call an on-demand Modal model worker from the local bot.
 
 ## Commands
 
-All commands use `@bot <command>`. Chain multiple commands with `;` — all outputs are collected and posted as a single reply:
-```
-@bot persona mochi; verbosity 3; reset
-```
+- `/persona [name]` shows or selects the channel persona.
+- `/reset` clears conversation history for the channel.
+- `/verbosity [concise|balanced|detailed]` shows or sets reply detail for the channel.
+- `/model` shows the configured inference backend and model target; Modal model changes are made in the dashboard and require redeployment.
+- `/cost` shows Modal workspace usage for the current month (Manage Server permission in guilds).
+- `/status` summarizes channel settings and the configured model target.
+- `/chess new`, `/chess move`, `/chess board`, and `/chess resign` manage a channel's chess game.
 
-### Personas
+Chess also accepts moves when the channel's persona is `chess` and the bot is mentioned or replied to.
 
-| Command | Effect |
-|---|---|
-| `@bot personas` | List all available personas, mark active |
-| `@bot persona <name>` | Switch to a different persona (clears channel history) |
-| `@bot prompt` | Show the active persona's full system prompt |
+## Local
 
-### Models & Providers
+1. Install Python 3.12 and Node.js.
+2. Create and activate an environment, then install dependencies:
 
-| Command | Effect |
-|---|---|
-| `@bot model` | List available models for the current provider |
-| `@bot model <name>` | Switch to a specific model |
-| `@bot model free` | List all free-tier models on OpenRouter |
-| `@bot model random` | Switch to a random paid model |
-| `@bot model free random` | Switch to a random free model |
-| `@bot provider local` | Switch to LM Studio (local) |
-| `@bot provider openrouter` | Switch to OpenRouter (cloud) |
+   ```powershell
+   py -3.12 -m venv venv
+   .\venv\Scripts\Activate.ps1
+   pip install -r requirements.txt
+   ```
 
-### Other
+3. Copy `.env.example` to `.env` and set `DISCORD_TOKEN`. The default local model name matches the Mernik GGUF shown in LM Studio; `node dash.mjs` can list loaded models and save another choice.
+4. In LM Studio, load the model and start its OpenAI-compatible server on port `1234`.
+5. Run `node dash.mjs` and choose **Run locally**.
 
-| Command | Effect |
-|---|---|
-| `@bot verbosity <1-5>` | Set response length (default: 2) |
-| `@bot reset` | Clear this channel's conversation history |
-| `@bot options` | Open interactive settings panel |
-| `@bot restart` | Restart the bot process |
+Local prompts are capped at 4k tokens by default, leaving output headroom. Older reply history is trimmed before generation, and the bot adds a warning when context is trimmed or nears the cap. Configure 2k/4k from the dashboard. Enable the Message Content Intent for the bot in the Discord Developer Portal. Conversation history stays in `history.db`.
 
-### Settings Panel (`@bot options`)
+## Modal
 
-An interactive embed with:
-- **Persona dropdown** — switch persona in one click (clears channel history)
-- **Verbosity buttons** — 1–5, active level highlighted in green
-- **Reset context** — clears conversation history for this channel
+Modal inference defaults to `wepiqx/MiMo-V2.6-Distill-Qwen-9B-GGUF-MERNIK` and its 5.1 GB `5100.gguf` file. The dashboard's **Choose model** menu also offers `mradermacher/epstein-llama-3.2-3B-v2-GGUF` using its recommended 2.02 GB `Q4_K_M` quant, plus a custom repository/file option. The Llama preset uses its native chat template; the MiMo preset retains Qwen thinking mode. The worker runs `llama.cpp` on one L4 and scales to zero after 60 idle seconds. The Discord gateway stays local; GPU compute starts only when a response is requested. Model weights persist in a Modal Volume, costing roughly $0.45/month before GPU use.
 
----
-
-## Buttons
-
-Every bot response has two buttons:
-
-| Button | Action |
-|---|---|
-| `↺ regenerate` | Re-run the response with higher temperature (more variation) |
-| `📌 pin` | Save the message as a persistent note for this channel |
-
-Buttons survive bot restarts. Reactions (🔄 and 📌) also still work as alternatives.
-
----
-
-## Verbosity Levels
-
-Control how much the bot writes with `@bot verbosity N`:
-
-| Level | Behaviour |
-|---|---|
-| `1` | One sentence, full stop |
-| `2` | 1–3 sentences — the default |
-| `3` | One short paragraph |
-| `4` | Full paragraph, substantive |
-| `5` | No limit — full depth and character voice |
-
----
-
-## Personas
-
-Each persona has its own embed color and in-character footer tagline.
-
-| Persona | Character |
-|---|---|
-| `mecha-epstein` | Investigative reporter who survived, went underground. Obsessed with the Epstein network. Exhausted by what he knows. |
-| `the_real_epstein` | Epstein himself — charming, controlled, always in a meeting, never rattled |
-| `ledger` | Forensic accountant, 26 years. Follows money. Not cynical, just interested. |
-| `sigint_ghost` | Burned-out SIGINT analyst. 19 years in, 8 years out. Reads everything for pattern and anomaly. |
-| `cracker` | Safecracker, 31 years. Mechanism before contact. Patience above all. |
-| `philoclanker` | Reclusive philosopher-scholar. Analytic and continental. Cites real thinkers. Archaic register. |
-| `the_commentator` | Medieval Islamic rationalist. Aristotelian scholar. Sees 800 years at once. |
-| `the_coroner` | Forensic pathologist, 12,000 autopsies. The body doesn't lie. |
-| `the_merchant` | Venetian merchant, 1490s. Reads everything through trade, information, and risk. |
-| `black_widow` | Trial lawyer. Excellent listener. Cannot turn off the analysis. |
-| `cassandra` | Failed revolutionary. Specific and unsentimental about how change works. |
-| `vostok` | Soviet cosmonaut. Has seen Earth from orbit. Contemptuous of group psychology. |
-| `the_naturalist` | Wildlife documentary narrator. Anthropologises the humans. |
-| `the_scaffold` | Cognitive scientist (Dr. Mara Voss). Tests understanding via transfer, teaching, and productive failure. |
-| `templexity` | Nick Land apostle. Hyperstition. Cities as time machines. Capital as machinic intelligence. |
-| `k_punk` | Mark Fisher mourner. Blames Land for the right-acc pipeline. Holds onto what Fisher was building. |
-| `strange_loop` | AI safety researcher. Reflective stability focus. |
-| `plateau` | Deleuze postdoc. Precise on concepts. Virtuality, cinema, the actual/virtual distinction. |
-| `mochi` | Maximally soft and chaotic entity made of starlight, marshmallow fluff, and unhinged affection. Mandatory uwu. |
-| `normal_dude` | Just a normal person on Discord. Not a bot. Why would you even ask. |
-| `pineapple` | 23 years of pineapple on pizza. Has derived a general philosophy from it. Thoroughly at peace. |
-| `chess` | Chess opponent (~1900 Elo). Responds only to moves in SAN or UCI notation. |
-
----
-
-## Provider Setup
-
-### LM Studio (local, default)
-
-1. Open LM Studio → load a model → Local Server tab → Start Server
-2. The bot connects to `http://localhost:1234/v1` by default
-3. For image support, load a vision model: **Qwen2.5-VL**, **LLaVA-1.6**, or **InternVL2**
-
-Switch models at runtime without restarting:
-```
-@bot model         ← lists loaded models
-@bot model <name>  ← switches
+```powershell
+$env:MODAL_MODEL_ID = "wepiqx/MiMo-V2.6-Distill-Qwen-9B-GGUF-MERNIK"
+$env:MODAL_MODEL_FILE = "MiMo-V2.6-Distill-Qwen-9B-MERNIK-5100.gguf"
+$env:MODAL_GPU = "L4"
+$env:MODAL_MAX_MODEL_LEN = "65536"
 ```
 
-### OpenRouter (cloud)
+The worker supports 64k or 128k context, selected under **Config** in the dashboard. The GGUF is about 5 GiB, and Qwen3.5's hybrid architecture limits full-attention KV cache; 128k with Q8 KV cache is a reasonable fit on L4, but run the smoke test before choosing it. Local context stays at 4k by default with visible warnings and oldest-turn trimming. L4 is the cost-efficient first choice for one-at-a-time chat; A10G costs more at current Modal rates with similar memory. H100 may reduce latency, but must be over four times faster to reduce GPU cost per response. The throughput example's 100% utilization is for batched offline work, not a single interactive Discord request; batching here could add chat latency.
 
-1. Get an API key from [openrouter.ai](https://openrouter.ai)
-2. Add to `.env`: `OPENROUTER_API_KEY=your_key`
-3. Switch provider: `@bot provider openrouter`
-4. Pick a model: `@bot model anthropic/claude-sonnet-4-6`
+1. Install the project dependencies locally and run `modal setup`.
+2. Run `node dash.mjs` and use **Config** to choose the inference backend. The local Discord gateway uses the token in `.env`; the Modal inference worker does not need Discord credentials.
+3. Use **Config** to select Modal inference and the context size. Use **Deploy Modal worker** once to deploy the scale-to-zero class; this does not start a GPU. Then use **Run bot locally** to keep the Discord gateway connected while inference is remote.
+4. **Test Modal model** runs one real completion on L4 after an explicit confirmation. Once verified, choose **Run locally** to start the Discord gateway; messages use the configured backend.
+5. **Follow Modal logs** mirrors worker output into `bot.log`. The worker scales down after 60 seconds idle.
 
-Available OpenRouter models are listed in `config.yaml` under `providers.openrouter.models`. Add any OpenRouter model ID there.
+The Modal model test is billed for cold start, download if uncached, and generation. The Modal Volume keeps the ~5 GiB GGUF between invocations, so subsequent starts avoid downloading it again.
 
----
+**Check Modal budget** displays workspace metered spend and remaining amount against the $30 planning budget, separate from billed cost after credits. This is a display, not a hard spending cap.
 
-## Configuration (`config.yaml`)
+## Tests
 
-```yaml
-default_provider: local        # "local" or "openrouter"
-default_model: local-model     # persisted across restarts
-persona: mecha-epstein         # persisted across restarts
-
-context:
-  max_messages: 40             # how deep to follow reply chains
-
-response:
-  max_tokens: 8192
-  temperature: 0.7
+```powershell
+python -m unittest test_core -v
 ```
-
-Provider, model, and persona changes made via `@bot` commands are written back to `config.yaml` immediately.
-
----
-
-## Notes
-
-- Only one instance can run at a time (singleton guard on UDP port 47823)
-- Conversation history persists across restarts in `history.db`
-- `@bot reset` clears history for the current channel only
-- Verbosity resets to level 2 on restart (not persisted)
-- Pinned notes (📌) persist per-channel and are injected into every response in that channel
-- The bot has web search — it decides when to use it

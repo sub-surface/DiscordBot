@@ -12,10 +12,10 @@ _SQ      = 60          # pixels per square
 _BORDER  = 20          # label border width
 _SIZE    = _SQ * 8 + _BORDER * 2
 
-_LIGHT  = (240, 217, 181)   # chess.com light square
-_DARK   = (181, 136,  99)   # chess.com dark square
-_BG     = ( 49,  46,  43)   # border background
-_LABELS = (180, 162, 140)   # rank/file label text
+_LIGHT  = (235, 237, 224)
+_DARK   = (108, 148, 128)
+_BG     = ( 31,  45,  40)
+_LABELS = (215, 224, 209)
 
 def _get_font(names: list[str], size: int):
     from PIL import ImageFont
@@ -107,18 +107,3 @@ def fen_to_image(fen: str) -> bytes | None:
         return buf.getvalue()
     except Exception:
         return None
-
-def fen_to_board(fen: str) -> str:
-    try:
-        rows = fen.strip().split()[0].split('/')
-        if len(rows) != 8: return ''
-        lines = ['  a b c d e f g h']
-        for i, row in enumerate(rows):
-            cells = []
-            for ch in row:
-                if ch.isdigit(): cells.extend(['.'] * int(ch))
-                else: cells.append(_PIECES.get(ch, '?'))
-            lines.append(f'{8 - i} {" ".join(cells)}')
-        return '```\n' + '\n'.join(lines) + '\n```'
-    except Exception:
-        return ''
