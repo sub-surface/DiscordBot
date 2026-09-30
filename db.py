@@ -35,12 +35,15 @@ def init_db() -> None:
             """CREATE TABLE IF NOT EXISTS channel_settings (
                 channel_id INTEGER PRIMARY KEY,
                 persona TEXT,
-                verbosity TEXT
+                verbosity TEXT,
+                chess_commentary INTEGER NOT NULL DEFAULT 0
             )"""
         )
         settings_columns = {row["name"] for row in _conn.execute("PRAGMA table_info(channel_settings)")}
         if "verbosity" not in settings_columns:
             _conn.execute("ALTER TABLE channel_settings ADD COLUMN verbosity TEXT")
+        if "chess_commentary" not in settings_columns:
+            _conn.execute("ALTER TABLE channel_settings ADD COLUMN chess_commentary INTEGER NOT NULL DEFAULT 0")
         _conn.execute(
             """CREATE TABLE IF NOT EXISTS chess_games (
                 channel_id INTEGER PRIMARY KEY,
@@ -122,6 +125,22 @@ def set_channel_verbosity(channel_id: int, verbosity: str) -> None:
             "INSERT INTO channel_settings (channel_id, verbosity) VALUES (?, ?) "
             "ON CONFLICT(channel_id) DO UPDATE SET verbosity = excluded.verbosity",
             (channel_id, verbosity),
+        )
+
+
+def get_chess_commentary(channel_id: int) -> bool:
+    row = _conn.execute(
+        "SELECT chess_commentary FROM channel_settings WHERE channel_id = ?", (channel_id,)
+    ).fetchone()
+    return bool(row["chess_commentary"]) if row else False
+
+
+def set_chess_commentary(channel_id: int, enabled: bool) -> None:
+    with _conn:
+        _conn.execute(
+            "INSERT INTO channel_settings (channel_id, chess_commentary) VALUES (?, ?) "
+            "ON CONFLICT(channel_id) DO UPDATE SET chess_commentary = excluded.chess_commentary",
+            (channel_id, int(enabled)),
         )
 
 

@@ -13,6 +13,8 @@ A small Discord bot that responds in DMs, when mentioned, or when someone replie
 - `/chess new`, `/chess move`, `/chess board`, and `/chess resign` manage a channel's chess game.
 
 Chess also accepts moves when the channel's persona is `chess` and the bot is mentioned or replied to.
+Chess moves are selected by local Stockfish on the bot's CPU; move generation uses neither LM Studio nor Modal. Install Stockfish separately and set `STOCKFISH_PATH` to its executable (or put it on `PATH`). `/chess commentary on` optionally adds a note using local LM Studio only; commentary defaults off and never uses Modal. `/chess commentary off` returns to CPU-only chess. If Stockfish is unavailable, the submitted move is rolled back.
+The bot only handles messages and slash commands in `#sim-city`, `#little-st-james`, and `#chess`.
 
 ## Local
 
@@ -26,10 +28,13 @@ Chess also accepts moves when the channel's persona is `chess` and the bot is me
    ```
 
 3. Copy `.env.example` to `.env` and set `DISCORD_TOKEN`. The default local model name matches the Mernik GGUF shown in LM Studio; `node dash.mjs` can list loaded models and save another choice.
-4. In LM Studio, load the model and start its OpenAI-compatible server on port `1234`.
-5. Run `node dash.mjs` and choose **Run locally**.
+4. Install the Stockfish engine for your platform and set `STOCKFISH_PATH` in `.env` to its executable. `STOCKFISH_MOVE_TIME`, `STOCKFISH_THREADS`, and `STOCKFISH_HASH_MB` control CPU use.
+5. For chat and optional chess commentary, load the model in LM Studio and start its OpenAI-compatible server on port `1234`.
+6. Run `node dash.mjs` and choose **Run locally**.
 
 Local prompts are capped at 4k tokens by default, leaving output headroom. Older reply history is trimmed before generation, and the bot adds a warning when context is trimmed or nears the cap. Configure 2k/4k from the dashboard. Enable the Message Content Intent for the bot in the Discord Developer Portal. Conversation history stays in `history.db`.
+
+On Windows, Modal 1.6.0 emits a non-fatal deprecation warning under Python 3.14 for its event-loop compatibility policy. At a convenient maintenance point, recreate the virtual environment with the documented Python 3.12, reinstall requirements, and run the tests; do not patch files in `site-packages`.
 
 ## Modal
 

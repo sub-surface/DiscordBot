@@ -10,7 +10,14 @@ from __future__ import annotations
 
 import re
 import logging
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+import json
 import chess
+import chess.engine
 
 import db
 
@@ -112,6 +119,69 @@ def apply_bot_move(channel_id: int, move_text: str) -> tuple[bool, str, str]:
     board.push(move)
     _save(channel_id, board)
     return True, san, board.fen()
+
+
+def find_cpu_move(channel_id: int) -> str:
+    """Choose a legal move with local Stockfish and return it in SAN."""
+    configured_path = os.getenv("STOCKFISH_PATH", "").strip()
+    executable = shutil.which(configured_path) if configured_path else None
+    if executable is None and configured_path:
+        candidate = Path(os.path.expandvars(os.path.expanduser(configured_path)))
+        if not candidate.is_absolute():
+            candidate = Path(__file__).resolve().parent / candidate
+        if os.path.isfile(candidate):
+            executable = str(candidate)
+    if executable is None and not configured_path:
+        executable = shutil.which("stockfish") or shutil.which("stockfish.exe")
+    if executable is None:
+        raise FileNotFoundError(
+            "Stockfish was not found. Install Stockfish and set STOCKFISH_PATH to its executable."
+        )
+
+    board = get_board(channel_id)
+    if board.is_game_over():
+        raise RuntimeError("The chess game is already over.")
+
+    move_time = max(0.05, float(os.getenv("STOCKFISH_MOVE_TIME", "0.5")))
+    request = {
+        "executable": executable,
+        "fen": board.fen(),
+        "move_time": move_time,
+        "threads": max(1, int(os.getenv("STOCKFISH_THREADS", "2"))),
+        "hash_mb": max(16, int(os.getenv("STOCKFISH_HASH_MB", "128"))),
+    }
+    worker_path = Path(__file__).with_name("stockfish_worker.py")
+    try:
+        result = subprocess.run(
+            [sys.executable, str(worker_path)],
+            input=json.dumps(request),
+            capture_output=True,
+            text=True,
+            timeout=move_time + 20,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError("Stockfish timed out while choosing a move.") from error
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or "Stockfish worker failed.")
+    move_text = result.stdout.strip()
+    move = _parse_move(board, move_text)
+    if move is None:
+        raise RuntimeError(f"Stockfish returned an invalid move: {move_text!r}")
+    return board.san(move)
+
+
+def undo_last_move(channel_id: int) -> str:
+    """Undo and persist the latest move, returning the restored FEN."""
+    board = get_board(channel_id)
+    if not board.move_stack:
+        return board.fen()
+    board.pop()
+    if board.move_stack:
+        _save(channel_id, board)
+    else:
+        db.delete_chess_game(channel_id)
+    return board.fen()
 
 
 def extract_bot_move(text: str) -> str | None:

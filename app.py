@@ -41,6 +41,38 @@ VERBOSITY_INSTRUCTIONS = {
     "detailed": "Give a thorough, well-structured answer with useful reasoning and examples where appropriate.",
 }
 log = logging.getLogger("psychograph")
+ALLOWED_CHANNEL_NAMES = {"sim-city", "little-st-james", "chess"}
+
+
+def is_allowed_channel(channel: object | None) -> bool:
+    parent = getattr(channel, "parent", None)
+    if parent is not None:
+        channel = parent
+    name = getattr(channel, "name", None)
+    return isinstance(name, str) and name.casefold() in ALLOWED_CHANNEL_NAMES
+
+
+async def _show_generation_failure(placeholder: discord.Message, channel_id: int) -> None:
+    try:
+        await placeholder.edit(content="I couldn't reach the model. Check the bot and model server logs.")
+    except discord.NotFound:
+        log.info("Failed-response placeholder in channel %s was already deleted", channel_id)
+
+
+class ChannelScopedCommandTree(app_commands.CommandTree):
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if is_allowed_channel(interaction.channel):
+            return True
+        if interaction.guild is None:
+            return False
+        if interaction.type is discord.InteractionType.autocomplete:
+            await interaction.response.autocomplete([])
+        else:
+            await interaction.response.send_message(
+                "I only respond in #sim-city, #little-st-james, and #chess.",
+                ephemeral=True,
+            )
+        return False
 
 
 def _estimate_prompt_tokens(messages: Sequence[dict]) -> int:
@@ -87,24 +119,37 @@ class PsychographBot(commands.Bot):
     def __init__(self) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
-        super().__init__(command_prefix=commands.when_mentioned, intents=intents)
+        super().__init__(
+            command_prefix=commands.when_mentioned,
+            intents=intents,
+            tree_cls=ChannelScopedCommandTree,
+        )
         self._local_model_lock = asyncio.Lock()
+        self._legacy_guild_commands_cleared = False
 
     async def setup_hook(self) -> None:
         db.init_db()
         await self.add_cog(ChessCommands(self))
         await self.tree.sync()
 
-    async def generate(self, messages: list[dict]) -> str:
+    async def on_ready(self) -> None:
+        if self._legacy_guild_commands_cleared:
+            return
+
+        failed = False
+        for guild in self.guilds:
+            try:
+                await self.tree.sync(guild=guild)
+            except discord.HTTPException:
+                failed = True
+                log.exception("Failed to clear legacy guild commands from %s (%s)", guild.name, guild.id)
+
+        if not failed:
+            self._legacy_guild_commands_cleared = True
+            log.info("Cleared legacy guild-scoped commands from %d guild(s)", len(self.guilds))
+
+    async def generate_local(self, messages: list[dict]) -> str:
         async with self._local_model_lock:
-            if LLM_BACKEND == "modal":
-                return await inference.complete_remote(
-                    messages,
-                    DEFAULT_MODEL,
-                    max_tokens=int(os.getenv("MODAL_MAX_OUTPUT_TOKENS", "2048")),
-                    temperature=float(os.getenv("LLM_TEMPERATURE", "1.0")),
-                    top_p=float(os.getenv("LLM_TOP_P", "0.95")),
-                )
             parts: list[str] = []
             async for chunk in inference.stream(
                 messages,
@@ -115,8 +160,20 @@ class PsychographBot(commands.Bot):
                 parts.append(chunk)
         return "".join(parts).strip()
 
+    async def generate(self, messages: list[dict]) -> str:
+        if LLM_BACKEND == "modal":
+            async with self._local_model_lock:
+                return await inference.complete_remote(
+                    messages,
+                    DEFAULT_MODEL,
+                    max_tokens=int(os.getenv("MODAL_MAX_OUTPUT_TOKENS", "2048")),
+                    temperature=float(os.getenv("LLM_TEMPERATURE", "1.0")),
+                    top_p=float(os.getenv("LLM_TOP_P", "0.95")),
+                )
+        return await self.generate_local(messages)
+
     async def on_message(self, message: discord.Message) -> None:
-        if message.author.bot or self.user is None:
+        if message.author.bot or self.user is None or not is_allowed_channel(message.channel):
             return
 
         is_dm = isinstance(message.channel, discord.DMChannel)
@@ -182,7 +239,7 @@ class PsychographBot(commands.Bot):
                     db.save_message(sent.id, parent_message_id, message.channel.id, "assistant", saved_chunks[index])
         except Exception:
             log.exception("Response failed in channel %s", message.channel.id)
-            await placeholder.edit(content="I couldn't reach the model. Check the bot and model server logs.")
+            await _show_generation_failure(placeholder, message.channel.id)
 
 
 bot = PsychographBot()
