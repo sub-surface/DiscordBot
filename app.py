@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import shutil
+import time
 from urllib.request import Request, urlopen
 from pathlib import Path
 from collections.abc import Sequence
@@ -49,6 +50,318 @@ TWEET_LINK_RE = re.compile(
 )
 TWEET_CONTEXT_LIMIT = 3
 RESPONSE_EMBED_LIMIT = 4000
+CUSTOM_PERSONA_PREFIX = "custom:"
+CUSTOM_PERSONA_PROMPT_LIMIT = 3500
+PERSONA_REACTIONS = {
+    "mochi": "✨",
+    "normal_dude": "👋",
+    "pineapple": "🍍",
+    "charlie": "🧠",
+}
+
+
+def _persona_from_key(guild_id: int | None, persona_key: str) -> tuple[str, str | None]:
+    if persona_key.startswith(CUSTOM_PERSONA_PREFIX) and guild_id is not None:
+        try:
+            persona_id = int(persona_key.removeprefix(CUSTOM_PERSONA_PREFIX))
+        except ValueError:
+            return persona_key, None
+        persona = db.get_custom_persona(persona_id, guild_id)
+        if persona:
+            return persona["name"], persona["prompt"]
+        return DEFAULT_PERSONA, load_persona(DEFAULT_PERSONA)
+    return persona_key, load_persona(persona_key)
+
+
+def _persona_reaction(persona_key: str) -> str:
+    if persona_key.startswith(CUSTOM_PERSONA_PREFIX):
+        return "🌱"
+    return PERSONA_REACTIONS.get(persona_key.casefold(), "✨")
+
+
+class CustomPersonaModal(discord.ui.Modal):
+    def __init__(
+        self,
+        guild_id: int,
+        creator_id: int,
+        persona_id: int | None = None,
+        initial_name: str = "",
+        initial_prompt: str = "",
+    ) -> None:
+        super().__init__(
+            title="Edit custom persona" if persona_id is not None else "Create custom persona",
+            timeout=600,
+        )
+        self.guild_id = guild_id
+        self.creator_id = creator_id
+        self.persona_id = persona_id
+        self.name_input = discord.ui.TextInput(
+            default=initial_name or None,
+            max_length=40,
+            required=True,
+        )
+        self.prompt_input = discord.ui.TextInput(
+            style=discord.TextStyle.paragraph,
+            default=initial_prompt or None,
+            max_length=CUSTOM_PERSONA_PROMPT_LIMIT,
+            required=True,
+        )
+        self.add_item(discord.ui.Label(text="Persona name", component=self.name_input))
+        self.add_item(discord.ui.Label(text="Voice and instructions", component=self.prompt_input))
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if interaction.guild_id != self.guild_id:
+            await interaction.response.send_message("This persona belongs to a different server.", ephemeral=True)
+            return
+        can_manage = bool(interaction.permissions and interaction.permissions.manage_guild)
+        if interaction.user.id != self.creator_id and not can_manage:
+            await interaction.response.send_message("Only its creator or a server manager can edit this persona.", ephemeral=True)
+            return
+
+        name = str(self.name_input.value).strip()
+        prompt = str(self.prompt_input.value).strip()
+        if not name or not prompt:
+            await interaction.response.send_message("Enter both a name and persona instructions.", ephemeral=True)
+            return
+        if name.casefold() in {persona.casefold() for persona in list_personas()} | {"chess"}:
+            await interaction.response.send_message("That name is reserved by a built-in persona.", ephemeral=True)
+            return
+
+        if self.persona_id is None:
+            persona_id = db.create_custom_persona(self.guild_id, interaction.user.id, name, prompt)
+            if persona_id is None:
+                await interaction.response.send_message("A persona with that name already exists in this server.", ephemeral=True)
+                return
+            db.set_channel_persona(interaction.channel_id, f"{CUSTOM_PERSONA_PREFIX}{persona_id}")
+            await interaction.response.send_message(f"Created and selected **{name}** for this channel.", ephemeral=True)
+            return
+
+        updated = db.update_custom_persona(
+            self.persona_id,
+            self.guild_id,
+            interaction.user.id,
+            name,
+            prompt,
+            can_manage=can_manage,
+        )
+        if not updated:
+            await interaction.response.send_message("Couldn't update that persona; check its name and your permissions.", ephemeral=True)
+            return
+        await interaction.response.send_message(f"Updated custom persona **{name}**.", ephemeral=True)
+
+
+class PersonaDeleteView(discord.ui.View):
+    def __init__(self, persona: dict, requester_id: int) -> None:
+        super().__init__(timeout=60)
+        self.persona = persona
+        self.requester_id = requester_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        can_manage = bool(interaction.permissions and interaction.permissions.manage_guild)
+        if interaction.user.id == self.requester_id or can_manage:
+            return True
+        await interaction.response.send_message("Only the requester or a server manager can confirm this.", ephemeral=True)
+        return False
+
+    @discord.ui.button(label="Delete persona", style=discord.ButtonStyle.danger)
+    async def confirm_delete(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        deleted = db.delete_custom_persona(
+            self.persona["id"],
+            self.persona["guild_id"],
+            interaction.user.id,
+            DEFAULT_PERSONA,
+            can_manage=interaction.permissions.manage_guild,
+        )
+        self.stop()
+        message = (
+            f"Deleted **{self.persona['name']}**. Channels using it returned to **{DEFAULT_PERSONA}**."
+            if deleted
+            else "Couldn't delete that persona; check your permissions."
+        )
+        await interaction.response.edit_message(content=message, view=None)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel_delete(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        self.stop()
+        await interaction.response.edit_message(content="Deletion cancelled.", view=None)
+
+
+def _status_embed(channel_id: int, guild_id: int | None, channel_name: str) -> discord.Embed:
+    persona_key = db.get_channel_persona(channel_id) or DEFAULT_PERSONA
+    persona_name, _prompt = _persona_from_key(guild_id, persona_key)
+    verbosity = db.get_channel_verbosity(channel_id) or "balanced"
+    reactions = "On" if db.get_persona_reactions(channel_id) else "Off"
+    context_tokens = (
+        int(os.getenv("MODAL_MAX_MODEL_LEN", "65536"))
+        if LLM_BACKEND == "modal"
+        else LOCAL_CONTEXT_TOKENS
+    )
+    output_tokens = (
+        int(os.getenv("MODAL_MAX_OUTPUT_TOKENS", "2048"))
+        if LLM_BACKEND == "modal"
+        else LOCAL_MAX_OUTPUT_TOKENS
+    )
+    model = (
+        f"{MODAL_MODEL_ID}/{MODAL_MODEL_FILE}"
+        if LLM_BACKEND == "modal"
+        else DEFAULT_MODEL
+    )
+    embed = discord.Embed(
+        title=f"#{channel_name} settings",
+        description="Channel-specific chat settings. Conversation history follows reply chains, not the whole channel.",
+        color=0x347A68,
+    )
+    embed.add_field(name="Persona", value=persona_name, inline=True)
+    embed.add_field(name="Reply detail", value=verbosity.title(), inline=True)
+    embed.add_field(name="Persona reactions", value=reactions, inline=True)
+    embed.add_field(name="Backend", value=LLM_BACKEND.title(), inline=True)
+    embed.add_field(name="Context / output", value=f"{context_tokens:,} / {output_tokens:,} tokens", inline=True)
+    embed.add_field(name="Model target", value=f"`{model}`", inline=False)
+    if persona_key == "chess":
+        embed.add_field(
+            name="Chess commentary",
+            value="On" if db.get_chess_commentary(channel_id) else "Off",
+            inline=True,
+        )
+    embed.set_footer(text="History is isolated per channel/thread. Use Reset history to clear this channel.")
+    return embed
+
+
+class ResetHistoryView(discord.ui.View):
+    def __init__(self, channel_id: int, channel_name: str, requester_id: int) -> None:
+        super().__init__(timeout=60)
+        self.channel_id = channel_id
+        self.channel_name = channel_name
+        self.requester_id = requester_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.requester_id:
+            return True
+        await interaction.response.send_message("Only the person who opened this confirmation can use it.", ephemeral=True)
+        return False
+
+    @discord.ui.button(label="Clear history", style=discord.ButtonStyle.danger)
+    async def confirm_reset(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        if interaction.channel_id != self.channel_id:
+            await interaction.response.edit_message(content="This confirmation belongs to another channel.", view=None)
+            self.stop()
+            return
+        db.clear_channel(self.channel_id)
+        self.stop()
+        await interaction.response.edit_message(
+            content=f"Conversation history cleared for **#{self.channel_name}**.",
+            view=None,
+        )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel_reset(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        self.stop()
+        await interaction.response.edit_message(content="History reset cancelled.", view=None)
+
+
+class StatusView(discord.ui.View):
+    def __init__(
+        self,
+        channel_id: int,
+        guild_id: int | None,
+        channel_name: str,
+        requester_id: int,
+        can_manage_messages: bool,
+    ) -> None:
+        super().__init__(timeout=300)
+        self.channel_id = channel_id
+        self.guild_id = guild_id
+        self.channel_name = channel_name
+        self.requester_id = requester_id
+        options = self._persona_options()
+        self.persona_select = discord.ui.Select(
+            placeholder="Choose a persona",
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=0,
+        )
+        self.persona_select.callback = self.select_persona
+        self.add_item(self.persona_select)
+        if not can_manage_messages:
+            self.remove_item(self.reaction_button)
+        self._refresh_labels()
+
+    def _persona_options(self) -> list[discord.SelectOption]:
+        current_key = db.get_channel_persona(self.channel_id) or DEFAULT_PERSONA
+        entries = [(name, name) for name in list_personas()]
+        entries.append(("chess", "chess"))
+        if self.guild_id is not None:
+            entries.extend(
+                (persona["name"], f"{CUSTOM_PERSONA_PREFIX}{persona['id']}")
+                for persona in db.list_custom_personas(self.guild_id)
+            )
+        current = next((entry for entry in entries if entry[1] == current_key), None)
+        entries = ([current] if current else []) + [entry for entry in entries if entry != current]
+        return [
+            discord.SelectOption(label=name[:100], value=value, default=value == current_key)
+            for name, value in entries[:25]
+        ]
+
+    def _refresh_labels(self) -> None:
+        verbosity = db.get_channel_verbosity(self.channel_id) or "balanced"
+        self.verbosity_button.label = f"Detail: {verbosity.title()}"
+        reactions = "On" if db.get_persona_reactions(self.channel_id) else "Off"
+        self.reaction_button.label = f"Reactions: {reactions}"
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message("Run `/status` to open controls for yourself.", ephemeral=True)
+            return False
+        if interaction.channel_id != self.channel_id:
+            await interaction.response.send_message("These controls belong to another channel.", ephemeral=True)
+            return False
+        return True
+
+    async def _refresh(self, interaction: discord.Interaction) -> None:
+        self.persona_select.options = self._persona_options()
+        self._refresh_labels()
+        await interaction.response.edit_message(
+            embed=_status_embed(self.channel_id, self.guild_id, self.channel_name),
+            view=self,
+        )
+
+    async def select_persona(self, interaction: discord.Interaction) -> None:
+        persona_key = self.persona_select.values[0]
+        if persona_key.startswith(CUSTOM_PERSONA_PREFIX):
+            persona = _find_custom_persona(interaction, persona_key)
+            if persona is None:
+                await interaction.response.send_message("That custom persona isn't available in this server.", ephemeral=True)
+                return
+        elif load_persona(persona_key) is None:
+            await interaction.response.send_message("That persona does not exist.", ephemeral=True)
+            return
+        db.set_channel_persona(self.channel_id, persona_key)
+        await self._refresh(interaction)
+
+    @discord.ui.button(label="Detail", style=discord.ButtonStyle.secondary, row=1)
+    async def verbosity_button(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        levels = ("concise", "balanced", "detailed")
+        current = db.get_channel_verbosity(self.channel_id) or "balanced"
+        next_level = levels[(levels.index(current) + 1) % len(levels)] if current in levels else levels[0]
+        db.set_channel_verbosity(self.channel_id, next_level)
+        await self._refresh(interaction)
+
+    @discord.ui.button(label="Reactions", style=discord.ButtonStyle.secondary, row=1)
+    async def reaction_button(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        if not interaction.permissions.manage_messages:
+            await interaction.response.send_message("Manage Messages permission is required.", ephemeral=True)
+            return
+        db.set_persona_reactions(self.channel_id, not db.get_persona_reactions(self.channel_id))
+        await self._refresh(interaction)
+
+    @discord.ui.button(label="Reset history", style=discord.ButtonStyle.danger, row=1)
+    async def reset_button(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await interaction.response.send_message(
+            f"Clear conversation history for **#{self.channel_name}**? This cannot be undone.",
+            view=ResetHistoryView(self.channel_id, self.channel_name, self.requester_id),
+            ephemeral=True,
+        )
 
 
 def is_allowed_channel(channel: object | None) -> bool:
@@ -248,12 +561,43 @@ def _split_response(text: str, limit: int = RESPONSE_EMBED_LIMIT) -> list[str]:
     return chunks or [""]
 
 
-def _response_embed(text: str, persona: str, source_urls: Sequence[str], context_notice: str | None) -> discord.Embed:
+def _generation_summary(
+    text: str,
+    elapsed_seconds: float,
+    completion_tokens: int | None = None,
+    reported_tokens_per_second: float | None = None,
+) -> str:
+    estimated_tokens = completion_tokens is None
+    output_tokens = completion_tokens if completion_tokens is not None else (len(text.encode("utf-8")) + 2) // 3
+    estimated_rate = reported_tokens_per_second is None
+    tokens_per_second = (
+        reported_tokens_per_second
+        if reported_tokens_per_second is not None
+        else output_tokens / max(elapsed_seconds, 0.001)
+    )
+    token_marker = "~" if estimated_tokens else ""
+    rate_marker = "~" if estimated_rate and estimated_tokens else ""
+    qualifier = "estimated" if estimated_tokens else "llama.cpp" if not estimated_rate else "Modal request"
+    return (
+        f"{token_marker}{output_tokens} tokens · {elapsed_seconds:.1f}s · "
+        f"{rate_marker}{tokens_per_second:.1f} tok/s ({qualifier})"
+    )
+
+
+def _response_embed(
+    text: str,
+    persona: str,
+    source_urls: Sequence[str],
+    context_notice: str | None,
+    generation_summary: str | None = None,
+) -> discord.Embed:
     embed = discord.Embed(description=text, color=0x347A68)
-    embed.set_author(name=f"{persona} · Psychograph")
+    embed.set_author(name=persona)
     if source_urls:
         embed.add_field(name="Referenced posts", value="\n".join(source_urls[:3]), inline=False)
-    embed.set_footer(text=context_notice or "Psychograph")
+    footer_parts = [part for part in (generation_summary, context_notice) if part]
+    if footer_parts:
+        embed.set_footer(text=" · ".join(footer_parts))
     return embed
 
 
@@ -302,7 +646,7 @@ class PsychographBot(commands.Bot):
                 parts.append(chunk)
         return "".join(parts).strip()
 
-    async def generate(self, messages: list[dict]) -> str:
+    async def generate(self, messages: list[dict]) -> str | dict[str, str | int | float | None]:
         if LLM_BACKEND == "modal":
             async with self._local_model_lock:
                 return await inference.complete_remote(
@@ -339,8 +683,9 @@ class PsychographBot(commands.Bot):
             await message.reply("Send me a message along with the mention.", mention_author=False)
             return
 
-        persona = db.get_channel_persona(message.channel.id) or DEFAULT_PERSONA
-        if persona == "chess":
+        persona_key = db.get_channel_persona(message.channel.id) or DEFAULT_PERSONA
+        persona, persona_prompt = _persona_from_key(message.guild.id if message.guild else None, persona_key)
+        if persona_key == "chess":
             summary, file = await play_move(self, message.channel, prompt)
             reply = {"embed": board_embed("Chess", summary, bool(file)), "mention_author": False}
             if file:
@@ -355,7 +700,7 @@ class PsychographBot(commands.Bot):
         parent_id = reply_id
         chain = db.get_message_chain(parent_id, channel_id=message.channel.id) if parent_id else []
         db.save_message(message.id, parent_id, message.channel.id, "user", model_prompt, message.author.id)
-        persona_prompt = load_persona(persona) or f"You are {persona}."
+        persona_prompt = persona_prompt or f"You are {persona}."
         system_prompt = (
             f"{persona_prompt}\n\n"
             f"{VERBOSITY_INSTRUCTIONS.get(db.get_channel_verbosity(message.channel.id) or 'balanced', VERBOSITY_INSTRUCTIONS['balanced'])}\n\n"
@@ -368,12 +713,32 @@ class PsychographBot(commands.Bot):
 
         placeholder = await message.reply("…", mention_author=False)
         try:
-            response = await self.generate(messages)
+            generation_started = time.perf_counter()
+            generation_result = await self.generate(messages)
+            wall_seconds = time.perf_counter() - generation_started
+            if isinstance(generation_result, dict):
+                response = str(generation_result.get("text") or "")
+                elapsed = generation_result.get("eval_seconds") or generation_result.get("generation_seconds")
+                completion_tokens = generation_result.get("completion_tokens")
+                reported_tps = generation_result.get("tokens_per_second")
+                measured_seconds = float(elapsed) if isinstance(elapsed, (int, float)) else wall_seconds
+                measured_tokens = completion_tokens if isinstance(completion_tokens, int) else None
+                measured_tps = float(reported_tps) if isinstance(reported_tps, (int, float)) else None
+                generation_summary = _generation_summary(response, measured_seconds, measured_tokens, measured_tps)
+            else:
+                response = generation_result
+                generation_summary = _generation_summary(response, wall_seconds)
             response = response or "I don't have a response for that."
             saved_chunks = _split_response(response)
             source_urls = [url for url, _text in tweets]
             embeds = [
-                _response_embed(chunk, persona, source_urls if index == 0 else [], context_notice if index == 0 else None)
+                _response_embed(
+                    chunk,
+                    persona,
+                    source_urls if index == 0 else [],
+                    context_notice if index == 0 else None,
+                    generation_summary if index == 0 else None,
+                )
                 for index, chunk in enumerate(saved_chunks)
             ]
             allowed_mentions = discord.AllowedMentions(
@@ -387,6 +752,11 @@ class PsychographBot(commands.Bot):
                 embed=embeds[0],
                 allowed_mentions=allowed_mentions,
             )
+            if db.get_persona_reactions(message.channel.id):
+                try:
+                    await sent.add_reaction(_persona_reaction(persona_key))
+                except discord.HTTPException:
+                    log.info("Couldn't add the persona reaction in channel %s", message.channel.id)
             db.save_message(sent.id, message.id, message.channel.id, "assistant", saved_chunks[0])
             for index, embed in enumerate(embeds[1:], start=1):
                 parent_message_id = sent.id
@@ -407,27 +777,163 @@ bot = PsychographBot()
 @bot.tree.command(name="persona", description="Show or choose this channel's persona")
 @app_commands.describe(name="Leave blank to view the current persona and available choices")
 async def persona_command(interaction: discord.Interaction, name: str | None = None) -> None:
-    current = db.get_channel_persona(interaction.channel_id) or DEFAULT_PERSONA
+    guild_id = interaction.guild_id
+    current_key = db.get_channel_persona(interaction.channel_id) or DEFAULT_PERSONA
+    current_name, _prompt = _persona_from_key(guild_id, current_key)
     if name is None:
         available = ", ".join(list_personas())
+        if guild_id is not None:
+            custom_names = [persona["name"] for persona in db.list_custom_personas(guild_id)]
+            available = ", ".join(part for part in (available, ", ".join(custom_names)) if part)
         await interaction.response.send_message(
-            f"Current persona: **{current}**\nAvailable: {available}", ephemeral=True
+            f"Current persona: **{current_name}**\nAvailable: {available}", ephemeral=True
         )
         return
-    if load_persona(name) is None:
-        await interaction.response.send_message("That persona does not exist.", ephemeral=True)
-        return
+
+    if name.startswith(CUSTOM_PERSONA_PREFIX):
+        try:
+            persona_id = int(name.removeprefix(CUSTOM_PERSONA_PREFIX))
+        except ValueError:
+            persona_id = -1
+        persona = db.get_custom_persona(persona_id, guild_id) if guild_id is not None else None
+        if persona is None:
+            await interaction.response.send_message("That custom persona isn't available in this server.", ephemeral=True)
+            return
+        persona_name = persona["name"]
+    else:
+        if name != "chess" and load_persona(name) is None:
+            await interaction.response.send_message("That persona does not exist.", ephemeral=True)
+            return
+        persona_name = name
     db.set_channel_persona(interaction.channel_id, name)
-    await interaction.response.send_message(f"This channel now uses **{name}**.", ephemeral=True)
+    await interaction.response.send_message(f"This channel now uses **{persona_name}**.", ephemeral=True)
 
 
 @persona_command.autocomplete("name")
 async def persona_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
-    return [
+    query = current.casefold()
+    choices = [
         app_commands.Choice(name=name, value=name)
-        for name in list_personas()
-        if current.casefold() in name.casefold()
+        for name in [*list_personas(), "chess"]
+        if query in name.casefold()
+    ]
+    if interaction.guild_id is not None:
+        choices.extend(
+            app_commands.Choice(name=persona["name"], value=f"{CUSTOM_PERSONA_PREFIX}{persona['id']}")
+            for persona in db.list_custom_personas(interaction.guild_id)
+            if query in persona["name"].casefold()
+        )
+    return choices[:25]
+
+
+@bot.tree.command(name="persona-create", description="Create and select a custom server persona")
+async def persona_create_command(interaction: discord.Interaction) -> None:
+    if interaction.guild_id is None:
+        await interaction.response.send_message("Custom personas can only be created in a server.", ephemeral=True)
+        return
+    await interaction.response.send_modal(CustomPersonaModal(interaction.guild_id, interaction.user.id))
+
+
+def _find_custom_persona(interaction: discord.Interaction, persona_key: str) -> dict | None:
+    if interaction.guild_id is None or not persona_key.startswith(CUSTOM_PERSONA_PREFIX):
+        return None
+    try:
+        persona_id = int(persona_key.removeprefix(CUSTOM_PERSONA_PREFIX))
+    except ValueError:
+        return None
+    return db.get_custom_persona(persona_id, interaction.guild_id)
+
+
+def _may_manage_persona(interaction: discord.Interaction, persona: dict) -> bool:
+    return interaction.user.id == persona["creator_id"] or bool(
+        interaction.permissions and interaction.permissions.manage_guild
+    )
+
+
+async def _custom_persona_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    if interaction.guild_id is None:
+        return []
+    query = current.casefold()
+    return [
+        app_commands.Choice(name=persona["name"], value=f"{CUSTOM_PERSONA_PREFIX}{persona['id']}")
+        for persona in db.list_custom_personas(interaction.guild_id)
+        if query in persona["name"].casefold()
     ][:25]
+
+
+@bot.tree.command(name="persona-edit", description="Edit a custom persona you own")
+@app_commands.describe(name="Custom persona to edit")
+async def persona_edit_command(interaction: discord.Interaction, name: str) -> None:
+    persona = _find_custom_persona(interaction, name)
+    if persona is None:
+        await interaction.response.send_message("Choose a custom persona from this server.", ephemeral=True)
+        return
+    if not _may_manage_persona(interaction, persona):
+        await interaction.response.send_message("Only its creator or a server manager can edit this persona.", ephemeral=True)
+        return
+    await interaction.response.send_modal(
+        CustomPersonaModal(
+            persona["guild_id"],
+            persona["creator_id"],
+            persona_id=persona["id"],
+            initial_name=persona["name"],
+            initial_prompt=persona["prompt"],
+        )
+    )
+
+
+@persona_edit_command.autocomplete("name")
+async def persona_edit_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    return await _custom_persona_autocomplete(interaction, current)
+
+
+@bot.tree.command(name="persona-delete", description="Delete a custom persona you own")
+@app_commands.describe(name="Custom persona to delete")
+async def persona_delete_command(interaction: discord.Interaction, name: str) -> None:
+    persona = _find_custom_persona(interaction, name)
+    if persona is None:
+        await interaction.response.send_message("Choose a custom persona from this server.", ephemeral=True)
+        return
+    if not _may_manage_persona(interaction, persona):
+        await interaction.response.send_message("Only its creator or a server manager can delete this persona.", ephemeral=True)
+        return
+    await interaction.response.send_message(
+        f"Delete **{persona['name']}**? Channels using it will return to **{DEFAULT_PERSONA}**.",
+        view=PersonaDeleteView(persona, interaction.user.id),
+        ephemeral=True,
+    )
+
+
+@persona_delete_command.autocomplete("name")
+async def persona_delete_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    return await _custom_persona_autocomplete(interaction, current)
+
+
+@bot.tree.command(name="reactions", description="Toggle persona signature reactions in this channel")
+@app_commands.default_permissions(manage_messages=True)
+@app_commands.describe(enabled="Whether the bot should add a persona reaction after replies")
+@app_commands.choices(enabled=[
+    app_commands.Choice(name="On", value="on"),
+    app_commands.Choice(name="Off", value="off"),
+])
+async def reactions_command(interaction: discord.Interaction, enabled: str | None = None) -> None:
+    if interaction.guild is None:
+        await interaction.response.send_message("This setting is only available in a server.", ephemeral=True)
+        return
+    if not interaction.permissions.manage_messages:
+        await interaction.response.send_message("You need Manage Messages to change channel reactions.", ephemeral=True)
+        return
+    if enabled is None:
+        state = "on" if db.get_persona_reactions(interaction.channel_id) else "off"
+        await interaction.response.send_message(f"Persona reactions are **{state}** in this channel.", ephemeral=True)
+        return
+    active = enabled == "on"
+    db.set_persona_reactions(interaction.channel_id, active)
+    state = "on" if active else "off"
+    await interaction.response.send_message(f"Persona reactions are now **{state}** in this channel.", ephemeral=True)
 
 
 @bot.tree.command(name="verbosity", description="Show or set reply detail for this channel")
@@ -522,11 +1028,17 @@ async def cost_command(interaction: discord.Interaction) -> None:
 
 @bot.tree.command(name="status", description="Show this channel's settings and bot backend")
 async def status_command(interaction: discord.Interaction) -> None:
-    persona = db.get_channel_persona(interaction.channel_id) or DEFAULT_PERSONA
-    verbosity = db.get_channel_verbosity(interaction.channel_id) or "balanced"
-    model = f"{MODAL_MODEL_ID}/{MODAL_MODEL_FILE}" if LLM_BACKEND == "modal" else DEFAULT_MODEL
+    channel_name = getattr(interaction.channel, "name", "channel")
+    view = StatusView(
+        interaction.channel_id,
+        interaction.guild_id,
+        channel_name,
+        interaction.user.id,
+        bool(interaction.permissions and interaction.permissions.manage_messages),
+    )
     await interaction.response.send_message(
-        f"Persona: **{persona}**\nReply detail: **{verbosity}**\nBackend: **{LLM_BACKEND}**\nModel target: `{model}`",
+        embed=_status_embed(interaction.channel_id, interaction.guild_id, channel_name),
+        view=view,
         ephemeral=True,
     )
 

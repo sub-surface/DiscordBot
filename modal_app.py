@@ -112,7 +112,7 @@ class MimoWorker:
         max_tokens: int,
         temperature: float,
         top_p: float,
-    ) -> str:
+    ) -> dict[str, str | int | float | None]:
         from openai import OpenAI
 
         client = OpenAI(
@@ -125,6 +125,7 @@ class MimoWorker:
             request_options = {}
             if ENABLE_THINKING:
                 request_options["extra_body"] = {"chat_template_kwargs": {"enable_thinking": True}}
+            started = time.perf_counter()
             result = client.chat.completions.create(
                 model=MODEL_ALIAS,
                 messages=messages,
@@ -133,8 +134,26 @@ class MimoWorker:
                 top_p=top_p,
                 **request_options,
             )
+            generation_seconds = time.perf_counter() - started
             choice = result.choices[0].message
-            return (choice.content or "").strip()
+            usage = result.usage
+            response_metadata = getattr(result, "model_extra", None) or {}
+            timings = response_metadata.get("timings", {})
+            if not isinstance(timings, dict):
+                timings = {}
+            predicted_tokens = timings.get("predicted_n")
+            completion_tokens = (
+                predicted_tokens if isinstance(predicted_tokens, int)
+                else usage.completion_tokens if usage else None
+            )
+            return {
+                "text": (choice.content or "").strip(),
+                "prompt_tokens": usage.prompt_tokens if usage else None,
+                "completion_tokens": completion_tokens,
+                "generation_seconds": generation_seconds,
+                "eval_seconds": timings.get("predicted_ms", 0) / 1000 if timings.get("predicted_ms") is not None else None,
+                "tokens_per_second": timings.get("predicted_per_second"),
+            }
         finally:
             client.close()
 

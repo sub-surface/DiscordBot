@@ -230,19 +230,21 @@ async function configureRuntime() {
   console.log("2  Use on-demand Modal GPU")
   console.log("3  Local context  ·  2048 tokens")
   console.log("4  Local context  ·  4096 tokens")
-  console.log("5  Modal context  ·  64k tokens")
-  console.log("6  Modal context  ·  128k tokens")
+  console.log("5  Modal context  ·  40k tokens")
+  console.log("6  Modal context  ·  64k tokens")
+  console.log("7  Modal context  ·  128k tokens")
   const choice = (await ask("> ")).trim()
   if (choice === "1" || choice === "2") {
     saveEnv("LLM_BACKEND", choice === "1" ? "local" : "modal")
     console.log("Restart the local bot for the backend change to take effect.")
   } else if (choice === "3" || choice === "4") {
     saveEnv("LOCAL_CONTEXT_TOKENS", choice === "3" ? "2048" : "4096")
-  } else if (choice === "5" || choice === "6") {
-    saveEnv("MODAL_MAX_MODEL_LEN", choice === "5" ? "65536" : "131072")
+  } else if (choice === "5" || choice === "6" || choice === "7") {
+    const contextTokens = { "5": "40960", "6": "65536", "7": "131072" }[choice]
+    saveEnv("MODAL_MAX_MODEL_LEN", contextTokens)
     console.log("Redeploy the Modal worker to apply its context size.")
   } else {
-    console.log("Choose a listed option.")
+    console.log("Choose 1 through 7.")
   }
 }
 

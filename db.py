@@ -36,7 +36,8 @@ def init_db() -> None:
                 channel_id INTEGER PRIMARY KEY,
                 persona TEXT,
                 verbosity TEXT,
-                chess_commentary INTEGER NOT NULL DEFAULT 0
+                chess_commentary INTEGER NOT NULL DEFAULT 0,
+                persona_reactions INTEGER NOT NULL DEFAULT 0
             )"""
         )
         settings_columns = {row["name"] for row in _conn.execute("PRAGMA table_info(channel_settings)")}
@@ -44,6 +45,19 @@ def init_db() -> None:
             _conn.execute("ALTER TABLE channel_settings ADD COLUMN verbosity TEXT")
         if "chess_commentary" not in settings_columns:
             _conn.execute("ALTER TABLE channel_settings ADD COLUMN chess_commentary INTEGER NOT NULL DEFAULT 0")
+        if "persona_reactions" not in settings_columns:
+            _conn.execute("ALTER TABLE channel_settings ADD COLUMN persona_reactions INTEGER NOT NULL DEFAULT 0")
+        _conn.execute(
+            """CREATE TABLE IF NOT EXISTS custom_personas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id INTEGER NOT NULL,
+                creator_id INTEGER NOT NULL,
+                name TEXT COLLATE NOCASE NOT NULL,
+                prompt TEXT NOT NULL,
+                created_ts DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(guild_id, name)
+            )"""
+        )
         _conn.execute(
             """CREATE TABLE IF NOT EXISTS chess_games (
                 channel_id INTEGER PRIMARY KEY,
@@ -146,6 +160,95 @@ def set_chess_commentary(channel_id: int, enabled: bool) -> None:
             "ON CONFLICT(channel_id) DO UPDATE SET chess_commentary = excluded.chess_commentary",
             (channel_id, int(enabled)),
         )
+
+
+def get_persona_reactions(channel_id: int) -> bool:
+    row = _conn.execute(
+        "SELECT persona_reactions FROM channel_settings WHERE channel_id = ?", (channel_id,)
+    ).fetchone()
+    return bool(row["persona_reactions"]) if row else False
+
+
+def set_persona_reactions(channel_id: int, enabled: bool) -> None:
+    with _conn:
+        _conn.execute(
+            "INSERT INTO channel_settings (channel_id, persona_reactions) VALUES (?, ?) "
+            "ON CONFLICT(channel_id) DO UPDATE SET persona_reactions = excluded.persona_reactions",
+            (channel_id, int(enabled)),
+        )
+
+
+def create_custom_persona(guild_id: int, creator_id: int, name: str, prompt: str) -> int | None:
+    try:
+        with _conn:
+            cursor = _conn.execute(
+                "INSERT INTO custom_personas (guild_id, creator_id, name, prompt) VALUES (?, ?, ?, ?)",
+                (guild_id, creator_id, name.strip(), prompt.strip()),
+            )
+        return int(cursor.lastrowid)
+    except sqlite3.IntegrityError:
+        return None
+
+
+def get_custom_persona(persona_id: int, guild_id: int) -> dict | None:
+    row = _conn.execute(
+        "SELECT id, guild_id, creator_id, name, prompt FROM custom_personas WHERE id = ? AND guild_id = ?",
+        (persona_id, guild_id),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def list_custom_personas(guild_id: int) -> list[dict]:
+    rows = _conn.execute(
+        "SELECT id, guild_id, creator_id, name, prompt FROM custom_personas WHERE guild_id = ? ORDER BY name COLLATE NOCASE",
+        (guild_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def update_custom_persona(
+    persona_id: int,
+    guild_id: int,
+    user_id: int,
+    name: str,
+    prompt: str,
+    can_manage: bool = False,
+) -> bool:
+    persona = get_custom_persona(persona_id, guild_id)
+    if not persona or (persona["creator_id"] != user_id and not can_manage):
+        return False
+    try:
+        with _conn:
+            _conn.execute(
+                "UPDATE custom_personas SET name = ?, prompt = ? WHERE id = ? AND guild_id = ?",
+                (name.strip(), prompt.strip(), persona_id, guild_id),
+            )
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+
+def delete_custom_persona(
+    persona_id: int,
+    guild_id: int,
+    user_id: int,
+    fallback_persona: str,
+    can_manage: bool = False,
+) -> bool:
+    persona = get_custom_persona(persona_id, guild_id)
+    if not persona or (persona["creator_id"] != user_id and not can_manage):
+        return False
+    persona_key = f"custom:{persona_id}"
+    with _conn:
+        _conn.execute(
+            "UPDATE channel_settings SET persona = ? WHERE persona = ?",
+            (fallback_persona, persona_key),
+        )
+        _conn.execute("DELETE FROM custom_personas WHERE id = ? AND guild_id = ?", (persona_id, guild_id))
+    for channel_id, cached_persona in list(_persona_cache.items()):
+        if cached_persona == persona_key:
+            _persona_cache[channel_id] = fallback_persona
+    return True
 
 
 def save_chess_game(channel_id: int, fen: str, move_stack: str) -> None:

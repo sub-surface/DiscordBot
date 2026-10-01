@@ -43,7 +43,7 @@ async def complete_remote(
     max_tokens: int,
     temperature: float,
     top_p: float,
-) -> str:
+) -> str | dict[str, str | int | float | None]:
     import modal
 
     worker = modal.Cls.from_name("psychograph", "MimoWorker")

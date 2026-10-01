@@ -2,21 +2,25 @@
 
 A small Discord bot that responds in DMs, when mentioned, or when someone replies to it. Choose a persona per channel. Run inference locally with LM Studio or call an on-demand Modal model worker from the local bot.
 
-When tagged with a public X/Twitter post link, the bot uses Discord's preview text when available or retrieves public post text through the FxEmbed API. Retrieved text is treated as untrusted quote context; private, deleted, or unavailable posts are not inferred from the URL. Model replies are shown in persona-labeled embeds. Requests such as `tell @member a poem` produce a public channel reply and ping only that explicitly addressed member; the bot does not send DMs.
+When tagged with a public X/Twitter post link, the bot uses Discord's preview text when available or retrieves public post text through the FxEmbed API. Retrieved text is treated as untrusted quote context; private, deleted, or unavailable posts are not inferred from the URL. Model replies are shown in persona-labeled embeds with generation time and throughput. Modal uses llama.cpp's reported eval tokens, eval time, and tokens per second; the local backend uses an approximate token estimate. Requests such as `tell @member a poem` produce a public channel reply and ping only that explicitly addressed member; the bot does not send DMs.
 
 ## Commands
 
 - `/persona [name]` shows or selects the channel persona.
+- `/persona-create` opens a form to create and select a custom persona for this server; `/persona-edit` and `/persona-delete` manage custom personas you created.
+- `/reactions [on|off]` toggles the channel's persona signature reactions (Manage Messages permission required).
 - `/reset` clears conversation history for the channel.
 - `/verbosity [concise|balanced|detailed]` shows or sets reply detail for the channel.
 - `/model` shows the configured inference backend and model target; Modal model changes are made in the dashboard and require redeployment.
 - `/cost` shows Modal workspace usage for the current month (Manage Server permission in guilds).
-- `/status` summarizes channel settings and the configured model target.
+- `/status` shows the channel persona, reply detail, reaction state, backend, model, and context budget. Its controls switch persona, cycle reply detail, toggle reactions (Manage Messages required), or clear history after confirmation.
 - `/chess new`, `/chess move`, `/chess board`, and `/chess resign` manage a channel's chess game.
 
 Chess also accepts moves when the channel's persona is `chess` and the bot is mentioned or replied to.
 Chess moves are selected by local Stockfish on the bot's CPU; move generation uses neither LM Studio nor Modal. Install Stockfish separately and set `STOCKFISH_PATH` to its executable (or put it on `PATH`). `/chess commentary on` optionally adds a note using local LM Studio only; commentary defaults off and never uses Modal. `/chess commentary off` returns to CPU-only chess. If Stockfish is unavailable, the submitted move is rolled back.
 The bot only handles messages and slash commands in `#sim-city`, `#little-st-james`, `#shitpost`, and `#games`. Chess commands and the `chess` persona are available in `#games`.
+
+Custom personas are stored per server in `history.db`, can contain up to 3,500 characters of instructions, and are selectable with `/persona`. Creators can edit or delete their personas; server managers can manage any custom persona. Deleting one returns channels using it to the default persona. Persona reactions are off by default; `/reactions on|off` requires Manage Messages, and the bot needs Add Reactions permission. When enabled, it adds one signature emoji to its reply and uses a small default emoji for custom personas. `/status` shows whether reactions are active in the channel.
 
 ## Local
 
@@ -51,7 +55,7 @@ $env:MODAL_GPU = "L4"
 $env:MODAL_MAX_MODEL_LEN = "65536"
 ```
 
-The worker supports 64k or 128k context, selected under **Config** in the dashboard. The existing 5.1 GiB MiMo setup uses Q8 KV cache; MechaEpstein Q8_0 is about 8.1 GiB, so keep it at 64k until a smoke test confirms that 128k fits reliably. Local context stays at 4k by default with visible warnings and oldest-turn trimming. L4 is the cost-efficient first choice for one-at-a-time chat; A10G costs more at current Modal rates with similar memory. H100 may reduce latency, but must be over four times faster to reduce GPU cost per response. The throughput example's 100% utilization is for batched offline work, not a single interactive Discord request; batching here could add chat latency.
+The dashboard offers 40k, 64k, and 128k Modal context settings. Set the limit no higher than the model's native context: the MechaEpstein Q8_0 smoke test reported a 40,960-token training context, and llama.cpp caps larger settings to that value. Its current `.env` setting is 40,960 so bot-side context trimming matches the worker. The existing MiMo setup uses Q8 KV cache and retains its 64k default. Local context stays at 4k by default with visible warnings and oldest-turn trimming. L4 is the cost-efficient first choice for one-at-a-time chat; A10G costs more at current Modal rates with similar memory. H100 may reduce latency, but must be over four times faster to reduce GPU cost per response. The throughput example's 100% utilization is for batched offline work, not a single interactive Discord request; batching here could add chat latency.
 
 1. Install the project dependencies locally and run `modal setup`.
 2. Run `node dash.mjs` and use **Config** to choose the inference backend. The local Discord gateway uses the token in `.env`; the Modal inference worker does not need Discord credentials.
@@ -59,7 +63,7 @@ The worker supports 64k or 128k context, selected under **Config** in the dashbo
 4. **Test Modal model** runs one real completion on L4 after an explicit confirmation. Once verified, choose **Run locally** to start the Discord gateway; messages use the configured backend.
 5. **Follow Modal logs** mirrors worker output into `bot.log`. The worker scales down after 60 seconds idle.
 
-The Modal model test is billed for cold start, download if uncached, generation, and the 60-second scale-down window. The Modal Volume keeps downloaded GGUF files between invocations, so subsequent starts avoid downloading them again. At the live rate checked on 2026-10-01, L4 compute is $0.80/GPU-hour (about $0.013 per minute), before any CPU and memory charges. Cold-start and model-load duration varies, so measure a real completion for a per-request estimate. The app is currently deployed with zero running tasks, and workspace spend for this month is $0.00.
+The Modal model test is billed for cold start, download if uncached, generation, and the 60-second scale-down window. The Modal Volume keeps downloaded GGUF files between invocations, so subsequent starts avoid downloading them again. At the listed rate checked on 2026-10-01, L4 compute is $0.80/GPU-hour (about $0.013 per minute), before CPU and memory charges. Cold-start and model-load duration varies, so measure a real completion for a per-request estimate.
 
 **Check Modal budget** displays workspace metered spend and remaining amount against the $30 planning budget, separate from billed cost after credits. This is a display, not a hard spending cap.
 

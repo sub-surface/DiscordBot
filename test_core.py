@@ -157,6 +157,35 @@ class CoreTests(unittest.TestCase):
         self.assertEqual("".join(chunks), response)
         self.assertTrue(all(len(chunk) <= 128 for chunk in chunks))
 
+    def test_response_embed_shows_persona_and_estimated_generation_stats(self) -> None:
+        summary = app._generation_summary("A short answer", 2.0)
+
+        embed = app._response_embed("A short answer", "mochi", [], None, summary)
+
+        self.assertEqual(embed.author.name, "mochi")
+        self.assertEqual(embed.footer.text, summary)
+        self.assertEqual(embed.fields, [])
+        self.assertIn("~", embed.footer.text)
+        self.assertIn("2.0s", embed.footer.text)
+        self.assertIn("estimated", embed.footer.text)
+        self.assertTrue(app._generation_summary("", 1.0).startswith("~0 tokens"))
+
+    def test_generation_summary_uses_reported_modal_token_count(self) -> None:
+        summary = app._generation_summary(
+            "A short answer",
+            0.5,
+            completion_tokens=80,
+            reported_tokens_per_second=160.0,
+        )
+
+        self.assertEqual(summary, "80 tokens · 0.5s · 160.0 tok/s (llama.cpp)")
+
+    def test_response_embed_combines_context_notice_and_generation_stats_in_footer(self) -> None:
+        embed = app._response_embed("A short answer", "mochi", [], "Context trimmed", "~5 tokens · 2.0s · ~2.5 tok/s")
+
+        self.assertIn("~2.5 tok/s", embed.footer.text)
+        self.assertIn("Context trimmed", embed.footer.text)
+
     def test_chess_move_is_saved(self) -> None:
         ok, san, _fen = chess_engine.apply_user_move(1, "e4")
 
@@ -211,10 +240,104 @@ class CoreTests(unittest.TestCase):
 
         self.assertEqual(db.get_channel_verbosity(1), "detailed")
 
+    def test_persona_reactions_default_off_and_persist(self) -> None:
+        self.assertFalse(db.get_persona_reactions(1))
+
+        db.set_persona_reactions(1, True)
+
+        self.assertTrue(db.get_persona_reactions(1))
+
+    def test_custom_personas_are_guild_scoped_and_case_insensitive(self) -> None:
+        persona_id = db.create_custom_persona(10, 100, "Campfire", "Speak gently.")
+
+        self.assertIsNotNone(persona_id)
+        self.assertEqual(db.get_custom_persona(persona_id, 10)["prompt"], "Speak gently.")
+        self.assertIsNone(db.get_custom_persona(persona_id, 11))
+        self.assertIsNone(db.create_custom_persona(10, 101, "campfire", "Different voice."))
+        self.assertIsNotNone(db.create_custom_persona(11, 101, "Campfire", "Another server."))
+
+    def test_custom_persona_management_checks_owner_and_cleans_active_selection(self) -> None:
+        persona_id = db.create_custom_persona(10, 100, "Campfire", "Speak gently.")
+        persona_key = f"custom:{persona_id}"
+        db.set_channel_persona(501, persona_key)
+        self.assertEqual(db.get_channel_persona(501), persona_key)
+
+        self.assertFalse(db.update_custom_persona(persona_id, 10, 101, "Renamed", "New prompt."))
+        self.assertTrue(db.update_custom_persona(persona_id, 10, 101, "Renamed", "New prompt.", can_manage=True))
+        self.assertEqual(db.get_custom_persona(persona_id, 10)["name"], "Renamed")
+        self.assertFalse(db.delete_custom_persona(persona_id, 10, 101, "mochi"))
+
+        self.assertTrue(db.delete_custom_persona(persona_id, 10, 100, "mochi"))
+
+        self.assertEqual(db.get_channel_persona(501), "mochi")
+        self.assertIsNone(db.get_custom_persona(persona_id, 10))
+
+    def test_custom_persona_key_resolves_only_in_its_guild(self) -> None:
+        persona_id = db.create_custom_persona(10, 100, "Campfire", "Speak gently.")
+
+        self.assertEqual(app._persona_from_key(10, f"custom:{persona_id}"), ("Campfire", "Speak gently."))
+        self.assertEqual(app._persona_from_key(11, f"custom:{persona_id}"), (app.DEFAULT_PERSONA, app.load_persona(app.DEFAULT_PERSONA)))
+
+    def test_persona_reactions_use_persona_signature_with_custom_fallback(self) -> None:
+        self.assertEqual(app._persona_reaction("mochi"), "✨")
+        self.assertEqual(app._persona_reaction("normal_dude"), "👋")
+        self.assertEqual(app._persona_reaction("custom:42"), "🌱")
+
+    def test_status_embed_shows_channel_runtime_settings(self) -> None:
+        db.set_channel_persona(1, "mochi")
+        db.set_channel_verbosity(1, "concise")
+        db.set_persona_reactions(1, True)
+
+        embed = app._status_embed(1, 10, "sim-city")
+
+        fields = {field.name: field.value for field in embed.fields}
+        self.assertEqual(embed.title, "#sim-city settings")
+        self.assertEqual(fields["Persona"], "mochi")
+        self.assertEqual(fields["Reply detail"], "Concise")
+        self.assertEqual(fields["Persona reactions"], "On")
+        self.assertIn("Context / output", fields)
+        self.assertIn("Model target", fields)
+
+    def test_status_view_exposes_controls_and_hides_unauthorized_reaction_toggle(self) -> None:
+        async def build_views() -> tuple[app.StatusView, app.StatusView]:
+            return (
+                app.StatusView(1, 10, "sim-city", 100, True),
+                app.StatusView(1, 10, "sim-city", 100, False),
+            )
+
+        permitted, restricted = asyncio.run(build_views())
+        permitted_labels = {item.label for item in permitted.children if isinstance(item, discord.ui.Button)}
+        restricted_labels = {item.label for item in restricted.children if isinstance(item, discord.ui.Button)}
+
+        self.assertEqual(len(permitted.persona_select.options), len(app.list_personas()) + 1)
+        self.assertIn("chess", {option.value for option in permitted.persona_select.options})
+        self.assertIn("Detail: Balanced", permitted_labels)
+        self.assertIn("Reactions: Off", permitted_labels)
+        self.assertIn("Reset history", permitted_labels)
+        self.assertNotIn("Reactions: Off", restricted_labels)
+
+    def test_status_view_refreshes_after_verbosity_change(self) -> None:
+        response = SimpleNamespace(edit_message=AsyncMock())
+        interaction = SimpleNamespace(response=response)
+
+        async def update_status() -> app.StatusView:
+            view = app.StatusView(1, 10, "sim-city", 100, True)
+            db.set_channel_verbosity(1, "detailed")
+            await view._refresh(interaction)
+            return view
+
+        view = asyncio.run(update_status())
+
+        response.edit_message.assert_awaited_once()
+        self.assertEqual(view.verbosity_button.label, "Detail: Detailed")
+
     def test_slash_commands_are_registered(self) -> None:
         command_names = {command.name for command in app.bot.tree.get_commands()}
 
-        self.assertTrue({"persona", "verbosity", "model", "cost", "status", "reset"} <= command_names)
+        self.assertTrue(
+            {"persona", "persona-create", "persona-edit", "persona-delete", "reactions", "verbosity", "model", "cost", "status", "reset"}
+            <= command_names
+        )
         self.assertNotIn("personas", command_names)
 
     def test_channel_allowlist(self) -> None:
