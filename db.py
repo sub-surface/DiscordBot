@@ -72,18 +72,22 @@ def save_message(
         )
 
 
-def get_message_chain(start_msg_id: int, limit: int = 40) -> list[dict]:
+def get_message_chain(
+    start_msg_id: int,
+    limit: int = 40,
+    channel_id: int | None = None,
+) -> list[dict]:
     rows = _conn.execute(
-        """WITH RECURSIVE chain(discord_msg_id, parent_msg_id, author_id, role, content, depth) AS (
-            SELECT discord_msg_id, parent_msg_id, author_id, role, content, 0
-            FROM messages WHERE discord_msg_id = ?
+        """WITH RECURSIVE chain(discord_msg_id, parent_msg_id, author_id, role, content, channel_id, depth) AS (
+            SELECT discord_msg_id, parent_msg_id, author_id, role, content, channel_id, 0
+            FROM messages WHERE discord_msg_id = ? AND (? IS NULL OR channel_id = ?)
             UNION ALL
-            SELECT m.discord_msg_id, m.parent_msg_id, m.author_id, m.role, m.content, c.depth + 1
+            SELECT m.discord_msg_id, m.parent_msg_id, m.author_id, m.role, m.content, m.channel_id, c.depth + 1
             FROM messages m JOIN chain c ON m.discord_msg_id = c.parent_msg_id
-            WHERE c.depth < ?
+            WHERE m.channel_id = c.channel_id AND c.depth < ?
         )
         SELECT discord_msg_id, author_id, role, content FROM chain ORDER BY depth DESC""",
-        (start_msg_id, limit),
+        (start_msg_id, channel_id, channel_id, limit),
     ).fetchall()
     return [dict(row) for row in rows]
 

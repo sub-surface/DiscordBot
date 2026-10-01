@@ -36,6 +36,13 @@ const modalModelPresets = [
     enableThinking: "false",
     storageGiB: 2,
   },
+  {
+    name: "MechaEpstein 8000 (Q8_0, 8.7 GB)",
+    id: "mradermacher/MechaEpstein-8000-GGUF",
+    file: "MechaEpstein-8000.Q8_0.gguf",
+    enableThinking: "false",
+    storageGiB: 8.1,
+  },
 ]
 const mint = "\x1b[38;5;121m"
 const reset = "\x1b[0m"
@@ -72,6 +79,7 @@ process.env.MODAL_ENABLE_THINKING ||= readEnv("MODAL_ENABLE_THINKING", "true")
 process.env.MODAL_GPU ||= readEnv("MODAL_GPU", "L4")
 process.env.LOCAL_CONTEXT_TOKENS ||= readEnv("LOCAL_CONTEXT_TOKENS", "4096")
 process.env.MODAL_MAX_MODEL_LEN ||= readEnv("MODAL_MAX_MODEL_LEN", "65536")
+process.env.MODAL_SCALEDOWN_SECONDS ||= readEnv("MODAL_SCALEDOWN_SECONDS", "60")
 
 async function ask(question) {
   const readline = createInterface({ input: process.stdin, output: process.stdout })
@@ -130,7 +138,8 @@ async function chooseModel() {
     console.log(`\nCurrent Modal GGUF: ${process.env.MODAL_MODEL_ID}/${process.env.MODAL_MODEL_FILE}`)
     console.log("Modal model presets:")
     modalModelPresets.forEach((preset, index) => console.log(`${index + 1}  ${preset.name}`))
-    console.log("3  Custom Hugging Face GGUF")
+    const customSelection = String(modalModelPresets.length + 1)
+    console.log(`${customSelection}  Custom Hugging Face GGUF`)
     const selection = (await ask("Model: ")).toLowerCase()
     const preset = modalModelPresets[Number(selection) - 1]
     let nextModel
@@ -141,7 +150,7 @@ async function chooseModel() {
       nextModel = preset.id
       nextFile = preset.file
       enableThinking = preset.enableThinking
-    } else if (selection === "3" || selection === "c" || selection === "custom") {
+    } else if (selection === customSelection || selection === "c" || selection === "custom") {
       const model = await ask("Hugging Face GGUF repository: ")
       const filename = await ask("GGUF filename: ")
       nextModel = model || process.env.MODAL_MODEL_ID
@@ -153,7 +162,7 @@ async function chooseModel() {
       const thinking = await ask("Enable the Qwen thinking-template option? (y/N): ")
       enableThinking = thinking.toLowerCase() === "y" || thinking.toLowerCase() === "yes" ? "true" : "false"
     } else {
-      console.log("Choose 1, 2, or 3.")
+      console.log(`Choose 1 through ${customSelection}, or enter c for a custom model.`)
       return
     }
 
@@ -197,7 +206,7 @@ function showModalBudget() {
     console.log(`\n${process.env.MODAL_MODEL_FILE}: about $${storage.toFixed(2)}/month at a ${storageGiB} GiB estimate.`)
     console.log("The shared volume may retain previously downloaded models as well.")
     console.log(`On-demand GPU: L4 $${l4Hourly.toFixed(2)}/hour · A10G $${a10Hourly.toFixed(2)}/hour.`)
-    console.log("The worker scales to zero after 60 seconds idle; generation time is the billed GPU window.")
+    console.log(`The worker scales to zero after ${process.env.MODAL_SCALEDOWN_SECONDS} seconds idle; cold starts and this idle tail are also billed.`)
   } catch (error) {
     console.log(`\nCouldn't read Modal usage: ${error.message}`)
   }
