@@ -1,0 +1,64 @@
+{
+  "_comment": "Model presets shared by dash.mjs (menus), modal_app.py (deploy settings) and the bot (chat tuning). A model matches a profile when its id/file/name contains any 'match' string.",
+  "models": [
+    {
+      "key": "mimo",
+      "name": "MiMo V2.6 Distill Qwen 9B (MERNIK, 5.1 GB)",
+      "match": ["mimo"],
+      "modal": {
+        "id": "wepiqx/MiMo-V2.6-Distill-Qwen-9B-GGUF-MERNIK",
+        "file": "MiMo-V2.6-Distill-Qwen-9B-MERNIK-5100.gguf",
+        "thinking": true,
+        "context": 65536,
+        "storage_gib": 5
+      },
+      "chat": {
+        "context_mode": "full",
+        "history_messages": 40,
+        "max_output_tokens": 2048,
+        "temperature": 1.0,
+        "top_p": 0.95
+      }
+    },
+    {
+      "key": "mechaepstein",
+      "name": "MechaEpstein 8000 (Q8_0, 8.7 GB)",
+      "match": ["mechaepstein"],
+      "modal": {
+        "id": "mradermacher/MechaEpstein-8000-GGUF",
+        "file": "MechaEpstein-8000.Q8_0.gguf",
+        "thinking": false,
+        "context": 40960,
+        "storage_gib": 8.1
+      },
+      "chat": {
+        "context_mode": "compact",
+        "history_messages": 6,
+        "prompt_budget": 3072,
+        "max_output_tokens": 400,
+        "temperature": 0.8,
+        "top_p": 0.9
+      }
+    },
+    {
+      "key": "epstein-llama-3b",
+      "name": "Epstein Llama 3.2 3B v2 (Q4_K_M, 2.02 GB)",
+      "match": ["epstein-llama"],
+      "modal": {
+        "id": "mradermacher/epstein-llama-3.2-3B-v2-GGUF",
+        "file": "epstein-llama-3.2-3B-v2.Q4_K_M.gguf",
+        "thinking": false,
+        "context": 32768,
+        "storage_gib": 2
+      },
+      "chat": {
+        "context_mode": "compact",
+        "history_messages": 4,
+        "prompt_budget": 2048,
+        "max_output_tokens": 300,
+        "temperature": 0.75,
+        "top_p": 0.9
+      }
+    }
+  ]
+}

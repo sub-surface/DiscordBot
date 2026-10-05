@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from psychograph.store import ChannelSettings, Store
+from psychograph.store import ChannelSettings, Generation, Store
 
 
 class StoreTests(unittest.TestCase):
@@ -102,6 +102,32 @@ class StoreTests(unittest.TestCase):
                 self.assertEqual(store.message_chain(1, 7)[0]["author_id"], 3)
             finally:
                 store.close()
+
+    def test_answers_link_back_to_their_request(self) -> None:
+        self.store.save_message(1, None, 7, "user", "Leon: hi", author_id=5)
+        self.store.save_message(3, 1, 7, "assistant", "part two", reply_to=1)
+        self.store.save_message(2, 1, 7, "assistant", "part one", reply_to=1)
+
+        self.assertEqual(self.store.response_ids(1), [2, 3])
+        self.assertEqual(self.store.message(2)["reply_to"], 1)
+
+        self.store.delete_messages([2, 3])
+        self.assertEqual(self.store.response_ids(1), [])
+        self.assertIsNotNone(self.store.message(1))
+
+    def test_generation_stats_summarise_by_guild(self) -> None:
+        self.store.record_generation(Generation(1, 10, "charlie", "m", "mechaepstein", True, 2.0, 50, cold_start=True))
+        self.store.record_generation(Generation(1, 10, "charlie", "m", "mechaepstein", True, 1.0, 30, tokens_per_second=40.0))
+        self.store.record_generation(Generation(1, 10, "mochi", "m", "mechaepstein", False, 0.5, error="boom"))
+        self.store.record_generation(Generation(2, 11, "zack", "m", "mimo", True, 9.0))
+
+        stats = self.store.generation_stats(guild_id=10)
+
+        self.assertEqual((stats["replies"], stats["failures"], stats["cold_starts"], stats["tokens"]), (3, 1, 1, 80))
+        self.assertAlmostEqual(stats["avg_seconds"], 1.5)
+        self.assertAlmostEqual(stats["avg_warm_seconds"], 1.0)
+        self.assertEqual(stats["personas"][0], ("charlie", 2))
+        self.assertEqual(self.store.generation_stats()["replies"], 4)
 
     def test_chess_moves_round_trip(self) -> None:
         self.assertIsNone(self.store.chess_moves(1))

@@ -9,9 +9,11 @@ A persona is addressed by a key stored in channel settings:
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+from urllib.parse import quote
 
 from .store import Store
 
@@ -20,6 +22,8 @@ CHESS_KEY = "chess"
 DEFAULT_REACTION = "✨"
 CUSTOM_REACTION = "🌱"
 CUSTOM_PROMPT_LIMIT = 3500
+COMPACT_PROMPT_LIMIT = 900
+AVATAR_URL = "https://api.dicebear.com/9.x/notionists/png?seed={seed}&size=256&backgroundColor=d1f4e0,c0aede,ffdfbf,b6e3f4"
 
 
 @dataclass(frozen=True)
@@ -31,10 +35,55 @@ class Persona:
     mode: Literal["chat", "chess"] = "chat"
     creator_id: int | None = None   # set for custom personas only
     guild_id: int | None = None
+    compact_prompt: str = ""        # a short voice for weaker models; derived when not given
+    avatar_url: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.compact_prompt:
+            object.__setattr__(self, "compact_prompt", compact_text(self.prompt))
+        if not self.avatar_url:
+            object.__setattr__(self, "avatar_url", AVATAR_URL.format(seed=quote(self.name)))
 
     @property
     def custom_id(self) -> int | None:
         return int(self.key.removeprefix(CUSTOM_PREFIX)) if self.key.startswith(CUSTOM_PREFIX) else None
+
+
+def compact_text(text: str, limit: int = COMPACT_PROMPT_LIMIT) -> str:
+    """The most voice-defining whole paragraphs of `text` that fit in `limit` characters.
+
+    The opening paragraph (who the persona is) and any "Voice:"/"Style:"/"Tone:" paragraph
+    come first, then the rest in order; the kept paragraphs stay in their original order.
+    """
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    paragraphs = [paragraph.strip() for paragraph in re.split(r"\n\s*\n", text) if paragraph.strip()]
+    is_voice = re.compile(r"^(?:\*\*)?(?:voice|style|tone)\b", re.IGNORECASE)
+    ranked = sorted(range(len(paragraphs)), key=lambda index: (index != 0 and not is_voice.match(paragraphs[index]), index))
+    chosen: list[int] = []
+    used = 0
+    for index in ranked:
+        if used + len(paragraphs[index]) + 2 <= limit:
+            chosen.append(index)
+            used += len(paragraphs[index]) + 2
+    if chosen:
+        return "\n\n".join(paragraphs[index] for index in sorted(chosen))
+    kept = ""
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    for sentence in sentences:
+        if len(kept) + len(sentence) + 1 > limit:
+            break
+        kept = f"{kept} {sentence}".strip()
+    return kept or text[:limit]
+
+
+def split_compact_section(markdown: str) -> tuple[str, str]:
+    """A Markdown persona may end with a "## Compact" section, used only in compact context mode."""
+    match = re.search(r"^## Compact\s*$", markdown, flags=re.MULTILINE | re.IGNORECASE)
+    if not match:
+        return markdown.strip(), ""
+    return markdown[: match.start()].strip(), markdown[match.end():].strip()
 
 
 CHESS = Persona(key=CHESS_KEY, name="chess", prompt="", reaction="♟️", mode="chess")
@@ -89,10 +138,18 @@ class PersonaRegistry:
         structured = self.personas_dir / f"{key}.json"
         if structured.is_file():
             data = json.loads(structured.read_text(encoding="utf-8"))
-            return Persona(key=key, name=key, prompt=render_structured(data), reaction=data.get("reaction", DEFAULT_REACTION))
+            return Persona(
+                key=key,
+                name=key,
+                prompt=render_structured(data),
+                reaction=data.get("reaction", DEFAULT_REACTION),
+                compact_prompt=data.get("compact") or compact_text(str(data.get("voice", ""))),
+                avatar_url=data.get("avatar", ""),
+            )
         plain = self.personas_dir / f"{key}.md"
         if plain.is_file():
-            return Persona(key=key, name=key, prompt=plain.read_text(encoding="utf-8").strip())
+            prompt, compact = split_compact_section(plain.read_text(encoding="utf-8"))
+            return Persona(key=key, name=key, prompt=prompt, compact_prompt=compact)
         return None
 
     def get(self, guild_id: int | None, key: str) -> Persona | None:

@@ -20,13 +20,16 @@ def status_embed(bot: PsychographBot, channel_id: int, guild_id: int | None, cha
         description="Channel-specific chat settings. Conversation history follows reply chains, not the whole channel.",
         color=EMBED_COLOR,
     )
-    embed.add_field(name="Persona", value=persona.name, inline=True)
+    embed.set_thumbnail(url=persona.avatar_url)
+    embed.add_field(name="Persona", value=f"{persona.reaction} {persona.name}", inline=True)
     embed.add_field(name="Reply detail", value=settings.verbosity.title(), inline=True)
     embed.add_field(name="Persona reactions", value="On" if settings.persona_reactions else "Off", inline=True)
+    embed.add_field(name="Voice", value="Speaks as persona" if settings.persona_voice else "Bot embeds", inline=True)
     embed.add_field(name="Backend", value=backend.name.title(), inline=True)
     embed.add_field(
         name="Context / output", value=f"{backend.context_limit:,} / {backend.output_limit:,} tokens", inline=True
     )
+    embed.add_field(name="Model profile", value=backend.profile.describe(), inline=False)
     embed.add_field(name="Model target", value=f"`{backend.label}`", inline=False)
     if persona.mode == "chess":
         embed.add_field(name="Chess commentary", value="On" if settings.chess_commentary else "Off", inline=True)
@@ -95,6 +98,7 @@ class StatusView(discord.ui.View):
         self.add_item(self.persona_select)
         if not can_manage_messages:
             self.remove_item(self.reaction_button)
+            self.remove_item(self.voice_button)
         self._refresh_labels()
 
     def _persona_options(self) -> list[discord.SelectOption]:
@@ -110,6 +114,7 @@ class StatusView(discord.ui.View):
         settings = self.bot.store.channel_settings(self.channel_id)
         self.verbosity_button.label = f"Detail: {settings.verbosity.title()}"
         self.reaction_button.label = f"Reactions: {'On' if settings.persona_reactions else 'Off'}"
+        self.voice_button.label = f"Voice: {'Persona' if settings.persona_voice else 'Embed'}"
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.requester_id:
@@ -150,6 +155,20 @@ class StatusView(discord.ui.View):
             return
         enabled = self.bot.store.channel_settings(self.channel_id).persona_reactions
         self.bot.store.update_channel(self.channel_id, persona_reactions=not enabled)
+        await self._refresh(interaction)
+
+    @discord.ui.button(label="Voice", style=discord.ButtonStyle.secondary, row=1)
+    async def voice_button(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        if not interaction.permissions.manage_messages:
+            await interaction.response.send_message("Manage Messages permission is required.", ephemeral=True)
+            return
+        enabled = self.bot.store.channel_settings(self.channel_id).persona_voice
+        if not enabled and not self.bot.webhooks.available(interaction.channel):
+            await interaction.response.send_message(
+                "To speak as personas I need the **Manage Webhooks** permission in this channel.", ephemeral=True
+            )
+            return
+        self.bot.store.update_channel(self.channel_id, persona_voice=not enabled)
         await self._refresh(interaction)
 
     @discord.ui.button(label="Reset history", style=discord.ButtonStyle.danger, row=1)

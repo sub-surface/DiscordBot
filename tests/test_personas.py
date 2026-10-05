@@ -1,6 +1,13 @@
 import unittest
 
-from psychograph.personas import CHESS, CUSTOM_REACTION, PersonaRegistry, can_manage
+from psychograph.personas import (
+    CHESS,
+    COMPACT_PROMPT_LIMIT,
+    CUSTOM_REACTION,
+    PersonaRegistry,
+    can_manage,
+    compact_text,
+)
 from psychograph.settings import Settings
 from psychograph.store import Store
 
@@ -21,6 +28,28 @@ class PersonaTests(unittest.TestCase):
         self.assertIn("[Facts]", charlie.prompt)
         self.assertIn("Mochi", mochi.prompt)
         self.assertIn("A Quigley", self.registry.builtin_keys())
+
+    def test_compact_prompts_keep_identity_and_voice(self) -> None:
+        mochi, charlie = self.registry.get(None, "mochi"), self.registry.get(None, "charlie")
+
+        self.assertTrue(mochi.compact_prompt.startswith("You are Mochi"))
+        self.assertNotIn("## Compact", mochi.prompt)
+        self.assertIn("Voice:", charlie.compact_prompt)
+        self.assertTrue(charlie.compact_prompt.startswith("You are Charlie"))
+        for key in self.registry.builtin_keys():
+            self.assertLessEqual(len(self.registry.get(None, key).compact_prompt), COMPACT_PROMPT_LIMIT, key)
+
+    def test_compact_text_falls_back_to_sentences(self) -> None:
+        text = "One sentence here. " * 100
+
+        compacted = compact_text(text, limit=100)
+
+        self.assertLessEqual(len(compacted), 100)
+        self.assertTrue(compacted.endswith("."))
+
+    def test_personas_get_a_stable_avatar(self) -> None:
+        self.assertIn("seed=A%20Quigley", self.registry.get(None, "A Quigley").avatar_url)
+        self.assertEqual(self.registry.get(None, "zack").avatar_url, self.registry.get(None, "zack").avatar_url)
 
     def test_reactions_come_from_persona_files_with_defaults(self) -> None:
         self.assertEqual(self.registry.get(None, "mochi").reaction, "✨")

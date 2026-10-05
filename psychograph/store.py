@@ -15,6 +15,7 @@ class ChannelSettings:
     verbosity: str = "balanced"
     chess_commentary: bool = False
     persona_reactions: bool = False
+    persona_voice: bool = False      # speak through a webhook as the persona
 
 
 SETTING_COLUMNS = {
@@ -22,7 +23,25 @@ SETTING_COLUMNS = {
     "verbosity": "TEXT",
     "chess_commentary": "INTEGER NOT NULL DEFAULT 0",
     "persona_reactions": "INTEGER NOT NULL DEFAULT 0",
+    "persona_voice": "INTEGER NOT NULL DEFAULT 0",
 }
+
+
+@dataclass(frozen=True)
+class Generation:
+    channel_id: int
+    guild_id: int | None
+    persona: str
+    model: str
+    profile: str
+    ok: bool
+    wall_seconds: float
+    completion_tokens: int | None = None
+    prompt_tokens: int | None = None
+    tokens_per_second: float | None = None
+    cold_start: bool = False
+    trimmed: bool = False
+    error: str | None = None
 
 
 class Store:
@@ -49,7 +68,8 @@ class Store:
                     ts DATETIME DEFAULT CURRENT_TIMESTAMP
                 )"""
             )
-            self._ensure_columns("messages", {"author_id": "INTEGER"})
+            # reply_to: for assistant rows, the user message they answer (regenerate/delete).
+            self._ensure_columns("messages", {"author_id": "INTEGER", "reply_to": "INTEGER"})
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_channel ON messages(channel_id, discord_msg_id)")
             self._conn.execute("CREATE TABLE IF NOT EXISTS channel_settings (channel_id INTEGER PRIMARY KEY)")
             self._ensure_columns("channel_settings", SETTING_COLUMNS)
@@ -73,6 +93,26 @@ class Store:
                     updated_ts DATETIME DEFAULT CURRENT_TIMESTAMP
                 )"""
             )
+            self._conn.execute(
+                """CREATE TABLE IF NOT EXISTS generations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    channel_id INTEGER NOT NULL,
+                    guild_id INTEGER,
+                    persona TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    profile TEXT NOT NULL,
+                    ok INTEGER NOT NULL,
+                    wall_seconds REAL NOT NULL,
+                    completion_tokens INTEGER,
+                    prompt_tokens INTEGER,
+                    tokens_per_second REAL,
+                    cold_start INTEGER NOT NULL DEFAULT 0,
+                    trimmed INTEGER NOT NULL DEFAULT 0,
+                    error TEXT
+                )"""
+            )
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_generations_ts ON generations(ts)")
 
     def _ensure_columns(self, table: str, columns: dict[str, str]) -> None:
         existing = {row["name"] for row in self._conn.execute(f"PRAGMA table_info({table})")}
@@ -90,14 +130,35 @@ class Store:
         role: str,
         content: str,
         author_id: int | None = None,
+        reply_to: int | None = None,
     ) -> None:
         with self._conn:
             self._conn.execute(
                 "INSERT OR REPLACE INTO messages "
-                "(discord_msg_id, parent_msg_id, channel_id, author_id, role, content) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (discord_msg_id, parent_msg_id, channel_id, author_id, role, content),
+                "(discord_msg_id, parent_msg_id, channel_id, author_id, role, content, reply_to) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (discord_msg_id, parent_msg_id, channel_id, author_id, role, content, reply_to),
             )
+
+    def message(self, discord_msg_id: int) -> dict | None:
+        row = self._conn.execute(
+            "SELECT discord_msg_id, parent_msg_id, channel_id, author_id, role, content, reply_to "
+            "FROM messages WHERE discord_msg_id = ?",
+            (discord_msg_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def response_ids(self, request_msg_id: int) -> list[int]:
+        """The bot messages (all chunks) that answer one user message, oldest first."""
+        rows = self._conn.execute(
+            "SELECT discord_msg_id FROM messages WHERE reply_to = ? AND role = 'assistant' ORDER BY discord_msg_id",
+            (request_msg_id,),
+        ).fetchall()
+        return [row["discord_msg_id"] for row in rows]
+
+    def delete_messages(self, discord_msg_ids: list[int]) -> None:
+        with self._conn:
+            self._conn.executemany("DELETE FROM messages WHERE discord_msg_id = ?", [(i,) for i in discord_msg_ids])
 
     def message_chain(self, start_msg_id: int, channel_id: int, limit: int = 40) -> list[dict]:
         """The reply chain ending at `start_msg_id`, oldest first, within one channel."""
@@ -226,3 +287,45 @@ class Store:
     def delete_chess_game(self, channel_id: int) -> None:
         with self._conn:
             self._conn.execute("DELETE FROM chess_games WHERE channel_id = ?", (channel_id,))
+
+    # ── Generation log ──────────────────────────────────────────────
+
+    def record_generation(self, generation: Generation) -> None:
+        values = {item.name: getattr(generation, item.name) for item in fields(Generation)}
+        values = {key: int(value) if isinstance(value, bool) else value for key, value in values.items()}
+        with self._conn:
+            self._conn.execute(
+                f"INSERT INTO generations ({', '.join(values)}) VALUES ({', '.join('?' for _ in values)})",
+                tuple(values.values()),
+            )
+
+    def generation_stats(self, since: str = "-1 day", guild_id: int | None = None) -> dict:
+        """Totals since an SQLite datetime modifier such as '-1 day' or '-7 days'."""
+        scope = "ts >= datetime('now', ?)" + (" AND guild_id = ?" if guild_id is not None else "")
+        params: tuple = (since, guild_id) if guild_id is not None else (since,)
+        totals = self._conn.execute(
+            f"""SELECT COUNT(*) AS replies,
+                       COALESCE(SUM(ok = 0), 0) AS failures,
+                       COALESCE(SUM(cold_start), 0) AS cold_starts,
+                       COALESCE(SUM(trimmed), 0) AS trimmed,
+                       COALESCE(SUM(completion_tokens), 0) AS tokens,
+                       AVG(CASE WHEN ok THEN wall_seconds END) AS avg_seconds,
+                       AVG(CASE WHEN ok AND NOT cold_start THEN wall_seconds END) AS avg_warm_seconds,
+                       AVG(tokens_per_second) AS avg_tokens_per_second
+                FROM generations WHERE {scope}""",
+            params,
+        ).fetchone()
+        personas = self._conn.execute(
+            f"SELECT persona, COUNT(*) AS replies FROM generations WHERE {scope} "
+            "GROUP BY persona ORDER BY replies DESC, persona LIMIT 5",
+            params,
+        ).fetchall()
+        models = self._conn.execute(
+            f"SELECT profile, COUNT(*) AS replies FROM generations WHERE {scope} GROUP BY profile ORDER BY replies DESC",
+            params,
+        ).fetchall()
+        return {
+            **dict(totals),
+            "personas": [(row["persona"], row["replies"]) for row in personas],
+            "profiles": [(row["profile"], row["replies"]) for row in models],
+        }

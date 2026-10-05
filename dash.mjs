@@ -15,35 +15,25 @@ if (!process.stdin.isTTY) {
 const python = existsSync(join(root, "venv", "Scripts", "python.exe"))
   ? join(root, "venv", "Scripts", "python.exe")
   : process.platform === "win32" ? "py" : "python3"
-const pythonArgs = python === "py" ? ["-3", "-m", "psychograph"] : ["-m", "psychograph"]
+const pythonPrefix = python === "py" ? ["-3"] : []
+const pythonArgs = [...pythonPrefix, "-m", "psychograph"]
 const modal = existsSync(join(root, "venv", "Scripts", "modal.exe"))
   ? join(root, "venv", "Scripts", "modal.exe")
   : "modal"
 const monthlyBudget = 30
 const modelStorageGiB = 5
-const modalModelPresets = [
-  {
-    name: "MiMo V2.6 Distill Qwen 9B (MERNIK, 5.1 GB)",
-    id: "wepiqx/MiMo-V2.6-Distill-Qwen-9B-GGUF-MERNIK",
-    file: "MiMo-V2.6-Distill-Qwen-9B-MERNIK-5100.gguf",
-    enableThinking: "true",
-    storageGiB: 5,
-  },
-  {
-    name: "Epstein Llama 3.2 3B v2 (Q4_K_M, 2.02 GB)",
-    id: "mradermacher/epstein-llama-3.2-3B-v2-GGUF",
-    file: "epstein-llama-3.2-3B-v2.Q4_K_M.gguf",
-    enableThinking: "false",
-    storageGiB: 2,
-  },
-  {
-    name: "MechaEpstein 8000 (Q8_0, 8.7 GB)",
-    id: "mradermacher/MechaEpstein-8000-GGUF",
-    file: "MechaEpstein-8000.Q8_0.gguf",
-    enableThinking: "false",
-    storageGiB: 8.1,
-  },
-]
+// Presets live in models.json, shared with the bot (chat tuning) and modal_app.py (deploy settings).
+const modalModelPresets = JSON.parse(readFileSync(join(root, "models.json"), "utf8")).models
+  .filter((model) => model.modal)
+  .map((model) => ({
+    name: model.name,
+    id: model.modal.id,
+    file: model.modal.file,
+    enableThinking: String(Boolean(model.modal.thinking)),
+    context: String(model.modal.context ?? 65536),
+    storageGiB: model.modal.storage_gib ?? modelStorageGiB,
+    contextMode: model.chat?.context_mode ?? "full",
+  }))
 const mint = "\x1b[38;5;121m"
 const reset = "\x1b[0m"
 
@@ -137,7 +127,9 @@ async function chooseModel() {
   } else if (runtime === "2") {
     console.log(`\nCurrent Modal GGUF: ${process.env.MODAL_MODEL_ID}/${process.env.MODAL_MODEL_FILE}`)
     console.log("Modal model presets:")
-    modalModelPresets.forEach((preset, index) => console.log(`${index + 1}  ${preset.name}`))
+    modalModelPresets.forEach((preset, index) =>
+      console.log(`${index + 1}  ${preset.name}  ·  ${preset.contextMode} context, ${Number(preset.context) / 1024}k server`),
+    )
     const customSelection = String(modalModelPresets.length + 1)
     console.log(`${customSelection}  Custom Hugging Face GGUF`)
     const selection = (await ask("Model: ")).toLowerCase()
@@ -169,7 +161,10 @@ async function chooseModel() {
     saveEnv("MODAL_MODEL_ID", nextModel)
     saveEnv("MODAL_MODEL_FILE", nextFile)
     saveEnv("MODAL_ENABLE_THINKING", enableThinking)
-    console.log(`\nModal GGUF saved: ${nextModel}/${nextFile}. Redeploy the worker to apply it.`)
+    if (preset) saveEnv("MODAL_MAX_MODEL_LEN", preset.context)
+    console.log(`\nModal GGUF saved: ${nextModel}/${nextFile}.`)
+    if (preset) console.log(`Deploy settings: ${Number(preset.context) / 1024}k context, thinking ${enableThinking}; the bot uses ${preset.contextMode} context.`)
+    console.log("Redeploy the worker, then restart the bot, to apply it.")
   } else {
     console.log("Choose 1 or 2.")
   }
@@ -282,6 +277,8 @@ while (true) {
   console.log("6  Test Modal model  ·  one completion")
   console.log("7  Follow Modal logs  ·  mirror to bot.log")
   console.log("8  Config  ·  backend and context")
+  console.log("9  Bot stats  ·  replies, speed, cold starts")
+  console.log("t  Run tests")
   console.log("q  Quit\n")
 
   const choice = (await ask("> ")).toLowerCase()
@@ -321,8 +318,15 @@ while (true) {
     await tailModalLogs()
   } else if (choice === "8") {
     await configureRuntime()
+  } else if (choice === "9") {
+    const period = (await ask("Period (day/week/month/all) [week]: ")).toLowerCase() || "week"
+    console.log("")
+    await run(python, [...pythonArgs, "stats", period])
+  } else if (choice === "t") {
+    console.log("")
+    await run(python, [...pythonPrefix, "-m", "unittest", "discover", "-s", "tests", "-t", "."])
   } else {
-    console.log("\\nChoose 1 through 8, or q.")
+    console.log("\nChoose 1 through 9, t, or q.")
   }
 
   await ask("\nPress Enter to return to the menu.")

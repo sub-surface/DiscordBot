@@ -25,6 +25,7 @@ class Settings:
     allowed_channels: tuple[str, ...] = ("shitpost", "sim-city", "little-st-james", "games")
     db_path: Path = ROOT / "history.db"
     personas_dir: Path = ROOT / "personas"
+    models_file: Path = ROOT / "models.json"
 
     temperature: float = 1.0
     top_p: float = 0.95
@@ -42,6 +43,7 @@ class Settings:
     modal_model_file: str = "MiMo-V2.6-Distill-Qwen-9B-MERNIK-5100.gguf"
     modal_context_tokens: int = 65536
     modal_max_output_tokens: int = 2048
+    modal_scaledown_seconds: int = 60
 
     stockfish_path: str = ""
     stockfish_threads: int = 2
@@ -66,6 +68,7 @@ ENV_NAMES = {
     "modal_model_file": "MODAL_MODEL_FILE",
     "modal_context_tokens": "MODAL_MAX_MODEL_LEN",
     "modal_max_output_tokens": "MODAL_MAX_OUTPUT_TOKENS",
+    "modal_scaledown_seconds": "MODAL_SCALEDOWN_SECONDS",
     "stockfish_path": "STOCKFISH_PATH",
     "stockfish_threads": "STOCKFISH_THREADS",
     "stockfish_hash_mb": "STOCKFISH_HASH_MB",

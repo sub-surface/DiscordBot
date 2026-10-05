@@ -10,6 +10,7 @@ from .backends import Completion
 
 EMBED_COLOR = 0x347A68
 RESPONSE_EMBED_LIMIT = 4000
+VOICE_MESSAGE_LIMIT = 1900  # plain messages cap at 2,000; leave room for a subtext line
 
 
 def split_response(text: str, limit: int = RESPONSE_EMBED_LIMIT) -> list[str]:
@@ -48,9 +49,10 @@ def response_embed(
     persona_name: str,
     source_urls: Sequence[str] = (),
     footer_parts: Sequence[str | None] = (),
+    icon_url: str | None = None,
 ) -> discord.Embed:
     embed = discord.Embed(description=text, color=EMBED_COLOR)
-    embed.set_author(name=persona_name)
+    embed.set_author(name=persona_name, icon_url=icon_url or None)
     if source_urls:
         embed.add_field(name="Referenced posts", value="\n".join(source_urls[:3]), inline=False)
     footer = " · ".join(part for part in footer_parts if part)
@@ -64,14 +66,28 @@ def response_embeds(
     persona_name: str,
     source_urls: Sequence[str],
     footer_parts: Sequence[str | None],
+    icon_url: str | None = None,
 ) -> tuple[list[str], list[discord.Embed]]:
     """The response's chunks and one embed per chunk; sources and footer go on the first."""
     chunks = split_response(text)
     embeds = [
-        response_embed(chunk, persona_name, source_urls if index == 0 else (), footer_parts if index == 0 else ())
+        response_embed(
+            chunk, persona_name, source_urls if index == 0 else (), footer_parts if index == 0 else (), icon_url
+        )
         for index, chunk in enumerate(chunks)
     ]
     return chunks, embeds
+
+
+def voice_messages(text: str, source_urls: Sequence[str], notice: str | None) -> tuple[list[str], list[str]]:
+    """Plain chunks for speaking as a persona, and the posted messages (sources/notice as subtext on the last)."""
+    chunks = split_response(text, VOICE_MESSAGE_LIMIT)
+    extras = [f"-# {notice}"] if notice else []
+    extras += [f"-# <{url}>" for url in source_urls[:3]]
+    posted = list(chunks)
+    if extras:
+        posted[-1] = "\n".join([posted[-1], *extras])
+    return chunks, posted
 
 
 def board_embed(title: str, description: str, has_image: bool) -> discord.Embed:

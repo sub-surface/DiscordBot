@@ -13,7 +13,9 @@ from discord import app_commands
 from discord.ext import commands
 
 from ..bot import PsychographBot
+from ..render import EMBED_COLOR
 from ..settings import ROOT
+from ..stats import PERIODS, stats_lines
 
 log = logging.getLogger("psychograph.ops")
 
@@ -48,8 +50,19 @@ class OpsCommands(commands.Cog):
     async def model(self, interaction: discord.Interaction) -> None:
         backend = self.bot.backend
         await interaction.response.send_message(
-            f"Backend: **{backend.name}**\nModel: `{backend.label}`\n{backend.note}", ephemeral=True
+            f"Backend: **{backend.name}**\nModel: `{backend.label}`\nProfile: {backend.profile.describe()}\n"
+            f"Sampling: temperature {backend.temperature}, top-p {backend.top_p}\n{backend.note}",
+            ephemeral=True,
         )
+
+    @app_commands.command(name="stats", description="Reply counts, speed and cold starts in this server")
+    @app_commands.describe(period="How far back to look")
+    @app_commands.choices(period=[app_commands.Choice(name=name.title(), value=name) for name in PERIODS])
+    async def stats(self, interaction: discord.Interaction, period: str = "day") -> None:
+        lines = stats_lines(self.bot.store.generation_stats(PERIODS[period], interaction.guild_id))
+        embed = discord.Embed(title=f"📊 Last {period}", description="\n".join(lines), color=EMBED_COLOR)
+        embed.set_footer(text=self.bot.backend.profile.describe())
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="cost", description="Show this month's Modal workspace usage")
     @app_commands.default_permissions(manage_guild=True)

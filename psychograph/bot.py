@@ -9,8 +9,10 @@ from discord.ext import commands
 from .backends import Backend, LocalBackend, make_backend
 from .chess_game import ChessService, Stockfish
 from .personas import PersonaRegistry
+from .responder import Responder
 from .settings import Settings, load_settings
 from .store import Store
+from .webhooks import PersonaWebhooks
 
 log = logging.getLogger("psychograph")
 
@@ -50,19 +52,30 @@ class PsychographBot(commands.Bot):
         # Chess commentary only ever uses local LM Studio, whichever backend chat uses.
         commentator = self.backend if isinstance(self.backend, LocalBackend) else LocalBackend(settings)
         self.chess = ChessService(self.store, Stockfish(settings), commentator)
+        self.webhooks = PersonaWebhooks(self)
+        self.responder = Responder(self)
         self._legacy_guild_commands_cleared = False
 
     async def load_cogs(self) -> None:
-        from .cogs import chat, chess, ops, personas, settings
+        from .cogs import chat, chess, help, ops, personas, settings
 
-        for module in (chat, chess, ops, personas, settings):
+        for module in (chat, chess, help, ops, personas, settings):
             await module.setup(self)
+
+    def presence(self) -> discord.CustomActivity:
+        profile = self.backend.profile
+        model = profile.name.split(" (")[0] if profile.key != "default" else self.backend.label.rsplit("/", 1)[-1]
+        return discord.CustomActivity(f"🧠 {model} · {profile.context_mode} context · /help")
 
     async def setup_hook(self) -> None:
         await self.load_cogs()
         await self.tree.sync()
 
     async def on_ready(self) -> None:
+        try:
+            await self.change_presence(activity=self.presence())
+        except discord.HTTPException:
+            log.info("Couldn't set presence")
         if self._legacy_guild_commands_cleared:
             return
         failed = False
@@ -94,4 +107,11 @@ def main() -> None:
     if not settings.discord_token:
         raise RuntimeError("DISCORD_TOKEN is not set")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    PsychographBot(settings).run(settings.discord_token)
+    bot = PsychographBot(settings)
+    log.info(
+        "Psychograph starting · backend %s · %s · %s",
+        bot.backend.name,
+        bot.backend.label,
+        bot.backend.profile.describe(),
+    )
+    bot.run(settings.discord_token, log_handler=None)
