@@ -15,7 +15,7 @@ if (!process.stdin.isTTY) {
 const python = existsSync(join(root, "venv", "Scripts", "python.exe"))
   ? join(root, "venv", "Scripts", "python.exe")
   : process.platform === "win32" ? "py" : "python3"
-const pythonArgs = python === "py" ? ["-3", "app.py"] : ["app.py"]
+const pythonArgs = python === "py" ? ["-3", "-m", "psychograph"] : ["-m", "psychograph"]
 const modal = existsSync(join(root, "venv", "Scripts", "modal.exe"))
   ? join(root, "venv", "Scripts", "modal.exe")
   : "modal"

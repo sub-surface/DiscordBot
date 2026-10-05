@@ -1,9 +1,7 @@
-default_model: mimo-v2.6-distill-qwen-9b-mernik
-persona: mochi
-providers:
-  local:
-    api_key: lm-studio
-    base_url: http://localhost:1234/v1
-response:
-  max_tokens: 2048
-  temperature: 1.0
+# Bot behaviour. Deployment settings (token, backend, model, limits) live in .env.
+default_persona: mochi
+allowed_channels:
+  - sim-city
+  - little-st-james
+  - shitpost
+  - games

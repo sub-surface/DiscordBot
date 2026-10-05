@@ -1,0 +1,149 @@
+"""Personas: built-in files, the chess mode, and per-server custom personas.
+
+A persona is addressed by a key stored in channel settings:
+  "<file stem>"   built-in persona from personas/*.json (structured) or *.md (plain prompt)
+  "chess"         the chess mode — moves are played by Stockfish, not the language model
+  "custom:<id>"   a custom persona from the store, visible only in its own server
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal
+
+from .store import Store
+
+CUSTOM_PREFIX = "custom:"
+CHESS_KEY = "chess"
+DEFAULT_REACTION = "✨"
+CUSTOM_REACTION = "🌱"
+CUSTOM_PROMPT_LIMIT = 3500
+
+
+@dataclass(frozen=True)
+class Persona:
+    key: str
+    name: str
+    prompt: str
+    reaction: str = DEFAULT_REACTION
+    mode: Literal["chat", "chess"] = "chat"
+    creator_id: int | None = None   # set for custom personas only
+    guild_id: int | None = None
+
+    @property
+    def custom_id(self) -> int | None:
+        return int(self.key.removeprefix(CUSTOM_PREFIX)) if self.key.startswith(CUSTOM_PREFIX) else None
+
+
+CHESS = Persona(key=CHESS_KEY, name="chess", prompt="", reaction="♟️", mode="chess")
+
+
+def can_manage(persona: Persona, user_id: int, manage_guild: bool) -> bool:
+    """Custom personas can be changed by their creator or anyone with Manage Server."""
+    return persona.custom_id is not None and (user_id == persona.creator_id or manage_guild)
+
+
+def render_structured(data: dict) -> str:
+    """Flatten a structured persona into a system prompt: voice, then facts and state."""
+    parts = [str(data.get("voice", "")).strip()]
+    facts = data.get("facts") or {}
+    if facts:
+        lines = []
+        for key, value in facts.items():
+            if isinstance(value, list):
+                value = ", ".join(str(item) for item in value) if value else "(none)"
+            elif value is None:
+                value = "(none)"
+            lines.append(f"  {key}: {value}")
+        parts.append("[Facts]\n" + "\n".join(lines))
+    state = {key: value for key, value in (data.get("state") or {}).items() if value is not None}
+    if state:
+        parts.append("[Current state]\n" + "\n".join(f"  {key}: {value}" for key, value in state.items()))
+    return "\n\n".join(part for part in parts if part)
+
+
+def _custom(row: dict) -> Persona:
+    return Persona(
+        key=f"{CUSTOM_PREFIX}{row['id']}",
+        name=row["name"],
+        prompt=row["prompt"],
+        reaction=CUSTOM_REACTION,
+        creator_id=row["creator_id"],
+        guild_id=row["guild_id"],
+    )
+
+
+class PersonaRegistry:
+    def __init__(self, store: Store, personas_dir: Path, default_key: str) -> None:
+        self.store = store
+        self.personas_dir = personas_dir
+        self.default_key = default_key
+
+    def builtin_keys(self) -> list[str]:
+        stems = {path.stem for pattern in ("*.json", "*.md") for path in self.personas_dir.glob(pattern)}
+        return sorted(stems)
+
+    def _builtin(self, key: str) -> Persona | None:
+        structured = self.personas_dir / f"{key}.json"
+        if structured.is_file():
+            data = json.loads(structured.read_text(encoding="utf-8"))
+            return Persona(key=key, name=key, prompt=render_structured(data), reaction=data.get("reaction", DEFAULT_REACTION))
+        plain = self.personas_dir / f"{key}.md"
+        if plain.is_file():
+            return Persona(key=key, name=key, prompt=plain.read_text(encoding="utf-8").strip())
+        return None
+
+    def get(self, guild_id: int | None, key: str) -> Persona | None:
+        """The persona for an exact key, or None if it doesn't exist in this server."""
+        if key == CHESS_KEY:
+            return CHESS
+        if key.startswith(CUSTOM_PREFIX):
+            try:
+                persona_id = int(key.removeprefix(CUSTOM_PREFIX))
+            except ValueError:
+                return None
+            row = self.store.custom_persona(persona_id, guild_id) if guild_id is not None else None
+            return _custom(row) if row else None
+        if "/" in key or "\\" in key or key not in self.builtin_keys():
+            return None
+        return self._builtin(key)
+
+    def find(self, guild_id: int | None, text: str) -> Persona | None:
+        """Look up by key, falling back to a case-insensitive name match (for typed input)."""
+        persona = self.get(guild_id, text)
+        if persona is not None:
+            return persona
+        wanted = text.strip().casefold()
+        return next((persona for persona in self.available(guild_id) if persona.name.casefold() == wanted), None)
+
+    def default(self) -> Persona:
+        return self._builtin(self.default_key) or Persona(
+            key=self.default_key, name=self.default_key, prompt=f"You are {self.default_key}."
+        )
+
+    def for_channel(self, channel_id: int, guild_id: int | None) -> Persona:
+        key = self.store.channel_settings(channel_id).persona
+        return (self.get(guild_id, key) if key else None) or self.default()
+
+    def available(self, guild_id: int | None, custom_only: bool = False) -> list[Persona]:
+        personas: list[Persona] = []
+        if not custom_only:
+            personas.extend(persona for key in self.builtin_keys() if (persona := self._builtin(key)))
+            personas.append(CHESS)
+        if guild_id is not None:
+            personas.extend(_custom(row) for row in self.store.custom_personas(guild_id))
+        return personas
+
+    def search(self, guild_id: int | None, query: str, custom_only: bool = False) -> list[Persona]:
+        wanted = query.casefold()
+        return [persona for persona in self.available(guild_id, custom_only) if wanted in persona.name.casefold()]
+
+    def is_reserved(self, name: str) -> bool:
+        return name.casefold() in {key.casefold() for key in [*self.builtin_keys(), CHESS_KEY]}
+
+    def delete(self, persona: Persona) -> bool:
+        if persona.custom_id is None or persona.guild_id is None:
+            return False
+        return self.store.delete_custom_persona(persona.custom_id, persona.guild_id, persona.key, self.default_key)
