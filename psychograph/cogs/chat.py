@@ -104,25 +104,36 @@ class ChatCog(commands.Cog):
         if emoji not in (REGENERATE, DELETE) or self.bot.user is None or payload.user_id == self.bot.user.id:
             return
         answer = self.bot.store.message(payload.message_id)
-        if answer is None or answer["role"] != "assistant" or answer["reply_to"] is None:
+        if (
+            answer is None
+            or answer["role"] != "assistant"
+            or answer["reply_to"] is None
+            or answer["channel_id"] != payload.channel_id
+        ):
             return
         request = self.bot.store.message(answer["reply_to"])
+        # Whoever asked for the answer controls it — for "Ask persona" that's the person who ran the
+        # command, not the author of the message it answered. Older rows predate requester_id.
+        requester = answer["requester_id"] if answer["requester_id"] is not None else (request or {}).get("author_id")
+        is_requester = requester == payload.user_id
         channel = self.bot.get_channel(payload.channel_id) or await self.bot.fetch_channel(payload.channel_id)
-        is_asker = request is not None and request["author_id"] == payload.user_id
         if emoji == DELETE:
             member = payload.member
             can_moderate = bool(member and channel.permissions_for(member).manage_messages)
-            if is_asker or can_moderate:
+            if is_requester or can_moderate:
                 await self.bot.responder.delete_response(channel, answer["reply_to"])
             return
-        if is_asker:
-            await self._regenerate(channel, answer["reply_to"])
+        # Regenerating replays the request message, so only answers to the requester's own message qualify.
+        if is_requester and request is not None and request["author_id"] == payload.user_id:
+            await self._regenerate(channel, answer["reply_to"], payload.user_id)
 
-    async def _regenerate(self, channel: discord.abc.Messageable, request_id: int) -> None:
+    async def _regenerate(self, channel: discord.abc.Messageable, request_id: int, user_id: int) -> None:
         try:
             original = await channel.fetch_message(request_id)
         except discord.HTTPException:
             return  # /ask answers have no message to re-run; ask again instead
+        if original.author.id != user_id:
+            return
         await self.bot.responder.delete_response(channel, request_id)
         await self.handle(original)
 

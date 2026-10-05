@@ -41,7 +41,7 @@ def help_embed(bot: PsychographBot, channel_id: int, guild_id: int | None) -> di
     embed.add_field(
         name="🎭 Personas",
         value="**/persona** switch · **/persona-create** make your own · **/persona-edit** · **/persona-delete**\n"
-        "**/status** → *Voice* to speak as the persona with its own name and avatar",
+        "**/persona-avatar** give one a profile picture · **/status** → *Voice* to post as the persona itself",
         inline=False,
     )
     embed.add_field(

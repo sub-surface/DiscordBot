@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 from urllib.parse import quote
@@ -89,6 +89,11 @@ def split_compact_section(markdown: str) -> tuple[str, str]:
 CHESS = Persona(key=CHESS_KEY, name="chess", prompt="", reaction="♟️", mode="chess")
 
 
+def display_name(key: str) -> str:
+    """How a built-in persona is named in Discord: its file stem, with underscores as spaces."""
+    return key.replace("_", " ").strip()
+
+
 def can_manage(persona: Persona, user_id: int, manage_guild: bool) -> bool:
     """Custom personas can be changed by their creator or anyone with Manage Server."""
     return persona.custom_id is not None and (user_id == persona.creator_id or manage_guild)
@@ -140,7 +145,7 @@ class PersonaRegistry:
             data = json.loads(structured.read_text(encoding="utf-8"))
             return Persona(
                 key=key,
-                name=key,
+                name=display_name(key),
                 prompt=render_structured(data),
                 reaction=data.get("reaction", DEFAULT_REACTION),
                 compact_prompt=data.get("compact") or compact_text(str(data.get("voice", ""))),
@@ -149,8 +154,15 @@ class PersonaRegistry:
         plain = self.personas_dir / f"{key}.md"
         if plain.is_file():
             prompt, compact = split_compact_section(plain.read_text(encoding="utf-8"))
-            return Persona(key=key, name=key, prompt=prompt, compact_prompt=compact)
+            return Persona(key=key, name=display_name(key), prompt=prompt, compact_prompt=compact)
         return None
+
+    def _dressed(self, persona: Persona, guild_id: int | None, avatars: dict[str, str] | None = None) -> Persona:
+        """Apply this server's uploaded avatar for the persona, if any."""
+        if guild_id is None or persona.mode != "chat":
+            return persona
+        url = (avatars if avatars is not None else self.store.persona_avatars(guild_id)).get(persona.key)
+        return replace(persona, avatar_url=url) if url else persona
 
     def get(self, guild_id: int | None, key: str) -> Persona | None:
         """The persona for an exact key, or None if it doesn't exist in this server."""
@@ -162,10 +174,11 @@ class PersonaRegistry:
             except ValueError:
                 return None
             row = self.store.custom_persona(persona_id, guild_id) if guild_id is not None else None
-            return _custom(row) if row else None
+            return self._dressed(_custom(row), guild_id) if row else None
         if "/" in key or "\\" in key or key not in self.builtin_keys():
             return None
-        return self._builtin(key)
+        persona = self._builtin(key)
+        return self._dressed(persona, guild_id) if persona else None
 
     def find(self, guild_id: int | None, text: str) -> Persona | None:
         """Look up by key, falling back to a case-insensitive name match (for typed input)."""
@@ -182,7 +195,7 @@ class PersonaRegistry:
 
     def for_channel(self, channel_id: int, guild_id: int | None) -> Persona:
         key = self.store.channel_settings(channel_id).persona
-        return (self.get(guild_id, key) if key else None) or self.default()
+        return (self.get(guild_id, key) if key else None) or self._dressed(self.default(), guild_id)
 
     def available(self, guild_id: int | None, custom_only: bool = False) -> list[Persona]:
         personas: list[Persona] = []
@@ -191,6 +204,8 @@ class PersonaRegistry:
             personas.append(CHESS)
         if guild_id is not None:
             personas.extend(_custom(row) for row in self.store.custom_personas(guild_id))
+            avatars = self.store.persona_avatars(guild_id)
+            personas = [self._dressed(persona, guild_id, avatars) for persona in personas]
         return personas
 
     def search(self, guild_id: int | None, query: str, custom_only: bool = False) -> list[Persona]:
@@ -198,7 +213,8 @@ class PersonaRegistry:
         return [persona for persona in self.available(guild_id, custom_only) if wanted in persona.name.casefold()]
 
     def is_reserved(self, name: str) -> bool:
-        return name.casefold() in {key.casefold() for key in [*self.builtin_keys(), CHESS_KEY]}
+        reserved = {CHESS_KEY, *self.builtin_keys(), *(display_name(key) for key in self.builtin_keys())}
+        return name.strip().casefold() in {item.casefold() for item in reserved}
 
     def delete(self, persona: Persona) -> bool:
         if persona.custom_id is None or persona.guild_id is None:

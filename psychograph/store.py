@@ -68,8 +68,9 @@ class Store:
                     ts DATETIME DEFAULT CURRENT_TIMESTAMP
                 )"""
             )
-            # reply_to: for assistant rows, the user message they answer (regenerate/delete).
-            self._ensure_columns("messages", {"author_id": "INTEGER", "reply_to": "INTEGER"})
+            # For assistant rows: reply_to is the user message answered, requester_id who asked for
+            # the answer (they may regenerate/delete it; not always that message's author).
+            self._ensure_columns("messages", {"author_id": "INTEGER", "reply_to": "INTEGER", "requester_id": "INTEGER"})
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_channel ON messages(channel_id, discord_msg_id)")
             self._conn.execute("CREATE TABLE IF NOT EXISTS channel_settings (channel_id INTEGER PRIMARY KEY)")
             self._ensure_columns("channel_settings", SETTING_COLUMNS)
@@ -113,6 +114,19 @@ class Store:
                 )"""
             )
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_generations_ts ON generations(ts)")
+            # Uploaded persona pictures, per server. url points at the avatar of webhook_id, a small
+            # webhook kept only to host the image (Discord attachment links expire; avatars don't).
+            self._conn.execute(
+                """CREATE TABLE IF NOT EXISTS persona_avatars (
+                    guild_id INTEGER NOT NULL,
+                    persona TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    webhook_id INTEGER,
+                    set_by INTEGER,
+                    updated_ts DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (guild_id, persona)
+                )"""
+            )
 
     def _ensure_columns(self, table: str, columns: dict[str, str]) -> None:
         existing = {row["name"] for row in self._conn.execute(f"PRAGMA table_info({table})")}
@@ -131,18 +145,19 @@ class Store:
         content: str,
         author_id: int | None = None,
         reply_to: int | None = None,
+        requester_id: int | None = None,
     ) -> None:
         with self._conn:
             self._conn.execute(
                 "INSERT OR REPLACE INTO messages "
-                "(discord_msg_id, parent_msg_id, channel_id, author_id, role, content, reply_to) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (discord_msg_id, parent_msg_id, channel_id, author_id, role, content, reply_to),
+                "(discord_msg_id, parent_msg_id, channel_id, author_id, role, content, reply_to, requester_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (discord_msg_id, parent_msg_id, channel_id, author_id, role, content, reply_to, requester_id),
             )
 
     def message(self, discord_msg_id: int) -> dict | None:
         row = self._conn.execute(
-            "SELECT discord_msg_id, parent_msg_id, channel_id, author_id, role, content, reply_to "
+            "SELECT discord_msg_id, parent_msg_id, channel_id, author_id, role, content, reply_to, requester_id "
             "FROM messages WHERE discord_msg_id = ?",
             (discord_msg_id,),
         ).fetchone()
@@ -265,7 +280,36 @@ class Store:
                 self._conn.execute(
                     "UPDATE channel_settings SET persona = ? WHERE persona = ?", (fallback_key, persona_key)
                 )
+                self._conn.execute(
+                    "DELETE FROM persona_avatars WHERE guild_id = ? AND persona = ?", (guild_id, persona_key)
+                )
         return cursor.rowcount > 0
+
+    # ── Persona avatars ─────────────────────────────────────────────
+
+    def persona_avatar(self, guild_id: int, persona_key: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT persona, url, webhook_id, set_by FROM persona_avatars WHERE guild_id = ? AND persona = ?",
+            (guild_id, persona_key),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def persona_avatars(self, guild_id: int) -> dict[str, str]:
+        """persona key → uploaded avatar URL, for one server."""
+        rows = self._conn.execute("SELECT persona, url FROM persona_avatars WHERE guild_id = ?", (guild_id,)).fetchall()
+        return {row["persona"]: row["url"] for row in rows}
+
+    def set_persona_avatar(self, guild_id: int, persona_key: str, url: str, webhook_id: int | None, set_by: int) -> None:
+        with self._conn:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO persona_avatars (guild_id, persona, url, webhook_id, set_by, updated_ts) "
+                "VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                (guild_id, persona_key, url, webhook_id, set_by),
+            )
+
+    def delete_persona_avatar(self, guild_id: int, persona_key: str) -> None:
+        with self._conn:
+            self._conn.execute("DELETE FROM persona_avatars WHERE guild_id = ? AND persona = ?", (guild_id, persona_key))
 
     # ── Chess ───────────────────────────────────────────────────────
 

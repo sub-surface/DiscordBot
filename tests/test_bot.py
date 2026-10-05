@@ -317,6 +317,25 @@ class ChatPipelineTests(unittest.TestCase):
         self.assertIsNone(self.bot.store.message(2000))
         self.assertEqual(self.bot.store.response_ids(1000), [])
 
+    def test_ask_persona_answers_belong_to_whoever_asked_not_the_quoted_author(self) -> None:
+        target = self.discord.message("pineapple on pizza is fine", 1500, mentioned=False, author_id=8)
+        self.discord.channel.fetch_message = AsyncMock(return_value=target)
+        interaction = SimpleNamespace(
+            channel=self.discord.channel, channel_id=1, guild_id=10, user=SimpleNamespace(id=5),
+            response=SimpleNamespace(send_message=AsyncMock()),
+        )
+        asyncio.run(self.cog.ask_about_message(interaction, target))
+        self.assertEqual(self.bot.store.message(2000)["requester_id"], 5)
+
+        self.react("🔁", 2000, user_id=8)  # the quoted author can't replay their message at the bot
+        self.react("🔁", 2000, user_id=5)  # nor can the requester: it isn't their message
+        self.react("🗑️", 2000, user_id=8)
+        self.assertEqual(len(self.backend.calls), 1)
+        self.assertIsNotNone(self.bot.store.message(2000))
+
+        self.react("🗑️", 2000, user_id=5)
+        self.assertIsNone(self.bot.store.message(2000))
+
     def test_ask_command_answers_as_another_persona_via_followup(self) -> None:
         followup = SimpleNamespace(send=AsyncMock(side_effect=self.discord._post))
         interaction = SimpleNamespace(

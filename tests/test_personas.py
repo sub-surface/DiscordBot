@@ -51,6 +51,32 @@ class PersonaTests(unittest.TestCase):
         self.assertIn("seed=A%20Quigley", self.registry.get(None, "A Quigley").avatar_url)
         self.assertEqual(self.registry.get(None, "zack").avatar_url, self.registry.get(None, "zack").avatar_url)
 
+    def test_builtin_names_read_naturally_and_stay_reserved(self) -> None:
+        persona = self.registry.get(None, "normal_dude")
+
+        self.assertEqual((persona.key, persona.name), ("normal_dude", "normal dude"))
+        self.assertEqual(self.registry.find(None, "Normal Dude").key, "normal_dude")
+        self.assertTrue(self.registry.is_reserved("normal dude"))
+        self.assertTrue(self.registry.is_reserved("normal_dude"))
+
+    def test_uploaded_avatars_apply_per_server_everywhere(self) -> None:
+        persona_id = self.store.create_custom_persona(10, 100, "Campfire", "Speak gently.")
+        key = f"custom:{persona_id}"
+        generated = self.registry.get(10, key).avatar_url
+        self.store.set_persona_avatar(10, key, "https://cdn.example/campfire.png", 555, 100)
+        self.store.set_persona_avatar(10, "charlie", "https://cdn.example/charlie.png", 556, 1)
+        self.store.update_channel(1, persona="charlie")
+
+        self.assertEqual(self.registry.get(10, key).avatar_url, "https://cdn.example/campfire.png")
+        self.assertEqual(self.registry.for_channel(1, 10).avatar_url, "https://cdn.example/charlie.png")
+        self.assertEqual(self.registry.get(11, "charlie").avatar_url, self.registry.get(None, "charlie").avatar_url)
+        by_key = {persona.key: persona.avatar_url for persona in self.registry.available(10)}
+        self.assertEqual(by_key["charlie"], "https://cdn.example/charlie.png")
+        self.assertNotEqual(generated, by_key[key])
+
+        self.registry.delete(self.registry.get(10, key))
+        self.assertIsNone(self.store.persona_avatar(10, key))
+
     def test_reactions_come_from_persona_files_with_defaults(self) -> None:
         self.assertEqual(self.registry.get(None, "mochi").reaction, "✨")
         self.assertEqual(self.registry.get(None, "normal_dude").reaction, "👋")
@@ -89,9 +115,10 @@ class PersonaTests(unittest.TestCase):
         self.store.create_custom_persona(10, 100, "Campfire", "Speak gently.")
         self.store.create_custom_persona(11, 100, "Elsewhere", "Other server.")
 
-        names = [persona.name for persona in self.registry.available(10)]
+        personas = self.registry.available(10)
+        names = [persona.name for persona in personas]
 
-        self.assertEqual(names[: len(self.registry.builtin_keys())], self.registry.builtin_keys())
+        self.assertEqual([p.key for p in personas][: len(self.registry.builtin_keys())], self.registry.builtin_keys())
         self.assertIn("chess", names)
         self.assertIn("Campfire", names)
         self.assertNotIn("Elsewhere", names)

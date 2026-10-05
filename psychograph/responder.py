@@ -186,7 +186,15 @@ class Responder:
 
         parent_id = ask.record_id
         for chunk, message in zip(chunks, sent):
-            store.save_message(message.id, parent_id, ask.channel.id, "assistant", chunk, reply_to=ask.record_id)
+            store.save_message(
+                message.id,
+                parent_id,
+                ask.channel.id,
+                "assistant",
+                chunk,
+                reply_to=ask.record_id,
+                requester_id=ask.requester_id,
+            )
             parent_id = message.id
         return sent
 

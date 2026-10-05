@@ -1,6 +1,8 @@
-"""/persona and custom persona management."""
+"""/persona, custom persona management, and persona profile pictures."""
 
 from __future__ import annotations
+
+import asyncio
 
 import discord
 from discord import app_commands
@@ -8,6 +10,8 @@ from discord.ext import commands
 
 from ..bot import PsychographBot
 from ..personas import CUSTOM_PROMPT_LIMIT, Persona, can_manage
+from ..render import EMBED_COLOR
+from ..webhooks import AVATAR_MAX_BYTES, AVATAR_TYPES, member_named, square_png
 
 
 def _manage_guild(interaction: discord.Interaction) -> bool:
@@ -16,6 +20,14 @@ def _manage_guild(interaction: discord.Interaction) -> bool:
 
 def _choices(personas: list[Persona]) -> list[app_commands.Choice[str]]:
     return [app_commands.Choice(name=persona.name[:100], value=persona.key) for persona in personas][:25]
+
+
+async def _is_member_name(guild: discord.Guild, name: str) -> bool:
+    """Bounded so a modal can still answer within Discord's 3 seconds; posting re-checks anyway."""
+    try:
+        return await asyncio.wait_for(member_named(guild, name), timeout=2)
+    except asyncio.TimeoutError:
+        return False
 
 
 class CustomPersonaModal(discord.ui.Modal):
@@ -55,6 +67,12 @@ class CustomPersonaModal(discord.ui.Modal):
         if self.bot.personas.is_reserved(name):
             await send("That name is reserved by a built-in persona.", ephemeral=True)
             return
+        if interaction.guild and await _is_member_name(interaction.guild, name):
+            await send(
+                "Someone in this server goes by that name — pick a persona name that isn't a real member.",
+                ephemeral=True,
+            )
+            return
 
         store = self.bot.store
         if self.persona is None:
@@ -88,12 +106,16 @@ class PersonaDeleteView(discord.ui.View):
         self.stop()
         allowed = can_manage(self.persona, interaction.user.id, _manage_guild(interaction))
         default = self.bot.personas.default_key
+        avatar = self.bot.store.persona_avatar(self.persona.guild_id, self.persona.key) if self.persona.guild_id else None
+        deleted = allowed and self.bot.personas.delete(self.persona)
         message = (
             f"Deleted **{self.persona.name}**. Channels using it returned to **{default}**."
-            if allowed and self.bot.personas.delete(self.persona)
+            if deleted
             else "Couldn't delete that persona; check your permissions."
         )
         await interaction.response.edit_message(content=message, view=None)
+        if deleted and avatar:
+            await self.bot.webhooks.drop_avatar(avatar["webhook_id"])
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
     async def cancel_delete(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
@@ -170,6 +192,89 @@ class PersonaCommands(commands.Cog):
 
     persona_edit.autocomplete("name")(_custom_autocomplete)
     persona_delete.autocomplete("name")(_custom_autocomplete)
+
+    @app_commands.command(name="persona-avatar", description="Give a persona its own profile picture, or reset it")
+    @app_commands.describe(
+        name="The persona",
+        image="PNG, JPG, GIF or WebP up to 8 MB — cropped to a square",
+        reset="Go back to the generated avatar",
+    )
+    async def persona_avatar(
+        self,
+        interaction: discord.Interaction,
+        name: str,
+        image: discord.Attachment | None = None,
+        reset: bool = False,
+    ) -> None:
+        send = interaction.response.send_message
+        guild = interaction.guild
+        persona = self.bot.personas.find(guild.id, name) if guild else None
+        if persona is None or persona.mode != "chat":
+            await send("Choose a chat persona from this server.", ephemeral=True)
+            return
+        # Custom personas: their creator or a server manager. Built-ins are shared, so server managers only.
+        allowed = (
+            can_manage(persona, interaction.user.id, _manage_guild(interaction))
+            if persona.custom_id is not None
+            else _manage_guild(interaction)
+        )
+        existing = self.bot.store.persona_avatar(guild.id, persona.key)
+
+        if image is None and not reset:
+            embed = discord.Embed(
+                title=persona.name,
+                description="Uploaded picture." if existing else "Generated avatar — upload an `image` to change it.",
+                color=EMBED_COLOR,
+            )
+            embed.set_thumbnail(url=persona.avatar_url)
+            await send(embed=embed, ephemeral=True)
+            return
+        if not allowed:
+            who = "its creator or a server manager" if persona.custom_id is not None else "a server manager"
+            await send(f"Only {who} can change **{persona.name}**'s picture.", ephemeral=True)
+            return
+        if reset:
+            self.bot.store.delete_persona_avatar(guild.id, persona.key)
+            await send(f"**{persona.name}** is back to its generated avatar.", ephemeral=True)
+            if existing:
+                await self.bot.webhooks.drop_avatar(existing["webhook_id"])
+            return
+
+        content_type = (image.content_type or "").split(";")[0].strip().lower()
+        if content_type not in AVATAR_TYPES or image.size > AVATAR_MAX_BYTES:
+            await send("Use a PNG, JPG, GIF or WebP image up to 8 MB.", ephemeral=True)
+            return
+        if not self.bot.webhooks.available(interaction.channel):
+            await send("I need the **Manage Webhooks** permission in this channel to keep pictures.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            png = await asyncio.to_thread(square_png, await image.read())
+            url, webhook_id = await self.bot.webhooks.host_avatar(
+                interaction.channel, persona, png, existing["webhook_id"] if existing else None
+            )
+        except ValueError as error:
+            await interaction.followup.send(str(error), ephemeral=True)
+            return
+        except (discord.HTTPException, discord.ClientException):
+            await interaction.followup.send(
+                "Discord wouldn't save that picture. A channel can hold at most 15 webhooks — try another channel.",
+                ephemeral=True,
+            )
+            return
+        self.bot.store.set_persona_avatar(guild.id, persona.key, url, webhook_id, interaction.user.id)
+        embed = discord.Embed(
+            title=f"{persona.reaction} {persona.name}",
+            description="New picture saved. Embeds use it now; turn on **Voice** in `/status` to post as this persona.",
+            color=EMBED_COLOR,
+        )
+        embed.set_thumbnail(url=url)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @persona_avatar.autocomplete("name")
+    async def persona_avatar_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        return _choices([p for p in self.bot.personas.search(interaction.guild_id, current) if p.mode == "chat"])
 
 
 async def setup(bot: PsychographBot) -> None:
