@@ -181,8 +181,11 @@ class PersonaWebhooks:
 
     async def delete(self, channel: discord.abc.Messageable, message_id: int) -> bool:
         base = self._base(channel)
-        webhook = self._cache.get(base.id) if base else None
-        if webhook is None:
+        if base is None or not self.available(channel):
+            return False
+        try:
+            webhook = await self._webhook(base)  # after a restart the cache is empty; look it up
+        except discord.HTTPException:
             return False
         try:
             kwargs = {"thread": channel} if isinstance(channel, discord.Thread) else {}
