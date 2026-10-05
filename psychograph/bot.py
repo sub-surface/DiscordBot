@@ -11,6 +11,7 @@ from .chess_game import ChessService, Stockfish
 from .personas import PersonaRegistry
 from .responder import Responder
 from .settings import Settings, load_settings
+from .sounds import Soundbank
 from .store import Store
 from .webhooks import PersonaWebhooks
 
@@ -53,13 +54,14 @@ class PsychographBot(commands.Bot):
         commentator = self.backend if isinstance(self.backend, LocalBackend) else LocalBackend(settings)
         self.chess = ChessService(self.store, Stockfish(settings), commentator)
         self.webhooks = PersonaWebhooks(self)
+        self.soundbank = Soundbank(settings.sounds_dir)
         self.responder = Responder(self)
         self._legacy_guild_commands_cleared = False
 
     async def load_cogs(self) -> None:
-        from .cogs import chat, chess, help, ops, personas, settings
+        from .cogs import chat, chess, help, ops, personas, settings, soundboard
 
-        for module in (chat, chess, help, ops, personas, settings):
+        for module in (chat, chess, help, ops, personas, settings, soundboard):
             await module.setup(self)
 
     def presence(self) -> discord.CustomActivity:

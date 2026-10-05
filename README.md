@@ -30,6 +30,23 @@ While it works, the bot reacts to your message: **👀** thinking, **☁️** wa
 
 Built-in personas live in `personas/`: structured `.json` files (`voice`, `facts`, `state`, optional `reaction`, `avatar` and `compact`) or plain `.md` prompts, which may end with a `## Compact` section used for weaker models. Avatars default to a generated image seeded by the persona's name.
 
+### Sounds
+
+Personas can drop short meme sounds into a conversation as Discord **voice messages** (the waveform bubble). Turn on **Sounds** in `/status` (Manage Messages); anyone can play one by hand with **`/sound name`**, or list them with `/sound`.
+
+- The model is given the list of sounds and picks one by ending its reply with `[sound: vine_boom]`; the tag is removed from the text. Weaker models that narrate instead (`*sad trombone*`) count too. Compact-context models get just the names.
+- If the model doesn't pick one, a keyword match on the conversation sometimes does (about a third of the time, at most once per two minutes per channel). Tagged sounds have a 15-second per-channel cooldown; `/sound` has an 8-second per-person one.
+- In **Voice** mode the clip comes from the persona itself as an audio attachment (webhooks can't send voice messages).
+- The bot needs **Attach Files** and **Send Voice Messages**; if voice messages are refused it sends a plain audio file.
+
+The bank is built from `sounds/sources.json` (each clip's source file, keywords, mood and description, plus optional `start`/`seconds` trims):
+
+```powershell
+python tools/build_soundbank.py          # converts new or changed clips; --force rebuilds all
+```
+
+Clips are trimmed of leading silence, capped at 7 seconds, loudness-matched and encoded as Ogg Opus, with the duration and waveform written to `sounds/sounds.json`. The audio files are git-ignored because they come from a local sample library; restart the bot after building.
+
 ### Chess
 
 `/chess new` starts a game in the channel and switches its persona to `chess`; then mention the bot with moves (`e4`, `Nf3`, `e2e4`) or use `/chess move`. Black is played by local Stockfish — never the language model. `/chess commentary on` adds a one-line note from local LM Studio only. If Stockfish fails, your move isn't saved.
@@ -90,13 +107,15 @@ psychograph/
   store.py          SQLite: reply chains, channel settings, custom personas, chess games, generation log
   conversation.py   system prompts (full/compact), context fitting, linked posts, reply cleanup
   responder.py      one request end to end: status reactions → context → model → clean → deliver → record
-  webhooks.py       persona voices through a channel webhook
+  webhooks.py       persona voices through a channel webhook, avatar hosting, impersonation guard
+  sounds.py         the soundbank: tags, keyword picks, cooldowns, sending voice messages
   render.py         embeds, message splitting, generation stats line
   chess_game.py     ChessService (one load/save per turn, per-channel lock) and a persistent UCI Stockfish
   stats.py          /stats and `python -m psychograph stats`
   bot.py            the bot, channel allowlist, presence
-  cogs/             chat (messages, /ask, Ask persona, 🔁/🗑️), personas, settings (/status), ops (/model /stats /cost), chess, help
+  cogs/             chat (messages, /ask, Ask persona, 🔁/🗑️), personas, settings (/status), ops (/model /stats /cost), soundboard, chess, help
 modal_app.py        the Modal llama.cpp worker
+tools/              build_soundbank.py (sounds/sources.json → clips + manifest)
 models.json         model presets and profiles
 dash.mjs            the terminal dashboard
 ```

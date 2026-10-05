@@ -121,18 +121,21 @@ class PersonaWebhooks:
         persona: Persona,
         content: str,
         allowed_mentions: discord.AllowedMentions,
+        file: discord.File | None = None,
     ) -> discord.WebhookMessage | None:
         """Post as the persona, or return None when this channel can't host a webhook."""
         base = self._base(channel)
         if base is None or not self.available(channel):
             return None
-        kwargs = {"thread": channel} if isinstance(channel, discord.Thread) else {}
+        kwargs: dict = {"thread": channel} if isinstance(channel, discord.Thread) else {}
+        if file is not None:
+            kwargs["file"] = file
         username = await self.username(channel, persona)
         for attempt in range(2):
             webhook = await self._webhook(base)
             try:
                 return await webhook.send(
-                    content,
+                    content or discord.utils.MISSING,
                     username=username,
                     avatar_url=persona.avatar_url,
                     allowed_mentions=allowed_mentions,

@@ -12,3 +12,6 @@ bot.log
 
 # local Claude IDE state
 .claude/settings.local.json
+
+# Soundbank audio is built locally from a private sample library; keep it out of git.
+sounds/*.ogg

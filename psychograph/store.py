@@ -16,6 +16,7 @@ class ChannelSettings:
     chess_commentary: bool = False
     persona_reactions: bool = False
     persona_voice: bool = False      # speak through a webhook as the persona
+    sounds: bool = False             # let personas play soundbank clips
 
 
 SETTING_COLUMNS = {
@@ -24,6 +25,7 @@ SETTING_COLUMNS = {
     "chess_commentary": "INTEGER NOT NULL DEFAULT 0",
     "persona_reactions": "INTEGER NOT NULL DEFAULT 0",
     "persona_voice": "INTEGER NOT NULL DEFAULT 0",
+    "sounds": "INTEGER NOT NULL DEFAULT 0",
 }
 
 

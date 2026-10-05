@@ -25,6 +25,9 @@ def status_embed(bot: PsychographBot, channel_id: int, guild_id: int | None, cha
     embed.add_field(name="Reply detail", value=settings.verbosity.title(), inline=True)
     embed.add_field(name="Persona reactions", value="On" if settings.persona_reactions else "Off", inline=True)
     embed.add_field(name="Voice", value="Speaks as persona" if settings.persona_voice else "Bot embeds", inline=True)
+    embed.add_field(
+        name="Sounds", value=f"On · {len(bot.soundbank)} clips" if settings.sounds else "Off", inline=True
+    )
     embed.add_field(name="Backend", value=backend.name.title(), inline=True)
     embed.add_field(
         name="Context / output", value=f"{backend.context_limit:,} / {backend.output_limit:,} tokens", inline=True
@@ -99,6 +102,7 @@ class StatusView(discord.ui.View):
         if not can_manage_messages:
             self.remove_item(self.reaction_button)
             self.remove_item(self.voice_button)
+            self.remove_item(self.sounds_button)
         self._refresh_labels()
 
     def _persona_options(self) -> list[discord.SelectOption]:
@@ -115,6 +119,7 @@ class StatusView(discord.ui.View):
         self.verbosity_button.label = f"Detail: {settings.verbosity.title()}"
         self.reaction_button.label = f"Reactions: {'On' if settings.persona_reactions else 'Off'}"
         self.voice_button.label = f"Voice: {'Persona' if settings.persona_voice else 'Embed'}"
+        self.sounds_button.label = f"Sounds: {'On' if settings.sounds else 'Off'}"
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.requester_id:
@@ -169,6 +174,20 @@ class StatusView(discord.ui.View):
             )
             return
         self.bot.store.update_channel(self.channel_id, persona_voice=not enabled)
+        await self._refresh(interaction)
+
+    @discord.ui.button(label="Sounds", style=discord.ButtonStyle.secondary, row=2)
+    async def sounds_button(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        if not interaction.permissions.manage_messages:
+            await interaction.response.send_message("Manage Messages permission is required.", ephemeral=True)
+            return
+        enabled = self.bot.store.channel_settings(self.channel_id).sounds
+        if not enabled and not len(self.bot.soundbank):
+            await interaction.response.send_message(
+                "No sounds are built yet — run `python tools/build_soundbank.py` on the bot's machine.", ephemeral=True
+            )
+            return
+        self.bot.store.update_channel(self.channel_id, sounds=not enabled)
         await self._refresh(interaction)
 
     @discord.ui.button(label="Reset history", style=discord.ButtonStyle.danger, row=1)

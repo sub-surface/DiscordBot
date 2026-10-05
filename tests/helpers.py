@@ -88,8 +88,10 @@ def fake_webhooks(posted: list) -> MagicMock:
     webhooks.available.return_value = True
     ids = iter(range(5000, 6000))
 
-    async def send(channel, persona, content, allowed_mentions):
-        message = SimpleNamespace(id=next(ids), content=content, persona=persona.name, add_reaction=AsyncMock())
+    async def send(channel, persona, content, allowed_mentions, file=None):
+        message = SimpleNamespace(
+            id=next(ids), content=content, persona=persona.name, file=file, add_reaction=AsyncMock()
+        )
         posted.append(message)
         return message
 

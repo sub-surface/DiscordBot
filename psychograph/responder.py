@@ -16,9 +16,10 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from . import conversation, render
+from . import conversation, render, sounds
 from .backends import Completion
 from .personas import Persona
+from .sounds import Sound
 from .store import Generation
 
 if TYPE_CHECKING:
@@ -57,6 +58,8 @@ class Prepared:
     recipient: discord.abc.User | None
     notice: str | None
     speakers: list[str] = field(default_factory=list)
+    sounds_on: bool = False   # the soundbank menu was offered to the model
+    voiced: bool = False      # the answer went out through the persona's webhook
 
 
 async def _react(message: discord.Message | None, emoji: str) -> None:
@@ -100,17 +103,19 @@ class Responder:
             history = conversation.compact_history(history)
         bot.store.save_message(ask.record_id, ask.parent_id, ask.channel.id, "user", turn, ask.author.id)
 
-        verbosity = bot.store.channel_settings(ask.channel.id).verbosity
+        settings = bot.store.channel_settings(ask.channel.id)
+        sounds_on = settings.sounds and len(bot.soundbank) > 0
+        system = conversation.system_prompt(persona, settings.verbosity, compact=compact)
+        if sounds_on:
+            system = f"{system}\n\n{bot.soundbank.menu(compact)}"
         messages, notice = conversation.fit_context(
-            conversation.system_prompt(persona, verbosity, compact=compact),
-            history,
-            turn,
-            backend.context_limit,
-            backend.output_limit,
+            system, history, turn, backend.context_limit, backend.output_limit
         )
         speakers = {speaker}
         speakers.update(match.group(1) for item in history if item["role"] == "user" and (match := _speaker_of(item)))
-        return Prepared(persona, messages, [url for url, _text in tweets], recipient, notice, sorted(speakers))
+        return Prepared(
+            persona, messages, [url for url, _text in tweets], recipient, notice, sorted(speakers), sounds_on
+        )
 
     async def answer(self, ask: Ask) -> list[discord.Message]:
         """Generate and deliver an answer; returns the posted messages (empty on failure)."""
@@ -125,7 +130,8 @@ class Responder:
                 prepared = await self.prepare(ask)
                 completion = await backend.complete(prepared.messages)
             wall = time.perf_counter() - started
-            text = conversation.clean_reply(completion.text, prepared.persona.name, prepared.speakers) or FALLBACK_REPLY
+            raw, tagged = self.bot.soundbank.extract(completion.text) if prepared.sounds_on else (completion.text, None)
+            text = conversation.clean_reply(raw, prepared.persona.name, prepared.speakers) or FALLBACK_REPLY
             sent = await self._deliver(ask, prepared, text, render.generation_summary(completion, wall))
             self._record(ask, prepared, completion, wall, cold, ok=True)
         except Exception as error:
@@ -137,6 +143,10 @@ class Responder:
         await _unreact(ask.reply_to, status, self.bot.user)
         if sent and self.bot.store.channel_settings(ask.channel.id).persona_reactions:
             await _react(sent[0], prepared.persona.reaction)
+        if prepared.sounds_on and sent:
+            sound = self.bot.soundbank.choose(ask.channel.id, tagged, ask.text, text)
+            if sound is not None:
+                await self._play(ask, prepared, sound, sent[-1])
         return sent
 
     async def _deliver(self, ask: Ask, prepared: Prepared, text: str, summary: str) -> list[discord.Message]:
@@ -165,6 +175,7 @@ class Responder:
                     break
                 sent.append(message)
             voice = bool(sent)
+        prepared.voiced = voice
         if not voice:
             chunks, embeds = render.response_embeds(
                 text, persona.name, prepared.source_urls, (summary, prepared.notice), persona.avatar_url
@@ -198,6 +209,22 @@ class Responder:
             )
             parent_id = message.id
         return sent
+
+    async def _play(self, ask: Ask, prepared: Prepared, sound: Sound, answer: discord.Message) -> None:
+        """Follow the answer with its sound: from the persona itself in Voice mode, else a voice message."""
+        try:
+            if prepared.voiced:
+                file = discord.File(sound.path, filename=f"{sound.key}.ogg")
+                try:
+                    await self.bot.webhooks.send(
+                        ask.channel, prepared.persona, "", discord.AllowedMentions.none(), file=file
+                    )
+                finally:
+                    file.close()
+            else:
+                await sounds.play(ask.channel, sound, reference=answer)
+        except (discord.HTTPException, OSError):
+            log.exception("Couldn't play %s in channel %s", sound.key, ask.channel.id)
 
     async def _report_failure(self, ask: Ask) -> None:
         text = "I couldn't reach the model. Check the bot and model server logs, or react 🔁 to try again."

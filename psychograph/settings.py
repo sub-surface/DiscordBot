@@ -26,6 +26,7 @@ class Settings:
     db_path: Path = ROOT / "history.db"
     personas_dir: Path = ROOT / "personas"
     models_file: Path = ROOT / "models.json"
+    sounds_dir: Path = ROOT / "sounds"
 
     temperature: float = 1.0
     top_p: float = 0.95
