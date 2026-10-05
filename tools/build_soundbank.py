@@ -35,10 +35,11 @@ def find_ffmpeg() -> str:
     return found
 
 
-def run(ffmpeg: str, *args: str) -> bytes:
+def run(ffmpeg: str, *args: str, stdin: bytes | None = None) -> bytes:
     flags = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
     result = subprocess.run(
         [ffmpeg, "-hide_banner", "-loglevel", "error", "-threads", "1", *args],
+        input=stdin,
         capture_output=True,
         creationflags=flags,
         check=False,
@@ -48,18 +49,41 @@ def run(ffmpeg: str, *args: str) -> bytes:
     return result.stdout
 
 
+RATE = 48000
+TARGET_RMS_DB = -24.0    # every clip lands here, however short (loudnorm can't measure sub-3s blips)
+MAX_BOOST_DB = 18.0      # don't drag up hiss on very quiet sources
+PEAK_LIMIT = 0.63        # ≈ -4 dBFS, leaving headroom for Opus overshoot
+SHAPING = [
+    "highpass=f=40",                                     # rumble out; keeps the boom's low end
+    "lowpass=f=13000",                                   # tame fizz on old game samples
+    "equalizer=f=3000:t=q:w=1:g=-3",                     # soften the harsh band small speakers exaggerate
+    "acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1",
+]
+LIMITER = f"alimiter=limit={PEAK_LIMIT}:attack=1:release=60:level=false"
+# Part of every clip's build stamp, so changing the processing rebuilds everything.
+PROCESSING_STAMP = f"v3|{','.join(SHAPING)}|{TARGET_RMS_DB}|{LIMITER}"
+
+
+def rms_db(pcm: array.array) -> float:
+    if not pcm:
+        return -120.0
+    rms = math.sqrt(sum(sample * sample for sample in pcm) / len(pcm)) / 32768
+    return 20 * math.log10(max(rms, 1e-6))
+
+
 def encode(ffmpeg: str, source: Path, target: Path, start: float, seconds: float) -> None:
-    filters = ",".join(
-        [
-            "silenceremove=start_periods=1:start_threshold=-45dB",  # meme timing: no dead air up front
-            f"atrim=0:{seconds}",
-            "loudnorm=I=-16:TP=-1.5:LRA=11",
-            "aresample=48000",
-        ]
+    """Two passes: trim and shape to raw PCM, measure it, then apply exact gain, limit and encode."""
+    shaped = run(
+        ffmpeg, "-ss", str(start), "-i", str(source), "-vn", "-ac", "1", "-ar", str(RATE),
+        "-af", ",".join(["silenceremove=start_periods=1:start_threshold=-45dB", f"atrim=0:{seconds}", *SHAPING]),
+        "-f", "s16le", "-",
     )
+    gain = min(MAX_BOOST_DB, TARGET_RMS_DB - rms_db(array.array("h", shaped)))
     run(
-        ffmpeg, "-y", "-ss", str(start), "-i", str(source), "-vn", "-ac", "1", "-af", filters,
+        ffmpeg, "-y", "-f", "s16le", "-ar", str(RATE), "-ac", "1", "-i", "-",
+        "-af", f"volume={gain:.2f}dB,{LIMITER}",
         "-c:a", "libopus", "-b:a", "64k", "-application", "audio", str(target),
+        stdin=shaped,
     )
 
 
@@ -92,7 +116,7 @@ def main() -> None:
         key = source["key"]
         clip = SOUNDS / f"{key}.ogg"
         origin = Path(source["path"])
-        stamp = f"{origin}|{source.get('start', 0)}|{source.get('seconds', MAX_SECONDS)}"
+        stamp = f"{origin}|{source.get('start', 0)}|{source.get('seconds', MAX_SECONDS)}|{PROCESSING_STAMP}"
         old = previous.get(key)
         try:
             if force or not clip.is_file() or not old or old.get("source") != stamp:

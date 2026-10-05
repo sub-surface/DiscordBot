@@ -11,8 +11,8 @@
       ],
       "mood": "dramatic",
       "description": "deep dramatic boom, vine-boom style reveal",
-      "waveform": "fan/wM166Kibc1V/h43Jo0J2fWGLo3VhmElLNUhmiUg9SEpJRC9LIB89Qj07PjUiIig6KjEvJikfLSU7Ix0jJw==",
-      "source": "E:\\The Shop\\MISC\\Samples\\01 - Packs\\NiKUTRAX RESOURCES [sample pack1]\\SFX\\big boom.wav|0|2.5"
+      "waveform": "mMT+sr+G3MGpg3qGq4TDtFKFkHCfsJlvrFtgRWNnoGlMYWVcVUReKSlDWUZOS0gtKTRNOz1CLTUnOixLMSYqMA==",
+      "source": "E:\\The Shop\\MISC\\Samples\\01 - Packs\\NiKUTRAX RESOURCES [sample pack1]\\SFX\\big boom.wav|0|2.5|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "airhorn",
@@ -27,8 +27,8 @@
       ],
       "mood": "hype",
       "description": "MLG airhorn blast",
-      "waveform": "rO/f68THvL3/6MeL6eXcjujo7Zrj8uPO8O7f3cnVt6Cos87M183V3djYz8nV4OHf38nE187Wys6pgmA0EQ8MCw==",
-      "source": "E:\\The Shop\\MISC\\Samples\\01 - Packs\\NiKUTRAX RESOURCES [sample pack1]\\sampled things\\airhorn.wav|0|7.0"
+      "waveform": "3/vm39HSwd//4tqs9+Peqvjp5534+OXN++rj2NbVyMDB4O7c8ubu+PD+8Obw8fLu8eTn+e7x7uvVu5dZHRoVEw==",
+      "source": "E:\\The Shop\\MISC\\Samples\\01 - Packs\\NiKUTRAX RESOURCES [sample pack1]\\sampled things\\airhorn.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "oof",
@@ -40,8 +40,8 @@
       ],
       "mood": "pain",
       "description": "Roblox death oof",
-      "waveform": "ChUYKzlMZHOUsdbx8/H3//Tu+e/iebPF0salh225jnB9hIl+U0lrdm9nYllKQkEyKygdGhYQDgsGBQIBAQAA",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\Roblox\\Died.wav|0|7.0"
+      "waveform": "F0tSgKSptcDb4vH/+fn6+vPu+vHzfMrB7c66nHPVtpSoqcC6g2iaxbuzp56SgH91XlpKRz8yKSAZEQgGAwQB",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\Roblox\\Died.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "anime_gasp",
@@ -54,8 +54,8 @@
       ],
       "mood": "shocked",
       "description": "quick anime gasp",
-      "waveform": "Hbng99Tsx8f/f5y+hbd/g8+Hj3ShlXmKTHg0HBcFDAoPKVtqdHdno3NkU0BGRDY5LjEnIRkeFgoPCwgGBAIC",
-      "source": "E:\\The Shop\\MISC\\Samples\\01 - Packs\\NiKUTRAX RESOURCES [sample pack1]\\sampled things\\Himouto Umaru-chan gasp.wav|0|7.0"
+      "waveform": "Fcn//tfEya/odomxe7OgeduApW++ooinYIxTKh4ICwoQL2mWl5trupp3aFZbWUBDPko2KyQpHw8TEAoHBgQD",
+      "source": "E:\\The Shop\\MISC\\Samples\\01 - Packs\\NiKUTRAX RESOURCES [sample pack1]\\sampled things\\Himouto Umaru-chan gasp.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "crowd_gasp",
@@ -68,8 +68,8 @@
       ],
       "mood": "shocked",
       "description": "whole crowd gasps",
-      "waveform": "G0F8W0NCOGyHk7T+ve3G4cjTp6O3o7GclYWEeWJeVGZJSTtAP05TY1hXSztATUpHNSkpLCcsJh4eFRIPDAcDAQ==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\RUSH 2 (64)\\Crowd Gasp.wav|0|7.0"
+      "waveform": "WpTEmoWSdr7AxNr/xPDF6srgvrraxtG+uLa0o5yojq6JloqIhpOYpZuain2GkpyNfWxzdm96amNbSTwvKhoMBA==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\RUSH 2 (64)\\Crowd Gasp.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "crowd_wow",
@@ -82,8 +82,8 @@
       ],
       "mood": "impressed",
       "description": "crowd going wooow",
-      "waveform": "DRssjKfL9NH37vf/4dy8pNnIp6uksKDVtpSPhXZqWUdMQjY1Pj83Li0qLCEjFxgUFRcVEA0LCwkHBQQDAgIBAQ==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\RUSH 2 (64)\\Crowd Wow.wav|0|7.0"
+      "waveform": "JEpr49r1/tz15vP77eLfzerozszM5sjtyLrTwryspJSkkYh/k5CBendwdlxkQUI4O0I8LCYgHxsWDw4JBwUFBA==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\RUSH 2 (64)\\Crowd Wow.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "crowd_ohhh",
@@ -96,8 +96,8 @@
       ],
       "mood": "awkward",
       "description": "sympathetic crowd ohhh",
-      "waveform": "HzNfm3GXnKR7q6v//cfT3OTe5rTx8NLIpJaCbICJa1Q/QjpIOTIvLSgqIxoZGhoVEw0OCwkIBgMAAAAAAAAAAA==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\SUPER SMASH BROS (64)\\VOICES\\Crowd Ohhh.wav|0|7.0"
+      "waveform": "PWis4Z7U1MWi1Mb/3czg5tjW7b3o4tDQt7evoLy4qJJvgnuOb2djYFVaSzg0NDksJxwfGhURDgYAAAAAAAAAAA==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\SUPER SMASH BROS (64)\\VOICES\\Crowd Ohhh.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "applause",
@@ -111,8 +111,8 @@
       ],
       "mood": "victory",
       "description": "short burst of applause",
-      "waveform": "kY9/WoiepHi04P3Ipq3frbTW567/youartZnhXTjv25dYFBaNTo4oU0uMyKrRCc3GCE2Xm0rRho+FDEaBgMDAg==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\SUPER SMASH BROS (64)\\VOICES\\Crowd Applause.wav|0|7.0"
+      "waveform": "y8G1gbfO4aHd7fHQuM7vxd3v47b/zJu23dt7taDrtX91lXmKUWVX02hIVDTEXTlSKTJMfaI7bideIEQpDQMBAA==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\SUPER SMASH BROS (64)\\VOICES\\Crowd Applause.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "cheer",
@@ -125,8 +125,8 @@
       ],
       "mood": "hype",
       "description": "crowd cheering and whooping",
-      "waveform": "erHO19zY3+np/OT3//fq29HsxMnZx8G5xcrFvqmzu5mdh4ZycG1TVE9ENTEuJR8ZFhENCggFAwEAAAAAAAAAAA==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\SUPER SMASH BROS (64)\\VOICES\\Crowd Cheering.wav|0|7.0"
+      "waveform": "wd3u5fDh8/Lq/+P8+ezv5+X13efm2uHa2+Lq4tTV4dPUvMe4u7uXqpqJcmxmVEc+MigfFxMNCAMAAAAAAAAAAA==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\SUPER SMASH BROS (64)\\VOICES\\Crowd Cheering.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "sad_jingle",
@@ -140,8 +140,8 @@
       ],
       "mood": "sad",
       "description": "descending you-lost jingle, sad-trombone energy",
-      "waveform": "Yv/w3OXo2N/15d358tro59vt8PDZ+fLl28e4vsO5potxWkQ5O0lJSWBTQS4YGBgYGBcYGBgXGBgXGBgXGBdBNQ==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\WARIO LAND II (GBC)\\Wario Land II Sound Effects\\Lost the Battle.WAV|0|7.0"
+      "waveform": "Q+3q6dbV0+Lp1dPv6uDHx8Dr8P/a8+rh2dDN2t3czLmhg2JQV3t+fqCQdFcqKioqKioqKioqKioqKioqKiovDA==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\WARIO LAND II (GBC)\\Wario Land II Sound Effects\\Lost the Battle.WAV|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "failure",
@@ -154,8 +154,8 @@
       ],
       "mood": "failure",
       "description": "announcer: FAILURE",
-      "waveform": "CwoLCQgHCzZ///DV8Mfu3uLEqoxuZGxcV1E4Ni8yMComIR4fKiYoKCUeHhoRDAgCAgICAgIBAQEBAQEBAAAAAA==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\SUPER SMASH BROS (64)\\VOICES\\Announcer - Failure.wav|0|7.0"
+      "waveform": "FhYYExIQGX3E/97B4MbpzN3CrJ2PlqmYl5Jwdm5vcWdbT0VHY1lfZV1JRkQrHRUGBQUGBgUEBAQDAwMCAgIBAQ==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\SUPER SMASH BROS (64)\\VOICES\\Announcer - Failure.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "game_over",
@@ -168,8 +168,8 @@
       ],
       "mood": "failure",
       "description": "announcer: GAME OVER",
-      "waveform": "GB0gNDhzamJueKtuZrrM37hYQjgyOBwPEhB84f/mu6CVwXFgTzguMi8oLR0bEwwKCgcGBAMCAgEBAQEAAAAAAA==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\SUPER SMASH BROS (64)\\VOICES\\Announcer - Game Over.wav|0|7.0"
+      "waveform": "RFJWgHm1l5mgrdWNo+jk+tmEg4B7iUkqNi+///3czbLB1ZSblW1zfnNldU9OOCMdHxcSCwgHBgUEAwMCAgICAQ==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\SUPER SMASH BROS (64)\\VOICES\\Announcer - Game Over.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "buzzer",
@@ -182,8 +182,8 @@
       ],
       "mood": "failure",
       "description": "game-show wrong-answer buzzer",
-      "waveform": "3uTQz51kQCm7/+bUxc3KvszMv8/KvcvJwcSRhI+cmqWooaitvrzB07zHw7zAzs3Uq7PLvr7RusXDxcnKzs7S2A==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\WARIO LAND II (GBC)\\Wario Land II Sound Effects\\Buzzer.WAV|0|1.5"
+      "waveform": "5uDRxSIBAACs3N3T1tvW1tzW0N7b0Nfdz7tym7HMuMvPxcjY4cXb6szl4MTu4ur4ytfy3vP13v/3+vnp3fXw8w==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\WARIO LAND II (GBC)\\Wario Land II Sound Effects\\Buzzer.WAV|0|1.5|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "wrong",
@@ -195,8 +195,8 @@
       ],
       "mood": "failure",
       "description": "Mario wrong-answer blip",
-      "waveform": "/9PRlaEiFQ/13MOJotqVqd+Wr9uNsMqMwZuh0pOj0ZCh0YuezGYaEA0NDAoJBwYEBAMCAgIBAQAAAAAAAAAA",
-      "source": "E:\\The Shop\\MISC\\Samples\\01 - Packs\\NiKUTRAX RESOURCES [sample pack1]\\retroish console sounds\\SNES\\super mario world\\wrong.wav|0|7.0"
+      "waveform": "/7WfapAfFQ/Jt5hojbJ4lbR3p4aMsnaatXeZt3eZuHiWt3Saom9BDQwTDQ8NDAoICAcGBAUEAgEBAQEBAQEA",
+      "source": "E:\\The Shop\\MISC\\Samples\\01 - Packs\\NiKUTRAX RESOURCES [sample pack1]\\retroish console sounds\\SNES\\super mario world\\wrong.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "correct",
@@ -209,8 +209,8 @@
       ],
       "mood": "success",
       "description": "Mario correct-answer chime",
-      "waveform": "a/+cY1dQUU0LDRJe445VTFJSSUNDPTs6Nzc1MjIwLSspJiUlJCMiISAfHh0bGhoZGBcVFRQTERAPCgICAQEBAQ==",
-      "source": "E:\\The Shop\\MISC\\Samples\\01 - Packs\\NiKUTRAX RESOURCES [sample pack1]\\retroish console sounds\\SNES\\super mario world\\correct.wav|0|7.0"
+      "waveform": "aP+TX1pWW18SEhxz+5tkWV9mX15gWlZYVFNSTUtJRUM/Ojk4ODU0MjEvLiwqKScmJCIhIB4cGxkYEQMDAgICAg==",
+      "source": "E:\\The Shop\\MISC\\Samples\\01 - Packs\\NiKUTRAX RESOURCES [sample pack1]\\retroish console sounds\\SNES\\super mario world\\correct.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "access_denied",
@@ -223,8 +223,8 @@
       ],
       "mood": "failure",
       "description": "computer voice: access denied",
-      "waveform": "NA4RAQAwCQUoAQAjBjAAADkWAhgPAAAAAAAAAAAAAAAAAAAALPvvnRAEuP/fKgUEAwIBAQEBAAAAAAAAAAAAAA==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\Max Payne\\Sound Effects - Miscellaneous\\security_access_denied.wav|0|7.0"
+      "waveform": "ZikyBQBmFxI5AwBLEkoBAHAwCDYvAQAAAAAAAAAAAAAAAAAASP/fmRcMwe3UOAoMDQgGBQQDAgEAAAAAAAAAAA==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\Max Payne\\Sound Effects - Miscellaneous\\security_access_denied.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "bad_luck",
@@ -236,8 +236,8 @@
       ],
       "mood": "failure",
       "description": "announcer: bad luck",
-      "waveform": "GCAjGx8fNK65xubY3cmqp8jD19Dd2spKLDpSYGhQZp7/9cmjs7DIs7auqZN9WUU1KRoJAQAAHBsNCQcDBAMBAA==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX\\NINTENDO\\WIPEOUT 64\\Voices\\Bad Luck.wav|0|7.0"
+      "waveform": "QlteUFhYgdmkmreur5uSmqG8r7y8tsBJLUp3lKSPncT/1pqYlJKko6GcnoGLZFZMPTcVAgEBSEolFhUJCgoDAA==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX\\NINTENDO\\WIPEOUT 64\\Voices\\Bad Luck.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "congratulations",
@@ -249,8 +249,8 @@
       ],
       "mood": "victory",
       "description": "announcer: congratulations",
-      "waveform": "R0De2beMpaF0NUXT5Nbo0L7s8eHmmzoVBxujzc/D4PD/zsi8y6q78sg0Fx4jKyV9s4p2ZVhQTUtJRT0bAgICAg==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX\\NINTENDO\\WIPEOUT 64\\Voices\\Congratulations.wav|0|7.0"
+      "waveform": "gYXqxbqlu8KUVH/v0sPIsajEtbjAmEUiCy7l5NnW6vP4w8S5wK7U/9lCHSg0OTu/yJ2OmZOTl5GTloVOCAUGBw==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX\\NINTENDO\\WIPEOUT 64\\Voices\\Congratulations.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "nice_one",
@@ -262,8 +262,8 @@
       ],
       "mood": "smug",
       "description": "cheeky voice: nice one",
-      "waveform": "LEdVXXGD+PX/27K3wamZfnNRJSkoLDIcHyMbJSguND5ZVk1PS0RGOCYgGxUPFhAMEBIKDw0LDQoKCAkHBAcGCQ==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX\\SEGA\\A BUGS LIFE (GENESIS)\\Nice One.wav|0|7.0"
+      "waveform": "UpuXrLrB/9XLs5iirJuRiolvPE9TZ3hFTWRNaWlyeYGakYGBhnmGZ09PQDksNzYhMCwmKikfHiMcFxkZDRATFQ==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX\\SEGA\\A BUGS LIFE (GENESIS)\\Nice One.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "oh_yeah",
@@ -275,8 +275,8 @@
       ],
       "mood": "hype",
       "description": "cheerful voice: oh yeah",
-      "waveform": "JZ7k4K9jZmlsbGNsiYh2f048S0hENT1ESDkwKi03SmSEmZmNrP/2wYdrbFhXUEZNeoFiTDxcY0xXSVpgQiALBA==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX\\SEGA\\A BUGS LIFE (GENESIS)\\Oh Yeah.wav|0|7.0"
+      "waveform": "bt7o0bdwfI+bnpigtbecpW1hiZGAcoiSlIN6dIuZqL/J2b6uw//iwpSDioWBi39/wqR/dl2Ohm53c4R6bjsWCg==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX\\SEGA\\A BUGS LIFE (GENESIS)\\Oh Yeah.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "yeehaw",
@@ -289,8 +289,8 @@
       ],
       "mood": "hype",
       "description": "cowboy yeehaw",
-      "waveform": "NUdUc450amdoamppb3yBgKeaUigQGx0ZHy0gGhopHCN1yLn/yNHAtM27tMvM3M3xyeH2xNexjXRRRTIgEwoBAA==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX\\SEGA\\MEAN BEAN MACHINE (GENESIS)\\yeehah_1.wav|0|7.0"
+      "waveform": "l6WyxsrAoaCnt6WoqqWqqsmyiz4dM0RFVX5YSFJ6Vmft7Lj+587Dy9rNvNHZ8Mv0ztv/3NzMuKV4f19MNh8HAQ==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX\\SEGA\\MEAN BEAN MACHINE (GENESIS)\\yeehah_1.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "yippee",
@@ -303,8 +303,8 @@
       ],
       "mood": "wholesome",
       "description": "happy little yippee",
-      "waveform": "PH/p/8nQDAwICAYETJSRiI6m4qazlpubjGpzal1aW0lIQFBARUA2NS0vKy8kIyUgIiIjIRsVEwwJBQQCAgEBAQ==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX\\SEGA\\MEAN BEAN MACHINE (GENESIS)\\yippie_1.wav|0|7.0"
+      "waveform": "jsz/4bW7Ig4KDAkGYcqto6Om0o+fjqGonIiKiISGh3VzcY91d35scWducXBcVl9bXFxXUVQ6OSMdDwsGAwEAAA==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX\\SEGA\\MEAN BEAN MACHINE (GENESIS)\\yippie_1.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "coin",
@@ -316,8 +316,8 @@
       ],
       "mood": "success",
       "description": "Mario coin",
-      "waveform": "/6BgOSQYHRcSCARczIZVNCEUFxkgIRoUDw8QEBEQEREREA8QERAQDw8ODQ0NDAwMCwsKCgkJCQkICAcHBgYCAA==",
-      "source": "E:\\The Shop\\MISC\\Samples\\01 - Packs\\NiKUTRAX RESOURCES [sample pack1]\\retroish console sounds\\SNES\\super mario world\\coin.wav|0|7.0"
+      "waveform": "/6diPSkcIh8aDgZH4ZZlRywaHiIsMSgeGBcYGRoYGhoaGRcYGRkXFxYWFRQTExISEREQEA8ODg0NDAwLCgoFAQ==",
+      "source": "E:\\The Shop\\MISC\\Samples\\01 - Packs\\NiKUTRAX RESOURCES [sample pack1]\\retroish console sounds\\SNES\\super mario world\\coin.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "one_up",
@@ -330,8 +330,8 @@
       ],
       "mood": "success",
       "description": "Mario 1-up",
-      "waveform": "/4AwHhYWDgoz8VgwFhAWEQUlqGI3HREVEAhMvFUtFhQYEQg8s2A2GAsUDQRYklkwHh4bGBkZFRACAwICAQEBAQ==",
-      "source": "E:\\The Shop\\MISC\\Samples\\01 - Packs\\NiKUTRAX RESOURCES [sample pack1]\\retroish console sounds\\SNES\\super mario world\\1up.wav|0|7.0"
+      "waveform": "/4MxHxgbFBAX9FgxGhUbGwcLuW9DJhcgGw5Z0VY0GxkiGw0zymlCIA8cGAllsmtBKywqKCssJyIEBQQEAgECAg==",
+      "source": "E:\\The Shop\\MISC\\Samples\\01 - Packs\\NiKUTRAX RESOURCES [sample pack1]\\retroish console sounds\\SNES\\super mario world\\1up.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "secret_found",
@@ -344,8 +344,8 @@
       ],
       "mood": "success",
       "description": "secret-found jingle",
-      "waveform": "/qKHw+Lrl+Wwk6ClsZOdjpifhp+DnYmXjJaehp2FnYSgjJ6aiJaHm42XnYWPdJeOgnEkITGFkYh0Mh8tPyYBAA==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\WARIO LAND III (GBC)\\Warioland Super Mario Land 3\\Door Secret.wav|0|7.0"
+      "waveform": "/66h7N/kod6sqNvF0LLCxcbKydDA0MnJ0cLktduu27/TyMndtNW708LJz8fOxdTIz8o9RWm4sNDQX0FkgUwAAA==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\WARIO LAND III (GBC)\\Warioland Super Mario Land 3\\Door Secret.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "level_up",
@@ -359,8 +359,8 @@
       ],
       "mood": "success",
       "description": "Minecraft level-up chime",
-      "waveform": "/rWQdoFrXldQS0FMaFJBOS4sLSskHhwZGBMNDAoIBgUFBAMDAgEBAQEBAQEAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\Minecraft\\Miscellaneous - Minecraft 1.15\\random\\levelup.ogg|0|7.0"
+      "waveform": "3NHp6v+8vbu1tKWeiHZraWBhaGZYT0w+PTElIxsWEQ8NCwkKBgQDAwMDAgIBAQAAAAAAAAAAAAAAAAAAAAAAAA==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\Minecraft\\Miscellaneous - Minecraft 1.15\\random\\levelup.ogg|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "victory",
@@ -373,8 +373,8 @@
       ],
       "mood": "victory",
       "description": "little victory fanfare",
-      "waveform": "SI3l6bdaJ0eWxPXk5Nzk6f75/9/Du8XZ1cO8ta2hkICZrcTBqaefmqOkrKeWioV7eYuJhINyamFoW19qanxhQA==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\Roblox\\victory.wav|0|7.0"
+      "waveform": "g8T+37toOmnZ8OrY0eDn7f/93N/K0+Tz1t3X3ePMwLzZ7fDi1NPY4t3p7N+6xMS+y9bU0si7raeyn7e8uM6lcw==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\Roblox\\victory.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "cha_ching",
@@ -388,8 +388,8 @@
       ],
       "mood": "smug",
       "description": "cash register",
-      "waveform": "KAkFER8hIzUvJzMuOiwvMjkzQztBPzcrLyorJiNYaZb/p4PZubyFh4FzYFpsOCodDwsHBwIDAwIBAAAAAAAAAA==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\Max Payne\\Sound Effects - Miscellaneous\\CashRegister_drawer_open.wav|0|7.0"
+      "waveform": "bBoOL1VbZH52Yn19iHB7eZN2k4mLi3pqemdzZV1vgZ3/tHHZsMiCpZu3jY65Z2RBKyAUFQoICwcCAwEAAAAAAA==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\Max Payne\\Sound Effects - Miscellaneous\\CashRegister_drawer_open.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "falling",
@@ -402,8 +402,8 @@
       ],
       "mood": "chaotic",
       "description": "cartoon falling whistle",
-      "waveform": "FTZ02P/18vn8+fn29vn4+Pv4+PTz8O/r5ubj3tfUzce9tayimZWMhH93cGxmYFxWUk5KRkE5MSoiHBcRDAgEAQ==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\LOONEY TUNES 2PACK (GBA)\\Looney Tunes Double Pack SFX\\Descending Fall Whistle.wav|0|7.0"
+      "waveform": "SJbI9vz29vj69/b1+fr8/P/7/Pj7+/z59vj39fPx7evq5ePe1djS0MrFxcG+vLi2sq+pqKWZkYh8b2FNOicVBg==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\LOONEY TUNES 2PACK (GBA)\\Looney Tunes Double Pack SFX\\Descending Fall Whistle.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "yell",
@@ -415,8 +415,8 @@
       ],
       "mood": "chaotic",
       "description": "cartoon coyote yell",
-      "waveform": "Y3mSqbKqqbe+usTNzsHA4tfh8//5w8KvoKKz1ci6v7Oz2NPQ2tqyfHFdfHp3dGRURD40QTo/QDgvKBgSDwkEAg==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\LOONEY TUNES 2PACK (GBA)\\Looney Tunes Double Pack SFX\\Wile E Yell.wav|0|7.0"
+      "waveform": "tLK2ysLDyNLf0dbi3tjd4uHl+P701t/X2NLm6+DU2dnO9PXw+PrZpq2bxLS6r6eQhod+l42cmI6EfVZHPSUUCA==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\LOONEY TUNES 2PACK (GBA)\\Looney Tunes Double Pack SFX\\Wile E Yell.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "boing",
@@ -429,8 +429,8 @@
       ],
       "mood": "awkward",
       "description": "cartoon spring twang",
-      "waveform": "zeLqrPzd2Obk+8LCwLT/neST2Mii5qLcqsGkeMSHpXN6ckmBOWQ+dE1BTitcLD8dMCAiNR0kGyAXFBAKCgQCAw==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\LOONEY TUNES 2PACK (GBA)\\Looney Tunes Double Pack SFX\\Twang.wav|0|7.0"
+      "waveform": "+d7grvHg3uz279rJzdf/svC08N7Q7sf5y+C1qdqyx52fpXatYKR2wX14m2euYY1LbVRahFVoV2ZQQjckIRAICQ==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\LOONEY TUNES 2PACK (GBA)\\Looney Tunes Double Pack SFX\\Twang.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "beep_beep",
@@ -443,8 +443,8 @@
       ],
       "mood": "chaotic",
       "description": "Road Runner beep beep",
-      "waveform": "XZTJ7/ft6vHn3NXY0tm4imAjBQYJCQcIBwUDAwMhQHmv7P/p0tba0tfWwLe9diIUEwgHBgMEBgMDBgICAgEBAA==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\LOONEY TUNES 2PACK (GBA)\\Looney Tunes Double Pack SFX\\BeepBeep.wav|0|7.0"
+      "waveform": "uODt9djO09fOysvPz9e3kns2CggTExIVEw4ICQdbj87l/+LOvsrGxMvJwbDKiS0cIBAODgkLEQkGEQcFBQQDAQ==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\LOONEY TUNES 2PACK (GBA)\\Looney Tunes Double Pack SFX\\BeepBeep.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "kaboom",
@@ -458,8 +458,8 @@
       ],
       "mood": "chaotic",
       "description": "cartoon dynamite explosion",
-      "waveform": "8uLe2//jttvC0dLi4tvk6Mq97eDl+r/R5u3q5NvzvtTp1tXWtLWYiZuWnISIfG5XZlxaVjg9OScxKCMaEAoGAg==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\LOONEY TUNES 2PACK (GBA)\\Looney Tunes Double Pack SFX\\Dynamite Explodes.wav|0|7.0"
+      "waveform": "/87F0vDOrs64zsTVxsnP0bm73M3Z2bnG0tXV2NbdssrQw9HGt7mpnruxtaKtppqHn5iakXKCfF53cGRWNSQYCA==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\LOONEY TUNES 2PACK (GBA)\\Looney Tunes Double Pack SFX\\Dynamite Explodes.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "bonk",
@@ -472,8 +472,8 @@
       ],
       "mood": "chaotic",
       "description": "home-run bat bonk",
-      "waveform": "sPf8+Pn/sty0p5Vvg4NTWkRIQT4yNjsrJikgHiEXFRgSEBANCwoKBwUFBAMDAgEBAQAAAAAAAAAAAAAAAAAAAA==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\SUPER SMASH BROS (64)\\SFX\\Home Run Bat Hit.wav|0|7.0"
+      "waveform": "4/X67OX/z+/Fz7+jwb6NpomMhYBud3tkU11HQ0w0MDUpJSEeGRYWDwwMCQYGBAMDAgIBAQEBAAAAAAAAAAAAAA==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\NINTENDO\\SUPER SMASH BROS (64)\\SFX\\Home Run Bat Hit.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "slap",
@@ -486,8 +486,8 @@
       ],
       "mood": "chaotic",
       "description": "silly cartoon slap",
-      "waveform": "eqa2w3mYzqeSrqJ8kMR+hP+PdaKaRjxBU0swTzsuMCcdJxsWEQ0PEAgECgMAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX\\SEGA\\THE TICK (GENESIS)\\Slap-Silly.wav|0|7.0"
+      "waveform": "i4nm11CluYiRnH2FmLR1fP+Tbb2YaTZKSVVCT1E6Mi8fJikXFhIRCw8FCQgCAQAAAAAAAAAAAAAAAAAAAAAAAA==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX\\SEGA\\THE TICK (GENESIS)\\Slap-Silly.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "evil_laugh",
@@ -501,8 +501,8 @@
       ],
       "mood": "smug",
       "description": "evil emperor cackle",
-      "waveform": "X0oIAgIBBUh/axELCAcHKazXehAHBQQERc+70x8HBAMDIlmr/0cMBwcQOUdsVD5BDgQCAQIBFC08QisiFwgBAA==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\LEGO Star Wars Character Voices\\CHR_EMP_LAUGH_02.WAV|0|7.0"
+      "waveform": "qnISBgQCDpOpjx4YFBIWYt/RhRINDAsKivLAyx8LCAYHVaLS/04QDQ4vhpiudmt4IAoGAwUDNXGCe1lLORYDAA==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\LEGO Star Wars Character Voices\\CHR_EMP_LAUGH_02.WAV|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "giggle",
@@ -515,8 +515,8 @@
       ],
       "mood": "wholesome",
       "description": "short giggle",
-      "waveform": "CAYGBAQICwkNBgkJCQkGSGNHMhkRDQgICQaNhI6Cp7mRooJ/dzQoDxANCgcFA2CruNX/6+PYvaFJGRoODAkGAg==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\XBOX\\ROLLERCOASTER TYCOON (XBOX)\\RCT SFX\\laugh1.wav|0|7.0"
+      "waveform": "GRUXDQ4ZHRsoExceGBoRoaF3WjYlIBgYGBjlvMGkw82mxaOqrldFISEeGRERCZ3gydn/5uHhxrdjISkWFxIPBw==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\XBOX\\ROLLERCOASTER TYCOON (XBOX)\\RCT SFX\\laugh1.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "fart",
@@ -529,8 +529,8 @@
       ],
       "mood": "chaotic",
       "description": "Jabba fart",
-      "waveform": "B0uCpH3/iNWwzM/p2LPM3Lek0PPJl3+vZZBUcmVZVjw9MyEeGxgQExUVDhYXExEaEhYNEQkFBwQDAgIAAAAAAA==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\LEGO Star Wars Character Voices\\CHR_JABBA_FART_03.WAV|0|7.0"
+      "waveform": "ElDUyJ3/d+y22OHe2rfj58DC4/XTlZrUhcF3kYyNi15nXEU+QjswOENDKjZPQDpOO0AwOSMUFxEKCgcCAAAAAA==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\LEGO Star Wars Character Voices\\CHR_JABBA_FART_03.WAV|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "uh_oh",
@@ -543,8 +543,8 @@
       ],
       "mood": "awkward",
       "description": "droid: uh oh",
-      "waveform": "k8Ph69D/2bOGbkktCxQWCQkJBQYQNitjYGp0b2tRfnhvdoFRiZqZnZ+SUY6De3loU0VcWFhNQy4yKCEUDg4FBA==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\LEGO Star Wars Character Voices\\DRD_UHOH.WAV|0|7.0"
+      "waveform": "/u3lpfPa666IeE0/HSIpFBYYERIsbpPAsK2nnVmkrJifoKVruLq3vblnq7CdqKCRVpCTkpeEd1N1WFI4Ki0UFw==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\LEGO Star Wars Character Voices\\DRD_UHOH.WAV|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "scream",
@@ -557,8 +557,8 @@
       ],
       "mood": "chaotic",
       "description": "rollercoaster scream",
-      "waveform": "DBcrN0BcXWhlbnWWgmxhmJ+Xcn6aipWQgG+RjZ+mr8Tl+Nf/6uX01e/v6OfYwtfo3+3Wzc3gw8S+yrrr9Oe26w==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\XBOX\\ROLLERCOASTER TYCOON (XBOX)\\RCT SFX\\scream1.wav|0|2.2"
+      "waveform": "I0F0i5S1t761usnOx7qz397VsMvRv9PJw7nWztji3OP4/Ovx8/D95P3w6PPj4ev07v748Ozs2uXa6N7u8+vR+Q==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\RAREVGSFX 1+2\\RAREVGSFX 2\\XBOX\\ROLLERCOASTER TYCOON (XBOX)\\RCT SFX\\scream1.wav|0|2.2|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "meow",
@@ -571,8 +571,8 @@
       ],
       "mood": "wholesome",
       "description": "cat meow",
-      "waveform": "NTUcERUaSWCp/+xyOkElHjk2ODQ1Jh8bGxwYFhkYHyAZHSIeHiQcFRoaFg0WFRoYGhwVCQcGAwAAAAAAAAAAAA==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\Minecraft\\Entities - Minecraft 1.15\\mob\\cat\\meow1.ogg|0|7.0"
+      "waveform": "U2M1ICQpfZ7i/916Qk05MFhmY2drTkI0OTszLjIzO0QyOkY+PUk9KTQ2Lh0qMDI1NT0wFRANCAIBAQEAAAAAAA==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\Minecraft\\Entities - Minecraft 1.15\\mob\\cat\\meow1.ogg|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "pingas",
@@ -584,8 +584,8 @@
       ],
       "mood": "chaotic",
       "description": "PINGAS",
-      "waveform": "AggOGFGpp1UgHkfS8ph8bVnt/4osLDx5iXx7Xy9fkKi4hXR6dW4mFhkSDE5gR2VsUiEODwUBAAAAAAAAAAAAAA==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\Ultrakill - Gabriel\\gab2nd_Pingas.wav|0|7.0"
+      "waveform": "BhIdOL7q3pFSVJL33Ma4uKX/86FOYoTOxM3MrVOz3t7TtMK7tLdaPkUwJqO7n8e9mVQrLBADAAAAAAAAAAAAAA==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\Ultrakill - Gabriel\\gab2nd_Pingas.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "brb",
@@ -598,8 +598,8 @@
       ],
       "mood": "awkward",
       "description": "we'll-be-right-back meme sting",
-      "waveform": "0MCykI+Ej3xnaG1eTVGf1n6ajpRxaCoiUJyZfp92dDw1Lv+nl4mJlmUpK5H7pJtrbWVALCq098qXk2xhXUQuAA==",
-      "source": "E:\\The Shop\\MISC\\Samples\\01 - Packs\\NiKUTRAX RESOURCES [sample pack1]\\sampled things\\We'll be right back Sound Effect meme.mp3|0|7.0"
+      "waveform": "xLGxkY6DknpqaGxeTlGe0XqZjpNzaCwiRpyYe5p6eD01L/OcjoWBkGooLGn/npdpamRBLCqu7cOYjmhjXEQuAA==",
+      "source": "E:\\The Shop\\MISC\\Samples\\01 - Packs\\NiKUTRAX RESOURCES [sample pack1]\\sampled things\\We'll be right back Sound Effect meme.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "pretty_good",
@@ -611,8 +611,8 @@
       ],
       "mood": "smug",
       "description": "hey, that's pretty good",
-      "waveform": "QLKfhYddUGN4hoOogVpTalFXNSopIyUlGBMNCwoJBg9NkjsjIBoiTf+XRopYMzGwQ5ymeHCKzV5gdDU7LCknGA==",
-      "source": "E:\\The Shop\\MISC\\Samples\\01 - Packs\\NiKUTRAX RESOURCES [sample pack1]\\sampled things\\Hey that's pretty good sound effect.mp3|0|7.0"
+      "waveform": "h9u6ssGPlL7EzsDJoo+Ps5Sgc2hxYGNjRjYmHhwXDy2XxlpDQUBemP+KWryHbXXsYNzKrLXF8XebrmN/b2tuQw==",
+      "source": "E:\\The Shop\\MISC\\Samples\\01 - Packs\\NiKUTRAX RESOURCES [sample pack1]\\sampled things\\Hey that's pretty good sound effect.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "very_cool",
@@ -624,8 +624,8 @@
       ],
       "mood": "smug",
       "description": "deadpan: very cool",
-      "waveform": "j49+7ezu5NLn9+T16piHVIWHcVfX++r/57fZuMNkcjNENDc4JycrJiQiJSYuJyUlIyEgHiAdGyEdGx4bGB0eHA==",
-      "source": "E:\\The Shop\\MISC\\Samples\\01 - Packs\\NiKUTRAX RESOURCES [sample pack1]\\sampled things\\very cool.wav|0|7.0"
+      "waveform": "59jH8+rz4uff89r46662g8u7sXve/ev/7cfludp4llF3bnl/amlwZGFZaWJ0Z2VeX1dWTlNRTlpPS1JLRE9TSg==",
+      "source": "E:\\The Shop\\MISC\\Samples\\01 - Packs\\NiKUTRAX RESOURCES [sample pack1]\\sampled things\\very cool.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "thank_you_mario",
@@ -638,8 +638,8 @@
       ],
       "mood": "wholesome",
       "description": "Peach: thank you, Mario",
-      "waveform": "HRwsTX+dgaXF7f75rWwiFRgTD3Whydu4tLCompCDfnNxXldRQkdPUVVpZmdbXFpeXFVAHwwNGxoLDhAdGRwNBg==",
-      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\Super Mario 64 - Peach\\0A - 0013 Thank you, Mario.wav|0|7.0"
+      "waveform": "DwksTri6mdPt/vv/t3w4CxcWEqvm8ebf1d/V1cCzs6CliX92ZGdweYCPnY+KhomLjYFfMxEKChUKCAYICAUBAw==",
+      "source": "E:\\The Shop\\MISC\\Samples\\02 - Games & Media\\Super Mario 64 - Peach\\0A - 0013 Thank you, Mario.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
     {
       "key": "beware_i_live",
@@ -652,8 +652,8 @@
       ],
       "mood": "dramatic",
       "description": "robot voice: beware, I live",
-      "waveform": "1v/Bqenm1cvGyLykpKCPfoqBlZBpZl9JPU48VGJ+gW+AbWV8X22EueC3rt214+WTbJB6c2JNOzQpKEJ/MQoJAg==",
-      "source": "E:\\The Shop\\MISC\\Samples\\01 - Packs\\NiKUTRAX RESOURCES [sample pack1]\\retroish console sounds\\Atari\\Sinistar\\beware_i.wav|0|7.0"
+      "waveform": "6+vSyv/q1N/K1ce1xcWmpbujvKyVnZmGgpdyZayvtaG0m5+2kq+4vtCwuOTA7+Ccj8uln4iBb3JrbpauTQMBAg==",
+      "source": "E:\\The Shop\\MISC\\Samples\\01 - Packs\\NiKUTRAX RESOURCES [sample pack1]\\retroish console sounds\\Atari\\Sinistar\\beware_i.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     }
   ]
 }

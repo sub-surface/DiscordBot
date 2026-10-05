@@ -45,7 +45,7 @@ The bank is built from `sounds/sources.json` (each clip's source file, keywords,
 python tools/build_soundbank.py          # converts new or changed clips; --force rebuilds all
 ```
 
-Clips are trimmed of leading silence, capped at 7 seconds, loudness-matched and encoded as Ogg Opus, with the duration and waveform written to `sounds/sounds.json`. The audio files are git-ignored because they come from a local sample library; restart the bot after building.
+Clips are trimmed of leading silence, capped at 7 seconds, EQ'd (40 Hz high-pass, 13 kHz low-pass, a gentle 3 kHz dip), compressed, levelled to -24 dB RMS in two passes (so even sub-second blips match), peak-limited to about -4 dBFS and encoded as Ogg Opus, with the duration and waveform written to `sounds/sounds.json`. The audio files are git-ignored because they come from a local sample library; restart the bot after building.
 
 ### Chess
 
