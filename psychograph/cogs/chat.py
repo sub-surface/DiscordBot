@@ -121,20 +121,22 @@ class ChatCog(commands.Cog):
             member = payload.member
             can_moderate = bool(member and channel.permissions_for(member).manage_messages)
             if is_requester or can_moderate:
-                await self.bot.responder.delete_response(channel, answer["reply_to"])
+                await self.bot.responder.delete_answer(channel, payload.message_id)
             return
         # Regenerating replays the request message, so only answers to the requester's own message qualify.
         if is_requester and request is not None and request["author_id"] == payload.user_id:
-            await self._regenerate(channel, answer["reply_to"], payload.user_id)
+            await self._regenerate(channel, answer["reply_to"], payload.message_id, payload.user_id)
 
-    async def _regenerate(self, channel: discord.abc.Messageable, request_id: int, user_id: int) -> None:
+    async def _regenerate(
+        self, channel: discord.abc.Messageable, request_id: int, answer_message_id: int, user_id: int
+    ) -> None:
         try:
             original = await channel.fetch_message(request_id)
         except discord.HTTPException:
             return  # /ask answers have no message to re-run; ask again instead
         if original.author.id != user_id:
             return
-        await self.bot.responder.delete_response(channel, request_id)
+        await self.bot.responder.delete_answer(channel, answer_message_id)  # this answer only, not others'
         await self.handle(original)
 
     # ── /ask and the message command ────────────────────────────────
@@ -187,7 +189,8 @@ class ChatCog(commands.Cog):
                 parent_id=message.reference.message_id if message.reference else None,
                 reply_to=message,
                 embeds=message.embeds,
-                mentions=message.mentions,
+                # No pings: these are someone else's words, so a "tell @x" in them mustn't ping x.
+                mentions=(),
             )
         )
 

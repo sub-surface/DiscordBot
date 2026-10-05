@@ -194,6 +194,7 @@ class Responder:
                 chunk,
                 reply_to=ask.record_id,
                 requester_id=ask.requester_id,
+                answer_id=sent[0].id,
             )
             parent_id = message.id
         return sent
@@ -244,9 +245,9 @@ class Responder:
         except Exception:
             log.exception("Couldn't record generation stats")
 
-    async def delete_response(self, channel: discord.abc.Messageable, request_id: int) -> int:
-        """Delete every message answering `request_id`, in Discord and in history. Returns how many."""
-        ids = self.bot.store.response_ids(request_id)
+    async def delete_answer(self, channel: discord.abc.Messageable, message_id: int) -> int:
+        """Delete the one answer containing `message_id` (all its chunks), in Discord and history."""
+        ids = self.bot.store.answer_ids(message_id)
         for message_id in ids:
             if await self.bot.webhooks.delete(channel, message_id):
                 continue

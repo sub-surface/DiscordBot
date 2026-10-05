@@ -68,9 +68,13 @@ class Store:
                     ts DATETIME DEFAULT CURRENT_TIMESTAMP
                 )"""
             )
-            # For assistant rows: reply_to is the user message answered, requester_id who asked for
-            # the answer (they may regenerate/delete it; not always that message's author).
-            self._ensure_columns("messages", {"author_id": "INTEGER", "reply_to": "INTEGER", "requester_id": "INTEGER"})
+            # For assistant rows: reply_to is the user message answered, requester_id who asked for the
+            # answer (not always that message's author), and answer_id the answer's first message. One
+            # request can have several answers (e.g. via "Ask persona"); controls act on just one.
+            self._ensure_columns(
+                "messages",
+                {"author_id": "INTEGER", "reply_to": "INTEGER", "requester_id": "INTEGER", "answer_id": "INTEGER"},
+            )
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_channel ON messages(channel_id, discord_msg_id)")
             self._conn.execute("CREATE TABLE IF NOT EXISTS channel_settings (channel_id INTEGER PRIMARY KEY)")
             self._ensure_columns("channel_settings", SETTING_COLUMNS)
@@ -146,30 +150,45 @@ class Store:
         author_id: int | None = None,
         reply_to: int | None = None,
         requester_id: int | None = None,
+        answer_id: int | None = None,
     ) -> None:
         with self._conn:
             self._conn.execute(
-                "INSERT OR REPLACE INTO messages "
-                "(discord_msg_id, parent_msg_id, channel_id, author_id, role, content, reply_to, requester_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (discord_msg_id, parent_msg_id, channel_id, author_id, role, content, reply_to, requester_id),
+                "INSERT OR REPLACE INTO messages (discord_msg_id, parent_msg_id, channel_id, author_id, role, "
+                "content, reply_to, requester_id, answer_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (discord_msg_id, parent_msg_id, channel_id, author_id, role, content, reply_to, requester_id, answer_id),
             )
 
     def message(self, discord_msg_id: int) -> dict | None:
         row = self._conn.execute(
-            "SELECT discord_msg_id, parent_msg_id, channel_id, author_id, role, content, reply_to, requester_id "
-            "FROM messages WHERE discord_msg_id = ?",
+            "SELECT discord_msg_id, parent_msg_id, channel_id, author_id, role, content, reply_to, requester_id, "
+            "answer_id FROM messages WHERE discord_msg_id = ?",
             (discord_msg_id,),
         ).fetchone()
         return dict(row) if row else None
 
     def response_ids(self, request_msg_id: int) -> list[int]:
-        """The bot messages (all chunks) that answer one user message, oldest first."""
+        """Every bot message (all answers, all chunks) answering one user message, oldest first."""
         rows = self._conn.execute(
             "SELECT discord_msg_id FROM messages WHERE reply_to = ? AND role = 'assistant' ORDER BY discord_msg_id",
             (request_msg_id,),
         ).fetchall()
         return [row["discord_msg_id"] for row in rows]
+
+    def answer_ids(self, discord_msg_id: int) -> list[int]:
+        """All chunks of the one answer containing `discord_msg_id`, oldest first."""
+        row = self.message(discord_msg_id)
+        if row is None or row["role"] != "assistant":
+            return []
+        if row["answer_id"] is not None:
+            condition, params = "answer_id = ?", (row["answer_id"],)
+        else:  # rows from before answers were grouped: same request and same requester
+            condition, params = "reply_to = ? AND requester_id IS ?", (row["reply_to"], row["requester_id"])
+        rows = self._conn.execute(
+            f"SELECT discord_msg_id FROM messages WHERE role = 'assistant' AND {condition} ORDER BY discord_msg_id",
+            params,
+        ).fetchall()
+        return [item["discord_msg_id"] for item in rows]
 
     def delete_messages(self, discord_msg_ids: list[int]) -> None:
         with self._conn:

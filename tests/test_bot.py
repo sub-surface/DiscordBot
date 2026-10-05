@@ -336,6 +336,41 @@ class ChatPipelineTests(unittest.TestCase):
         self.react("🗑️", 2000, user_id=5)
         self.assertIsNone(self.bot.store.message(2000))
 
+    def test_reactions_only_touch_their_own_answer_when_a_message_has_several(self) -> None:
+        original = self.say("<@999> hi", 1000)  # A's own question → answer 2000
+        self.discord.channel.fetch_message = AsyncMock(return_value=original)
+        interaction = SimpleNamespace(
+            channel=self.discord.channel, channel_id=1, guild_id=10, user=SimpleNamespace(id=6),
+            response=SimpleNamespace(send_message=AsyncMock()),
+        )
+        asyncio.run(self.cog.ask_about_message(interaction, original))  # B asks about it → answer 2001
+        self.assertEqual(self.bot.store.response_ids(1000), [2000, 2001])
+
+        self.react("🗑️", 2001, user_id=6)  # B deletes their answer only
+        self.assertEqual(self.bot.store.response_ids(1000), [2000])
+
+        asyncio.run(self.cog.ask_about_message(interaction, original))  # B asks again → 2002
+        self.react("🔁", 2000, user_id=5)  # A regenerates theirs; B's survives
+        ids = self.bot.store.response_ids(1000)
+        self.assertIn(2002, ids)
+        self.assertNotIn(2000, ids)
+        self.assertEqual(len(ids), 2)
+
+    def test_ask_persona_never_pings_people_named_in_someone_elses_message(self) -> None:
+        victim = SimpleNamespace(id=42, bot=False, display_name="Santi", mention="<@42>")
+        target = self.discord.message("tell <@42> they're great", 1500, mentioned=False, author_id=8)
+        target.mentions = [victim]
+        interaction = SimpleNamespace(
+            channel=self.discord.channel, channel_id=1, guild_id=10, user=SimpleNamespace(id=5),
+            response=SimpleNamespace(send_message=AsyncMock()),
+        )
+
+        asyncio.run(self.cog.ask_about_message(interaction, target))
+
+        kwargs = target.reply.await_args.kwargs
+        self.assertIsNone(kwargs["content"])
+        self.assertEqual(kwargs["allowed_mentions"].users, [])
+
     def test_ask_command_answers_as_another_persona_via_followup(self) -> None:
         followup = SimpleNamespace(send=AsyncMock(side_effect=self.discord._post))
         interaction = SimpleNamespace(
