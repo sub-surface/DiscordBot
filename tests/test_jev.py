@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 from psychograph.conversation import Said
 from psychograph.jev import DIRECT, NO_CONTEST, SPLIT, Jev
 from psychograph.personas import PersonaRegistry
-from psychograph.responder import read_verdict
+from psychograph.responder import decision_line, mentioned, read_verdict
 from psychograph.settings import Settings
 from psychograph.store import Store
 
@@ -107,6 +107,16 @@ class JevTests(unittest.TestCase):
         self.assertEqual(read_verdict("**Decision:** Split decision.", ["Charlie", "Leon"]), SPLIT)
         self.assertEqual(read_verdict("**Decision:** No contest.", ["Charlie", "Leon"]), NO_CONTEST)
         self.assertIsNone(read_verdict("**Decision:** nobody", ["Charlie", "Leon"]))
+        self.assertEqual(read_verdict("**Decision:** Pearl, narrow.", ["Pearl", "Zack"]), "Pearl")
+        self.assertIsNone(read_verdict("**Decision:** Charlie loses to Leon", ["Charlie", "Leon"]))  # ambiguous
+        self.assertEqual(read_verdict("**Decision:** Leon, despite the drawback", ["Charlie", "Leon"]), "Leon")
+        self.assertIsNone(read_verdict("**Decision:** Zackary", ["Zack", "Leon"]))
+
+    def test_names_are_found_as_whole_words_bold_or_not(self) -> None:
+        review = "- **Pearl vs. plateau** on consent.\n- **.: / Mechirk** dropped it.\n**Decision:** Pearl, narrow. Zack conceded."
+        self.assertEqual(mentioned(review, ["Pearl", "Zack", "plateau", ".", "Zac"]), ["Pearl", "Zack", "plateau"])
+        self.assertEqual(mentioned("**.** argued", ["."]), ["."])
+        self.assertEqual(decision_line("**The motion:** a decision on X\n**Decision:** Pearl"), "**Decision:** Pearl")
 
 
 if __name__ == "__main__":

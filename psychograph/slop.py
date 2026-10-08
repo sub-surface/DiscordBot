@@ -143,6 +143,8 @@ async def _stats(bot: PsychographBot, status_id: str, gate: asyncio.Semaphore) -
 
 
 def _download(url: str) -> bytes | None:
+    if not url.startswith("https://"):  # a third party's JSON chose this URL: no file:// or plain http
+        return None
     try:
         with urlopen(Request(url, headers={"User-Agent": "Psychograph/1.0"}), timeout=6) as response:
             return response.read(1_000_000)

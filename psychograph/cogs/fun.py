@@ -17,6 +17,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from .. import digest, duel, heartbeat
+from ..actions import act
 from ..bot import PsychographBot, is_allowed_channel
 from ..conversation import clip
 from ..personas import Persona
@@ -96,6 +97,8 @@ class FunCommands(commands.Cog):
                     turns.append(duel.Turn(speaker, text))
             verdict = await duel.judge(self.bot.jev, topic, a, b, turns)
             await channel.send(embed=verdict_card(a, b, topic, verdict))
+            outcome = f"{verdict.winner.name} wins" if verdict.winner else "draw"
+            act("+" if verdict.shares else "-", channel, None, f"duel {a.name} v {b.name}: {outcome if verdict.shares else 'no verdict'}")
             if verdict.shares:
                 self.bot.store.record_duel(
                     interaction.guild_id, channel.id, a.key, b.key, verdict.winner.key if verdict.winner else None, topic
@@ -165,6 +168,7 @@ class FunCommands(commands.Cog):
             )
             if channel is not None:
                 await speak(self.bot, channel, digest.voice(self.bot, guild.id), await digest.build(self.bot, guild, now))
+                act(".", channel, None, "weekly digest posted")
 
 
 def verdict_card(a: Persona, b: Persona, topic: str, verdict: duel.Verdict) -> discord.Embed:

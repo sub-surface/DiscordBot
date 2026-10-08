@@ -8,6 +8,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from ..actions import deny
 from ..bot import PsychographBot
 from ..personas import CUSTOM_PROMPT_LIMIT, Persona, can_manage
 from ..render import CHOICE_LIMIT, EMBED_COLOR, PERSONA_LEGEND, persona_choices
@@ -94,7 +95,7 @@ class PersonaDeleteView(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.requester_id or _manage_guild(interaction):
             return True
-        await interaction.response.send_message("Only the requester or a server manager can confirm this.", ephemeral=True)
+        await deny(interaction, "Only the requester or a server manager can confirm this.", "not the requester")
         return False
 
     @discord.ui.button(label="Delete persona", style=discord.ButtonStyle.danger)

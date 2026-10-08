@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING
 import discord
 
 from . import conversation, quick
+from .actions import act
 from .personas import Persona
 from .responder import recent_messages
 from .speak import generate, speak
@@ -234,7 +235,7 @@ async def drop(
         message = await speak(bot, channel, persona, text)
         if message is not None:
             bot.store.save_message(message.id, None, channel.id, "assistant", text, answer_id=message.id, persona=persona.key)
-            log.info("Heartbeat in #%s: %s posted a %s (no model)", channel.name, persona.name, kind)
+            act(".", channel, None, f"heartbeat: {persona.name} posted a {kind} (no model)")
         return message
     if not allow_model:
         log.info("Heartbeat in #%s: the GPU stayed cold and no free drop fit", channel.name)
@@ -267,5 +268,5 @@ async def drop(
     message = await speak(bot, channel, persona, posted)
     if message is not None:
         bot.store.save_message(message.id, None, channel.id, "assistant", text, answer_id=message.id, persona=persona.key)
-        log.info("Heartbeat in #%s: %s %s", channel.name, persona.name, "chimed in" if live else "picked up a loose end")
+        act(".", channel, None, f"heartbeat: {persona.name} {'chimed in' if live else 'picked up a loose end'}")
     return message

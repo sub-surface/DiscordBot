@@ -22,6 +22,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from .. import conversation, quick, render
+from ..actions import act
 from ..bot import PsychographBot, is_allowed_channel
 from ..jev import DIRECT
 from ..personas import Persona
@@ -276,10 +277,13 @@ class ChatCog(commands.Cog):
             member = payload.member
             can_moderate = bool(member and channel.permissions_for(member).manage_messages)
             if is_requester or can_moderate:
-                await self.bot.responder.delete_answer(channel, payload.message_id)
+                count = await self.bot.responder.delete_answer(channel, payload.message_id)
+                act("x", channel, payload.member or payload.user_id, f"answer {payload.message_id} ({count} msgs)"
+                    + ("" if is_requester else ", as moderator"))
             return
         # Regenerating replays the request message, so only answers to the requester's own message qualify.
         if is_requester and request is not None and request["author_id"] == payload.user_id:
+            act("~", channel, payload.member or payload.user_id, f"answer {payload.message_id}")
             await self._regenerate(channel, answer["reply_to"], payload.message_id, payload.user_id, answer["persona"])
 
     async def _regenerate(

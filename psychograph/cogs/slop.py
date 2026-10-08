@@ -10,6 +10,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from .. import slop
+from ..actions import deny
 from ..bot import PsychographBot
 
 log = logging.getLogger("psychograph.slop")
@@ -35,7 +36,7 @@ class SlopCommands(commands.Cog):
             return
         if not channel.permissions_for(interaction.user).read_message_history:
             # the report reposts the channel's contents, so only for those who can read it
-            await interaction.response.send_message(f"You can't read #{channel.name}.", ephemeral=True)
+            await deny(interaction, f"You can't read #{channel.name}.", f"can't read #{channel.name}")
             return
         await interaction.response.defer(thinking=True)
         try:

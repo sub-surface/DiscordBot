@@ -42,7 +42,7 @@ While it works, the bot reacts to your message: a random server "thinking" emote
 | `/timeout member 30m` | The bot ignores that member (messages, commands and reactions) for `30m`, `2h`, `1d`… up to 7 days, or `off`. Moderators (Timeout Members or Manage Server). |
 | `/duel persona persona topic [rounds]` | Two chat personas argue a topic for 1–3 rounds (default 2), each turn one model call posted as that persona; Jev then judges who argued better and picks the line of the duel. One duel per channel at a time. |
 | `/scores debates` · `/scores predictions` · `/scores duels` | The debate leaderboard; open predictions to settle, and everyone's track record; persona duel records. |
-| `/bot model` · `/bot stats [period]` · `/bot cost` · `/bot thinking [on/off]` · `/bot digest` | The backend, model and sampling; reply counts, times, real cold starts and boot times, tokens and top personas; this bot's Modal spend and the workspace bill (Manage Server); whether the model thinks before replying (off by default; switching needs Manage Server); a private preview of this week's digest (Manage Server). |
+| `/bot model` · `/bot stats [period]` · `/bot cost` · `/bot thinking [on/off]` · `/bot digest` | The backend, model and sampling; reply counts, times, real cold starts and boot times, tokens and top personas; this bot's Modal spend and the workspace bill (Administrator, or the bot's owner); whether the model thinks before replying (off by default; switching needs Administrator or the bot's owner, and applies everywhere); a private preview of this week's digest (Manage Server). |
 | `/santi-slop day\|week\|month\|all` | **The Slop Report**: every x.com / fxtwitter / fixupx / vxtwitter post shared in #sim-city (`slop_channel`), ranked by reach (likes, reposts, views from the public FxEmbed API, cached six hours) and reactions here, the top six drawn as a card with Jev's slop meter (rated once per post and kept), a SLOPPIEST badge, a caption from Santi's lines picked by Jev, and the period's top dealer. Public, about a second, no model. |
 | `/sound [name]` · `/chess …` | The soundboard; chess against Stockfish. |
 
@@ -183,6 +183,7 @@ psychograph/
   store.py          SQLite: reply chains, channel settings, custom personas, chess games, debates, predictions, generation log
   conversation.py   system prompts (full/compact), context fitting, linked posts, channel transcripts, reply cleanup
   responder.py      one request end to end: status reactions → context → model → clean → deliver → record
+  actions.py        actions.log: one line per action, sigil first (/ command  ^ button  @ reply  ~ regen  x delete  + ledger  - skipped  ! refused  . ambient)
   webhooks.py       persona voices through a channel webhook, avatar hosting, impersonation guard
   sounds.py         the soundbank: tags, keyword picks, cooldowns, sending voice messages
   render.py         embeds, message splitting, generation stats line

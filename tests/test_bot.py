@@ -452,6 +452,25 @@ class ChatPipelineTests(unittest.TestCase):
         asyncio.run(self.bot.responder.delete_answer(self.discord.channel, 2000))
         self.assertEqual(self.bot.store.debate_table(10), [])
 
+    def test_debate_review_scores_names_that_are_not_bolded_alone(self) -> None:
+        # The real 2026-10-07 review: Pearl was only ever bolded as "**Pearl vs. plateau**", so it went unscored.
+        self.backend.profile = TOOLS
+        self.bot.webhooks = fake_webhooks([])
+        self.channel_history(("Pearl", 5, "publishing isn't consent to coordinates"), ("Zack", 6, "you're just sensitive"))
+        self.bot.jev.debate_notes = AsyncMock(return_value=DebateNotes(0.95, ()))
+        self.bot.jev.read_verdict = AsyncMock(return_value=None)  # Jev unsure: the keyword reader decides
+        self.backend.text = (
+            "**The motion:** doxxing.\n**The clash:**\n- **Pearl vs. plateau** on consent.\n- **Zack** conceded the core.\n"
+            "**Decision:** Pearl, narrow. She framed the disagreement.\n**Notes:** Zack, drop the insults."
+        )
+
+        self.say("<@999> debate review", 1000)
+
+        self.assertEqual(self.bot.store.debate_table(10), [
+            {"user_id": 5, "wins": 1, "losses": 0, "splits": 0},
+            {"user_id": 6, "wins": 0, "losses": 1, "splits": 0},
+        ])
+
     def test_model_output_is_cleaned_before_posting(self) -> None:
         self.backend.text = "<think>plan</think>mochi: hewwo~<|im_end|>\nLeon: now I talk for Leon"
 

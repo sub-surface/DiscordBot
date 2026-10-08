@@ -2,19 +2,21 @@ from __future__ import annotations
 
 import logging
 import random
+import sys
 import time
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
+from . import actions
 from .ambient import Ambient
 from .backends import Backend, LocalBackend, make_backend
 from .chess_game import ChessService, Stockfish
 from .jev import Jev
 from .personas import PersonaRegistry
 from .responder import Responder
-from .settings import Settings, load_settings
+from .settings import ROOT, Settings, load_settings
 from .sounds import Soundbank
 from .store import Store
 from .webhooks import PersonaWebhooks
@@ -39,6 +41,8 @@ class ChannelScopedCommandTree(app_commands.CommandTree):
             until = self.client.ignoring(getattr(interaction, "guild_id", None), user.id) if user else None
             if until is None:
                 return True
+            if interaction.type is not discord.InteractionType.autocomplete:
+                actions.act("!", interaction.channel, user, "timed out")
             if interaction.type is discord.InteractionType.autocomplete:
                 await interaction.response.autocomplete([])
             else:
@@ -48,6 +52,8 @@ class ChannelScopedCommandTree(app_commands.CommandTree):
             return False
         if interaction.guild is None:
             return False
+        if interaction.type is not discord.InteractionType.autocomplete:
+            actions.act("!", interaction.channel, getattr(interaction, "user", None), "outside the allowed channels")
         if interaction.type is discord.InteractionType.autocomplete:
             await interaction.response.autocomplete([])
         else:
@@ -61,7 +67,13 @@ class PsychographBot(commands.Bot):
     def __init__(self, settings: Settings, store: Store | None = None, backend: Backend | None = None) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
-        super().__init__(command_prefix=commands.when_mentioned, intents=intents, tree_cls=ChannelScopedCommandTree)
+        super().__init__(
+            command_prefix=commands.when_mentioned,
+            intents=intents,
+            tree_cls=ChannelScopedCommandTree,
+            # Model text can say anything: no send pings @everyone or a role unless it opts in.
+            allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True, replied_user=True),
+        )
         self.settings = settings
         self.store = store or Store(settings.db_path)
         self.backend = backend or make_backend(settings)
@@ -125,6 +137,9 @@ class PsychographBot(commands.Bot):
             self._legacy_guild_commands_cleared = True
             log.info("Cleared legacy guild-scoped commands from %d guild(s)", len(self.guilds))
 
+    async def on_interaction(self, interaction: discord.Interaction) -> None:
+        actions.interaction(interaction)
+
     async def on_message(self, message: discord.Message) -> None:
         # Slash commands only: ChatCog handles messages, so skip prefix-command processing.
         return
@@ -143,7 +158,11 @@ def main() -> None:
     settings = load_settings()
     if not settings.discord_token:
         raise RuntimeError("DISCORD_TOKEN is not set")
+    for stream in (sys.stdout, sys.stderr):  # member names carry emoji a cp1252 console can't print
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="backslashreplace")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    actions.setup(ROOT / "actions.log")
     bot = PsychographBot(settings)
     log.info(
         "Psychograph starting · backend %s · %s · %s",

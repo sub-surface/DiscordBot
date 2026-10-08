@@ -15,13 +15,14 @@ from __future__ import annotations
 import logging
 import re
 import time
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import discord
 
 from . import conversation, render, sounds
+from .actions import act
 from .backends import Completion
 from .conversation import Said
 from .jev import NO_CONTEST, SPLIT, DebateNotes
@@ -254,6 +255,7 @@ class Responder:
         if not self.can_run(ask.persona):
             await unreact(ask.reply_to, ask.shown_status, self.bot.user)
             await self._report(ask, self.tools_unavailable(ask.persona))
+            act("!", ask.channel, self._requester(ask), f"{ask.persona.name}: tools unavailable on this model")
             return []
         backend = self.bot.backend
         status = ask.shown_status or self.status(getattr(ask.channel, "guild", None))
@@ -286,8 +288,14 @@ class Responder:
             sent = await self._deliver(ask, prepared, text, summary)
             if completion is not None:
                 self._record(ask, prepared, completion, wall, cold, ok=True, model_seconds=model_seconds)
+            how = (
+                f"{completion.tokens}t {wall:.1f}s {'cold' if cold else 'warm'}" if completion is not None
+                else f"System 1 {wall:.1f}s, no model"
+            )
+            act("@", ask.channel, self._requester(ask), f"{prepared.persona.name} {how}{' voiced' if prepared.voiced else ''}")
         except Exception as error:
             log.exception("Response failed in channel %s", ask.channel.id)
+            act("!", ask.channel, self._requester(ask), f"{ask.persona.name} reply failed: {type(error).__name__}")
             self._record(ask, prepared, None, time.perf_counter() - started, cold, ok=False, error=repr(error)[:300])
             await unreact(ask.reply_to, status, self.bot.user)
             await self._report_failure(ask)
@@ -307,6 +315,10 @@ class Responder:
                 self.bot.store.append_to_message(sent[0].id, f"\n\n{notes.record()}")
         return sent
 
+    def _requester(self, ask: Ask) -> discord.abc.User:
+        """Who asked: the person who ran the command, else the author of the message answered."""
+        return self.bot.get_user(ask.requester_id) or ask.author
+
     async def _pick_sound(self, channel_id: int, tagged: Sound | None, request: str, reply: str) -> Sound | None:
         """The model's tagged sound, else Jev's pick for the moment, else (without Jev) a keyword match."""
         bank, jev = self.bot.soundbank, self.bot.jev
@@ -320,17 +332,25 @@ class Responder:
         return bank.choose(channel_id, tagged, request, reply)
 
     async def _score_debate(self, ask: Ask, prepared: Prepared, review: str, answer_id: int) -> None:
-        """Put a review's result on the leaderboard: members it names in bold who spoke in the transcript."""
+        """Put a review's result on the leaderboard: the members who spoke in the transcript and whom it
+        names. Jev reads the decision line; when it can't, the keyword reader does if it's unambiguous."""
         people = {item.speaker: item.author_id for item in prepared.said if item.author_id is not None}
-        named = [name for name in people if f"**{name}**" in review]
-        decision = next((line for line in review.splitlines() if "decision" in line.casefold()), "")
-        if len(named) < 2 or not decision:
+        named = mentioned(review, people)
+        decision = decision_line(review)
+        if len(set(people[name] for name in named)) < 2 or not decision:
+            act("-", ask.channel, None, f"debate {answer_id}: {'named ' + ', '.join(named) if named else 'no one named'}"
+                + ("" if decision else ", no decision line"))
             return
         jev = self.bot.jev
-        outcome = await jev.read_verdict(decision, named) if jev.enabled else read_verdict(decision, named)
+        outcome = await jev.read_verdict(decision, named) if jev.enabled else None
+        if outcome is None:
+            outcome = read_verdict(decision, named)
         if outcome is None or outcome == NO_CONTEST:
+            act("-", ask.channel, None, f"debate {answer_id}: {'no contest' if outcome else 'no clear winner'}")
             return
         winner = None if outcome == SPLIT else people[outcome]
+        rest = ", ".join(name for name in named if name != outcome)
+        act("+", ask.channel, None, f"debate split: {', '.join(named)}" if outcome == SPLIT else f"debate {outcome} > {rest}")
         self.bot.store.record_debate(answer_id, ask.guild_id, ask.channel.id, winner, [people[name] for name in named])
 
     async def _deliver(self, ask: Ask, prepared: Prepared, text: str, summary: str) -> list[discord.Message]:
@@ -408,6 +428,7 @@ class Responder:
                     file.close()
             else:
                 await sounds.play(ask.channel, sound, reference=answer)
+            act(".", ask.channel, None, f"sound {sound.key}")
         except (discord.HTTPException, OSError):
             log.exception("Couldn't play %s in channel %s", sound.key, ask.channel.id)
 
@@ -479,15 +500,37 @@ class Responder:
         return len(ids)
 
 
+def mentioned(text: str, names: Iterable[str], bold: bool = False) -> list[str]:
+    """The names `text` mentions as whole words, bold or not (only bold when `bold`). A name with no
+    letters or digits (".") counts only in bold: as a plain word it would match any full stop."""
+    found = []
+    for name in names:
+        bolded = rf"\*\*{re.escape(name)}\*\*"
+        pattern = bolded if bold or not re.search(r"\w", name) else rf"(?<!\w){re.escape(name)}(?!\w)"
+        if re.search(pattern, text, re.IGNORECASE):
+            found.append(name)
+    return found
+
+
+def decision_line(review: str) -> str:
+    """The review's **Decision:** line, else the first line that mentions a decision."""
+    lines = review.splitlines()
+    return next((line for line in lines if line.lstrip("*_-#> ").casefold().startswith("decision")), "") or next(
+        (line for line in lines if "decision" in line.casefold()), ""
+    )
+
+
 def read_verdict(decision: str, participants: Sequence[str]) -> str | None:
-    """Without Jev: no contest, split, or whichever participant the decision line names first."""
-    lowered = decision.casefold()
-    if "no contest" in lowered:
+    """Without Jev: no contest, split, or the one participant the decision line names (in bold if it
+    names several). None when that's ambiguous: "Charlie loses to Leon" names both."""
+    if re.search(r"\bno contest\b", decision, re.IGNORECASE):
         return NO_CONTEST
-    if "split" in lowered or "draw" in lowered:
+    if re.search(r"\b(split|draw|drawn|tie|tied)\b", decision, re.IGNORECASE):
         return SPLIT
-    positions = [(lowered.find(name.casefold()), name) for name in participants if name.casefold() in lowered]
-    return min(positions)[1] if positions else None
+    named = mentioned(decision, participants)
+    if len(named) > 1:
+        named = mentioned(decision, named, bold=True)
+    return named[0] if len(named) == 1 else None
 
 
 def _speaker_of(item: dict) -> re.Match[str] | None:

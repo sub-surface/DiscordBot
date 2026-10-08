@@ -11,6 +11,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from ..actions import act, deny
 from ..bot import PsychographBot, is_allowed_channel
 from ..conversation import clip
 from ..render import CHOICE_LIMIT, EMBED_COLOR
@@ -103,6 +104,7 @@ class SettleView(discord.ui.View):
                 await interaction.response.edit_message(content="That prediction is already settled.", view=None)
                 return
             await interaction.response.edit_message(content=f"Settled as {OUTCOME_ICONS[outcome]} **{outcome}**.", view=None)
+            act("+", interaction.channel, interaction.user, f"prediction {self.message_id} settled {outcome}")
             if interaction.channel is not None:
                 await interaction.channel.send(
                     f"{OUTCOME_ICONS[outcome]} <@{prediction['author_id']}>'s prediction is settled **{outcome}** "
@@ -139,7 +141,7 @@ class PredictionsView(discord.ui.View):
             return
         moderator = bool(interaction.permissions and interaction.permissions.manage_messages)
         if prediction["author_id"] == interaction.user.id and not moderator:
-            await interaction.response.send_message("You can't settle your own prediction — ask someone else.", ephemeral=True)
+            await deny(interaction, "You can't settle your own prediction — ask someone else.", "own prediction")
             return
         await interaction.response.send_message(
             f"“{clip(prediction['text'], 300)}” — <@{prediction['author_id']}>. How did it go?",
@@ -183,6 +185,15 @@ class ToolCommands(commands.Cog):
         )
 
     @commands.Cog.listener()
+    async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent) -> None:
+        """A review deleted in Discord (not through the bot) leaves the leaderboard too."""
+        self.bot.store.delete_debates([payload.message_id])
+
+    @commands.Cog.listener()
+    async def on_raw_bulk_message_delete(self, payload: discord.RawBulkMessageDeleteEvent) -> None:
+        self.bot.store.delete_debates(list(payload.message_ids))
+
+    @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
         """🔮 on a member's message logs it as a prediction."""
         if str(payload.emoji) != PREDICT or payload.guild_id is None or self.bot.user is None:
@@ -204,6 +215,7 @@ class ToolCommands(commands.Cog):
         if self.bot.store.add_prediction(
             message.id, payload.guild_id, channel.id, message.author.id, text[:500], payload.user_id
         ):
+            act("+", channel, payload.member or payload.user_id, f"prediction by {message.author.display_name}: {clip(text, 60)!r}")
             try:
                 await message.add_reaction(LOGGED)
             except discord.HTTPException:

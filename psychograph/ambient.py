@@ -29,6 +29,8 @@ from typing import TYPE_CHECKING
 
 import discord
 
+from .actions import act
+
 from . import conversation
 from .jev import AMBIENT_MESSAGES, NAMED, REACTS
 from .personas import Persona
@@ -224,5 +226,5 @@ class Ambient:
             log.info("Couldn't react in channel %s: %s", message.channel.id, error)
             return False
         self._reacted[message.channel.id] = self.clock()
-        log.info("Reacted :%s: in channel %s (%s)", emoji.name, message.channel.id, why)
+        act(".", message.channel, message.author, f"react :{emoji.name}: ({why})")
         return True

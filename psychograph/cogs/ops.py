@@ -15,6 +15,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from .. import digest
+from ..actions import deny
 from ..bot import PsychographBot
 from ..render import EMBED_COLOR, model_summary
 from ..settings import ROOT
@@ -60,6 +61,13 @@ class OpsCommands(commands.Cog):
     def __init__(self, bot: PsychographBot) -> None:
         self.bot = bot
 
+    async def _admin(self, interaction: discord.Interaction) -> bool:
+        """The bot's owner, or an administrator of this server. These settings reach every server the bot is in,
+        so Manage Server isn't enough, and a DM (no permissions to check) is the owner's alone."""
+        if interaction.guild is not None and interaction.permissions.administrator:
+            return True
+        return await self.bot.is_owner(interaction.user)
+
     @about.command(name="model", description="Which model the bot runs on, and how it's tuned")
     async def model(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_message(model_summary(self.bot.backend), ephemeral=True)
@@ -73,10 +81,10 @@ class OpsCommands(commands.Cog):
         embed.set_footer(text=self.bot.backend.profile.describe())
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @about.command(name="cost", description="This month's Modal workspace bill (Manage Server)")
+    @about.command(name="cost", description="This month's Modal workspace bill (admins)")
     async def cost(self, interaction: discord.Interaction) -> None:
-        if interaction.guild and not interaction.permissions.manage_guild:
-            await interaction.response.send_message("You need Manage Server permission to view workspace costs.", ephemeral=True)
+        if not await self._admin(interaction):
+            await deny(interaction, "Only server admins can view workspace costs.", "not an admin")
             return
         if self.bot.backend.name != "modal":
             await interaction.response.send_message(
@@ -100,14 +108,14 @@ class OpsCommands(commands.Cog):
             ephemeral=True,
         )
 
-    @about.command(name="thinking", description="Show or switch the model's thinking mode (switching needs Manage Server)")
+    @about.command(name="thinking", description="Show or switch the model's thinking mode (switching: admins)")
     @app_commands.describe(mode="On: the model reasons before replying (slower). Off: it answers straight away.")
     @app_commands.choices(mode=[app_commands.Choice(name="On", value="on"), app_commands.Choice(name="Off", value="off")])
     async def thinking(self, interaction: discord.Interaction, mode: str | None = None) -> None:
         backend = self.bot.backend
         if mode is not None:
-            if interaction.guild is None or not interaction.permissions.manage_guild:  # a global switch: fail closed
-                await interaction.response.send_message("You need Manage Server permission to switch thinking.", ephemeral=True)
+            if not await self._admin(interaction):
+                await deny(interaction, "Only server admins can switch thinking.", "not an admin")
                 return
             backend.thinking = mode == "on"
             self.bot.store.set_state("thinking", mode)
@@ -117,7 +125,7 @@ class OpsCommands(commands.Cog):
     @about.command(name="digest", description="Preview this week's Monday digest, just for you (Manage Server)")
     async def digest_preview(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None or not interaction.permissions.manage_guild:
-            await interaction.response.send_message("You need Manage Server permission to preview the digest.", ephemeral=True)
+            await deny(interaction, "You need Manage Server permission to preview the digest.", "no Manage Server")
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         text = await digest.build(self.bot, interaction.guild)

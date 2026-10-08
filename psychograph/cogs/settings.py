@@ -9,6 +9,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from ..actions import deny
 from ..bot import PsychographBot
 from ..render import CHOICE_LIMIT, EMBED_COLOR
 from ..store import VERBOSITY_LEVELS
@@ -73,7 +74,7 @@ class ResetHistoryView(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.requester_id:
             return True
-        await interaction.response.send_message("Only the person who opened this confirmation can use it.", ephemeral=True)
+        await deny(interaction, "Only the person who opened this confirmation can use it.", "not the requester")
         return False
 
     @discord.ui.button(label="Clear history", style=discord.ButtonStyle.danger)
@@ -207,7 +208,7 @@ class StatusView(discord.ui.View):
     @discord.ui.button(label="Reactions", style=discord.ButtonStyle.secondary, row=2)
     async def reaction_button(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         if not interaction.permissions.manage_messages:
-            await interaction.response.send_message("Manage Messages permission is required.", ephemeral=True)
+            await deny(interaction, "Manage Messages permission is required.", "no Manage Messages")
             return
         enabled = self.bot.store.channel_settings(self.channel_id).reactions
         self.bot.store.update_channel(self.channel_id, reactions=not enabled)
@@ -216,7 +217,7 @@ class StatusView(discord.ui.View):
     @discord.ui.button(label="Voice", style=discord.ButtonStyle.secondary, row=2)
     async def voice_button(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         if not interaction.permissions.manage_messages:
-            await interaction.response.send_message("Manage Messages permission is required.", ephemeral=True)
+            await deny(interaction, "Manage Messages permission is required.", "no Manage Messages")
             return
         enabled = self.bot.store.channel_settings(self.channel_id).persona_voice
         if not enabled and not self.bot.webhooks.available(interaction.channel):
@@ -230,7 +231,7 @@ class StatusView(discord.ui.View):
     @discord.ui.button(label="Sounds", style=discord.ButtonStyle.secondary, row=3)
     async def sounds_button(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         if not interaction.permissions.manage_messages:
-            await interaction.response.send_message("Manage Messages permission is required.", ephemeral=True)
+            await deny(interaction, "Manage Messages permission is required.", "no Manage Messages")
             return
         enabled = self.bot.store.channel_settings(self.channel_id).sounds
         if not enabled and not len(self.bot.soundbank):
