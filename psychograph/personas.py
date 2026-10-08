@@ -128,6 +128,7 @@ SECTIONS = (
     ("register", "How you write"),
     ("says", "Lines you'd say"),
     ("believes", "What you believe"),
+    ("loves", "What you love"),
     ("moves", "How you play it"),
     ("people", "People"),
     ("bits", "Running bits"),
