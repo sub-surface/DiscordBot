@@ -19,6 +19,7 @@ grep a sigil column (`grep " ! " actions.log`) or a name to follow one thread.
 from __future__ import annotations
 
 import logging
+import re
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -27,6 +28,7 @@ import discord
 log = logging.getLogger("psychograph.act")
 
 WHERE, WHO = 13, 14  # column widths
+CONTROL = re.compile(r"[\x00-\x1f\x7f\u0085\u2028\u2029]+")  # a name or option with a newline could forge a line
 
 
 def setup(path: Path) -> None:
@@ -57,8 +59,13 @@ def who(user: object) -> str:
 
 def act(sigil: str, channel: object, user: object, what: str) -> None:
     """One line: sigil, channel, member ("-" for the bot acting alone), then what happened."""
-    name = who(user) if isinstance(user, int) else _clip(who(user), WHO)  # a bare id (member not cached) stays whole
-    log.info("%s %-*s %-*s %s", sigil, WHERE, _clip(where(channel), WHERE), WHO, name, what)
+    name = who(user) if isinstance(user, int) else _clip(_flat(who(user)), WHO)  # a bare id (member not cached) stays whole
+    log.info("%s %-*s %-*s %s", sigil, WHERE, _clip(_flat(where(channel)), WHERE), WHO, name, _flat(what))
+
+
+def _flat(text: str) -> str:
+    """One line, whatever members typed: line breaks and control characters become a space."""
+    return CONTROL.sub(" ", text)
 
 
 def options(data: list[dict] | None) -> str:

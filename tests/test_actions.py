@@ -34,6 +34,12 @@ class ActionLogTests(unittest.TestCase):
         self.assertEqual(logs.records[0].getMessage(), "+ #sim-city     -              debate Pearl > Zack")
         self.assertEqual(logs.records[1].getMessage(), "x dm            132301139667451904 answer 1 (2 msgs)")
 
+    def test_a_member_cannot_forge_a_line(self) -> None:
+        with self.assertLogs("psychograph.act") as logs:
+            actions.act("+", None, "Zack\n10-08 14:00:00 ! #x", "prediction 'a\r\nb\u2028c'")
+        self.assertEqual(len(logs.records), 1)
+        self.assertNotRegex(logs.records[0].getMessage(), r"[\r\n\u2028]")
+
     def test_commands_are_logged_with_their_options_as_typed(self) -> None:
         data = {"name": "bot", "type": 1, "options": [
             {"name": "thinking", "type": 1, "options": [{"name": "mode", "type": 3, "value": "on"}]},
