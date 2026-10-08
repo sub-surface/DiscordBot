@@ -86,6 +86,7 @@ def crawl(args) -> None:
                     "id": m["id"],
                     "ts": m["timestamp"][:16],
                     "user": m["author"]["username"],
+                    "uid": m["author"]["id"],
                     "name": (m.get("member") or {}).get("nick") or m["author"].get("global_name") or m["author"]["username"],
                     "bot": bool(m["author"].get("bot") or m.get("webhook_id")),
                     "text": m.get("content") or "",

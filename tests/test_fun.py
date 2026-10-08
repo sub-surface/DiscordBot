@@ -1,4 +1,5 @@
 import asyncio
+import random
 import dataclasses
 import json
 import tempfile
@@ -7,6 +8,8 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
+
+import discord
 
 from psychograph import digest, duel, heartbeat
 from psychograph.cogs.fun import parse_hours, verdict_card
@@ -120,7 +123,7 @@ class HeartbeatTests(unittest.TestCase):
         self.bot.jev.ask = AsyncMock(return_value={"opening": {"noul": 0.8}, "who": choice("aura", {})})
         sent = asyncio.run(heartbeat.drop(self.bot, channel))
 
-        question = self.bot.jev.ask.await_args.args[1]["opening"]
+        question = self.bot.jev.ask.await_args_list[0].args[1]["opening"]
         self.assertIn("loose end", question["instructions"])
         self.assertIn("went quiet 5 hours ago", self.backend.calls[0][-1]["content"])
         self.assertTrue(sent.embed.description.startswith("-# ↪ [Leon](<https://discord.com/channels/10/1/1300>)\n"))
@@ -136,6 +139,55 @@ class HeartbeatTests(unittest.TestCase):
         sent = asyncio.run(heartbeat.drop(self.bot, channel))
         self.assertEqual(self.bot.store.message(sent.id)["persona"], "aura")
         self.assertIn("Charlie: skill issue", self.backend.calls[0][-1]["content"])
+
+    def test_lore_is_handed_over_only_when_jev_is_sure_the_chat_calls_back_to_it(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            lore = Path(folder) / "lore.json"
+            lore.write_text(json.dumps({"exhibit": "Zack is the convention's newest exhibit"}), encoding="utf-8")
+            self.bot.settings = dataclasses.replace(self.bot.settings, lore_file=lore)
+            channel = FakeChannel("shitpost", [message("Leon", "zack is on display again", 2)])
+
+            self.bot.jev.ask = AsyncMock(return_value={"opening": {"noul": 0.9}, "who": choice("aura", {}), "lore": choice("exhibit", {}, 0.4)})
+            asyncio.run(heartbeat.drop(self.bot, channel))
+            self.assertIn("none", self.bot.jev.ask.await_args_list[0].args[1]["lore"]["criteria"])
+            self.assertNotIn("newest exhibit", self.backend.calls[-1][-1]["content"])
+
+            self.bot.jev.ask = AsyncMock(return_value={"opening": {"noul": 0.9}, "who": choice("aura", {}), "lore": choice("exhibit", {}, 0.9)})
+            asyncio.run(heartbeat.drop(self.bot, channel))
+            self.assertIn("newest exhibit", self.backend.calls[-1][-1]["content"])
+
+    def free_rng(self) -> random.Random:
+        """Always takes the free path, trying the kinds in order: stock line, receipt, vibe."""
+        rng = random.Random()
+        rng.random, rng.shuffle = (lambda: 0.0), (lambda items: None)
+        return rng
+
+    def test_a_free_drop_posts_a_stock_line_without_the_model(self) -> None:
+        line = self.bot.personas.get(None, "aura").says[0]
+        channel = FakeChannel("shitpost", [message("Leon", "zack just got clamped again", 2)])
+        self.bot.jev.ask = AsyncMock(side_effect=[
+            {"opening": {"noul": 0.9}, "who": choice("aura", {})},
+            {"line": choice(line, {}, 0.9)},
+        ])
+        sent = asyncio.run(heartbeat.drop(self.bot, channel, self.free_rng()))
+
+        self.assertEqual(sent.embed.description, line)
+        self.assertEqual(self.backend.calls, [])
+
+    def test_a_due_prediction_gets_one_receipt(self) -> None:
+        old = discord.utils.time_snowflake(datetime.now(timezone.utc) - timedelta(days=30))
+        self.bot.store.add_prediction(old, 10, 1, 42, "zack gets banned by friday", 7)
+        channel = FakeChannel("shitpost", [message("Leon", "anyway", 2)])
+        unsure = {"opening": {"noul": 0.9}, "who": choice("aura", {}), "line": choice("none", {}, 0.9)}
+        self.bot.jev.ask = AsyncMock(return_value=unsure)
+
+        sent = asyncio.run(heartbeat.drop(self.bot, channel, self.free_rng()))
+        self.assertIn("receipt due", sent.embed.description)
+        self.assertIn("zack gets banned by friday", sent.embed.description)
+        self.assertEqual(self.backend.calls, [])
+
+        asyncio.run(heartbeat.drop(self.bot, channel, self.free_rng()))  # already resurfaced: nothing free lands
+        self.assertEqual(len(self.backend.calls), 1)
 
 
 class DigestTests(unittest.TestCase):
@@ -183,19 +235,3 @@ class SystemOneRecordTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-    def test_lore_is_handed_over_only_when_jev_is_sure_the_chat_calls_back_to_it(self) -> None:
-        with tempfile.TemporaryDirectory() as folder:
-            lore = Path(folder) / "lore.json"
-            lore.write_text(json.dumps({"exhibit": "Zack is the convention's newest exhibit"}), encoding="utf-8")
-            self.bot.settings = dataclasses.replace(self.bot.settings, lore_file=lore)
-            channel = FakeChannel("shitpost", [message("Leon", "zack is on display again", 2)])
-
-            self.bot.jev.ask = AsyncMock(return_value={"opening": {"noul": 0.9}, "who": choice("aura", {}), "lore": choice("exhibit", {}, 0.4)})
-            asyncio.run(heartbeat.drop(self.bot, channel))
-            self.assertIn("none", self.bot.jev.ask.await_args.args[1]["lore"]["criteria"])
-            self.assertNotIn("newest exhibit", self.backend.calls[-1][-1]["content"])
-
-            self.bot.jev.ask = AsyncMock(return_value={"opening": {"noul": 0.9}, "who": choice("aura", {}), "lore": choice("exhibit", {}, 0.9)})
-            asyncio.run(heartbeat.drop(self.bot, channel))
-            self.assertIn("newest exhibit", self.backend.calls[-1][-1]["content"])

@@ -12,6 +12,14 @@ No opening, no message. Drops are stored as that persona's answers, so replying 
 To keep them from reading alike, a drop-in takes one of a few shapes, the number of slots drifts a little
 day to day, and the same Jev call says which piece of server lore (lore.json), if any, the chat calls back
 to; only then is the persona handed it.
+
+Two drops in three skip the model (and the GPU) and try a free one first, in random order:
+
+  a stock line     Jev picks one of the persona's own `says` lines that fits the latest message, posted as is
+  a receipt        a 🔮 prediction open for at least a week, resurfaced once, linked, to be settled
+  a vibe check     the /quick vibe card on the live chat, posted by the persona
+
+Only if none of them lands does the persona write something.
 """
 
 from __future__ import annotations
@@ -24,7 +32,7 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from . import conversation
+from . import conversation, quick
 from .personas import Persona
 from .responder import recent_messages
 from .speak import generate, speak
@@ -42,6 +50,9 @@ LOOSE_END = 0.6                        # …or to pick up a quiet one
 CONTEXT_MESSAGES = 25
 LORE = 0.7                             # Jev's confidence needed to hand the persona a piece of lore
 NO_LORE = "none"
+FREE_SHARE = 2 / 3                     # drops that try the free kinds before the model
+STOCK_LINE = 0.8                       # Jev's confidence needed to post a `says` line as is
+RECEIPT_AGE = timedelta(days=7)        # a prediction this old is due for its receipt
 
 # What a drop-in does, picked at random so a day's drops don't all read the same.
 SHAPES = (
@@ -101,6 +112,70 @@ def load_lore(path) -> dict[str, str]:
         return {}
 
 
+async def stock_line(bot: PsychographBot, persona: Persona, recent: list) -> str | None:
+    """One of the persona's own lines, if Jev is sure it fits as the next message."""
+    if not persona.says:
+        return None
+    answers = await bot.jev.ask(
+        {"messages": [{"speaker": conversation.speaker_label(item), "text": item.text[:300]} for item in recent[-12:]]},
+        {
+            "line": {
+                "type": "choice",
+                "instructions": f"Which of {persona.name}'s stock lines would land as the next message after "
+                "`messages`, as a reply that makes sense? Usually none.",
+                "criteria": {**{line: None for line in persona.says}, NO_LORE: "None of them would make sense here."},
+            }
+        },
+    )
+    pick = (answers or {}).get("line") or {}
+    line = pick.get("choice")
+    return line if line in persona.says and pick.get("confidence", 0) >= STOCK_LINE else None
+
+
+def receipt(bot: PsychographBot, guild_id: int | None) -> str | None:
+    """The oldest open prediction due for a receipt it hasn't had yet, marked as resurfaced."""
+    if guild_id is None:
+        return None
+    due_by = datetime.now(timezone.utc) - RECEIPT_AGE
+    for item in reversed(bot.store.predictions(guild_id, limit=50)):
+        key = f"receipt:{item['message_id']}"
+        if discord.utils.snowflake_time(item["message_id"]) > due_by or bot.store.state(key):
+            continue
+        bot.store.set_state(key, "1")
+        when = discord.utils.snowflake_time(item["message_id"])
+        link = f"https://discord.com/channels/{guild_id}/{item['channel_id']}/{item['message_id']}"
+        quote = item["text"][:300].replace("\n", " ")
+        return (
+            f"-# 🔮 receipt due\n> {quote}\n<@{item['author_id']}>, [{when.day} {when:%b}](<{link}>). "
+            "Did it happen? Settle it with `/scores predictions`."
+        )
+    return None
+
+
+async def vibe_card(bot: PsychographBot, persona: Persona, recent: list) -> str | None:
+    """The /quick vibe card on the live chat, as text."""
+    embed = await quick.vibe(bot.jev, quick.QuickRequest(text="", speaker=persona.name, said=recent))
+    if not (embed.title or "").startswith("Vibe check ·"):
+        return None
+    return f"-# {embed.title.lower()}\n{embed.description}"
+
+
+async def free_drop(bot: PsychographBot, persona: Persona, recent: list, live: bool, guild_id: int | None, rng: random.Random):
+    """(text, kind) from the first free kind that lands, tried in random order; None if none does."""
+    kinds = ["line", "receipt"] + (["vibe"] if live else [])
+    rng.shuffle(kinds)
+    for kind in kinds:
+        if kind == "line":
+            text = await stock_line(bot, persona, recent)
+        elif kind == "receipt":
+            text = receipt(bot, guild_id)
+        else:
+            text = await vibe_card(bot, persona, recent)
+        if text:
+            return text, kind
+    return None
+
+
 def _ago(delta: timedelta) -> str:
     hours = delta.total_seconds() / 3600
     return f"{hours:.0f} hours" if hours >= 1.5 else f"{delta.total_seconds() / 60:.0f} minutes"
@@ -146,6 +221,13 @@ async def drop(bot: PsychographBot, channel: discord.TextChannel, rng: random.Ra
         log.info("Heartbeat in #%s: %s", channel.name, "no opening" if live else "no loose end")
         return None
     persona = next((p for p in personas if p.name == answers.get("who", {}).get("choice")), rng.choice(personas))
+    if rng.random() < FREE_SHARE and (free := await free_drop(bot, persona, recent, live, guild_id, rng)):
+        text, kind = free
+        message = await speak(bot, channel, persona, text)
+        if message is not None:
+            bot.store.save_message(message.id, None, channel.id, "assistant", text, answer_id=message.id, persona=persona.key)
+            log.info("Heartbeat in #%s: %s posted a %s (no model)", channel.name, persona.name, kind)
+        return message
     context = conversation.channel_transcript(
         recent, conversation.CHAT_TRANSCRIPT_HEADER, you=persona.name, limit=conversation.CHAT_TRANSCRIPT_LINE_CHARS
     )
