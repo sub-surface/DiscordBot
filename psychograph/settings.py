@@ -28,6 +28,7 @@ class Settings:
     models_file: Path = ROOT / "models.json"
     sounds_dir: Path = ROOT / "sounds"
     emotes_file: Path = ROOT / "emotes.json"
+    lore_file: Path = ROOT / "lore.json"
 
     temperature: float = 1.0
     top_p: float = 0.95

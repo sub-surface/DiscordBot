@@ -16,3 +16,6 @@ bot.log
 # Soundbank audio is built locally from a private sample library; keep it out of git.
 sounds/*.ogg
 sounds/downloads/
+
+# Local message logs for tools/persona_logs.py
+data/

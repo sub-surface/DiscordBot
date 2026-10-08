@@ -1,6 +1,10 @@
 import asyncio
+import dataclasses
+import json
+import tempfile
 import unittest
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -179,3 +183,19 @@ class SystemOneRecordTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_lore_is_handed_over_only_when_jev_is_sure_the_chat_calls_back_to_it(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            lore = Path(folder) / "lore.json"
+            lore.write_text(json.dumps({"exhibit": "Zack is the convention's newest exhibit"}), encoding="utf-8")
+            self.bot.settings = dataclasses.replace(self.bot.settings, lore_file=lore)
+            channel = FakeChannel("shitpost", [message("Leon", "zack is on display again", 2)])
+
+            self.bot.jev.ask = AsyncMock(return_value={"opening": {"noul": 0.9}, "who": choice("aura", {}), "lore": choice("exhibit", {}, 0.4)})
+            asyncio.run(heartbeat.drop(self.bot, channel))
+            self.assertIn("none", self.bot.jev.ask.await_args.args[1]["lore"]["criteria"])
+            self.assertNotIn("newest exhibit", self.backend.calls[-1][-1]["content"])
+
+            self.bot.jev.ask = AsyncMock(return_value={"opening": {"noul": 0.9}, "who": choice("aura", {}), "lore": choice("exhibit", {}, 0.9)})
+            asyncio.run(heartbeat.drop(self.bot, channel))
+            self.assertIn("newest exhibit", self.backend.calls[-1][-1]["content"])
