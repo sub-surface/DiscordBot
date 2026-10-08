@@ -42,7 +42,7 @@ While it works, the bot reacts to your message: a random server "thinking" emote
 | `/timeout member 30m` | The bot ignores that member (messages, commands and reactions) for `30m`, `2h`, `1d`… up to 7 days, or `off`. Moderators (Timeout Members or Manage Server). |
 | `/duel persona persona topic [rounds]` | Two chat personas argue a topic for 1–3 rounds (default 2), each turn one model call posted as that persona; Jev then judges who argued better and picks the line of the duel. One duel per channel at a time. |
 | `/scores debates` · `/scores predictions` · `/scores duels` | The debate leaderboard; open predictions to settle, and everyone's track record; persona duel records. |
-| `/bot model` · `/bot stats [period]` · `/bot cost` · `/bot digest` | The backend, model and sampling; reply counts, times, cold starts, tokens and top personas; the Modal workspace bill (Manage Server); a private preview of this week's digest (Manage Server). |
+| `/bot model` · `/bot stats [period]` · `/bot cost` · `/bot thinking [on/off]` · `/bot digest` | The backend, model and sampling; reply counts, times, real cold starts and boot times, tokens and top personas; this bot's Modal spend and the workspace bill (Manage Server); whether the model thinks before replying (off by default; switching needs Manage Server); a private preview of this week's digest (Manage Server). |
 | `/santi-slop day\|week\|month\|all` | **The Slop Report**: every x.com / fxtwitter / fixupx / vxtwitter post shared in #sim-city (`slop_channel`), ranked by reach (likes, reposts, views from the public FxEmbed API, cached six hours) and reactions here, the top six drawn as a card with Jev's slop meter (rated once per post and kept), a SLOPPIEST badge, a caption from Santi's lines picked by Jev, and the period's top dealer. Public, about a second, no model. |
 | `/sound [name]` · `/chess …` | The soundboard; chess against Stockfish. |
 
@@ -135,16 +135,16 @@ Clips are trimmed of leading silence, capped at 7 seconds, EQ'd (40 Hz high-pass
 `models.json` is the single list of models. Each entry drives three things:
 
 - **Dashboard presets** (`dash.mjs` → *Choose model*), including storage estimates.
-- **Deploy settings** (`modal_app.py`): server context size and the thinking template. Choosing a preset writes them to `.env`; explicit `.env` values still win.
+- **Deploy settings** (`modal_app.py`): server context size and whether the model has a thinking mode. Choosing a preset writes them to `.env`; explicit `.env` values still win. Whether a reply actually thinks is decided per request by `/bot thinking` (off by default).
 - **Chat tuning** (the bot): context mode, history depth, prompt budget, output length, temperature, top-p, and whether tool personas may run (`"tools": true`). When the configured model matches a profile, these override `.env`'s generic `LLM_TEMPERATURE` / `*_MAX_OUTPUT_TOKENS`.
 
 | | MiMo V2.6 Distill Qwen 9B | MechaEpstein 8000 |
 |---|---|---|
 | Context mode | **full** — whole persona with facts, 100-message reply chains plus the last 60 channel messages (`channel_messages`), linked posts as JSON | **compact** — short persona voice, last 6 messages clipped to ~400 chars, plain-language rules |
 | Tools | on | off |
-| Prompt budget | the server's 128k | ≤3,072 tokens |
+| Prompt budget | the server's 32k | ≤3,072 tokens |
 | Output / sampling | 2,048 tokens · temp 1.0 · top-p 0.95 | 400 tokens · temp 0.8 · top-p 0.9 |
-| Server | 128k context (the model is trained to 262k), Qwen thinking on | 40,960 context (its training length), thinking off |
+| Server | 32k context (the model is trained to 262k; ~5x the largest prompt seen), thinking per request | 40,960 context (its training length), thinking off |
 
 Every reply is also cleaned before posting: reasoning (`<think>…</think>`) and leaked chat-template tokens are removed, as is the model labelling its own name, and anything after it starts writing someone else's lines (`Leon: …`) — common with smaller models. Each user turn is stored as `Name: message`, so personas know who's talking in busy channels.
 
@@ -168,7 +168,7 @@ Add a model by adding an entry with a `match` substring of its repository/file n
    - **4 Choose model** — LM Studio models, or a `models.json` preset for Modal (redeploy after).
    - **5 Check Modal budget**, **8 Config** (backend and context), **9 Bot stats**, **t Run tests**.
 
-Local LM Studio runs on port 1234 with a 4k context by default (2k/4k in *Config*). Modal runs `llama.cpp` on one L4, scales to zero after five idle minutes (`MODAL_SCALEDOWN_SECONDS`, default 300, because replies often take over a minute) and caches model weights in a Modal Volume; at the listed $0.80/GPU-hour, an L4 costs about $0.013 per minute before CPU and memory, and the cold start and the idle tail (about $0.07 for five minutes) are billed too. `/bot cost` and the dashboard budget are displays against a $30 planning budget, not hard caps.
+Local LM Studio runs on port 1234 with a 4k context by default (2k/4k in *Config*). Modal runs `llama.cpp` on one GPU (`MODAL_GPU`, default L4; *Config* offers T4/L4/A10G), scales to zero after 60 idle seconds (`MODAL_SCALEDOWN_SECONDS`; Modal adds roughly 45 s of teardown, and the idle tail is most of the bot's GPU bill) and caches model weights in a Modal Volume, found on boot without asking the Hub. Each reply carries the worker's own state (cold or warm, boot time, GPU, idle window), so `/bot stats` shows real cold starts, and the ☁️ guess follows the deployed idle window. The dashboard shows the deployed settings drifting from `.env` in its header, and *b* benchmarks the configured GPU on a fixed workload (`modal run modal_app.py::bench`, one cold boot, about 1–2 GPU-minutes). `/bot cost` and the dashboard budget are displays against a $30 planning budget, not hard caps.
 
 On Windows, Modal 1.6 prints a harmless deprecation warning under Python 3.14; the documented Python 3.12 avoids it.
 
@@ -199,7 +199,7 @@ psychograph/
   bot.py            the bot, channel allowlist, presence
   cogs/             chat (triage and dispatch, /ask, message commands, 🔁/🗑️), quick (/quick, Tone check),
                     personas (/persona, /persona-manage), settings (/status /verbosity /reset /timeout),
-                    tools (/scores, 🔮), ops (/bot model|stats|cost|digest), fun (/duel, heartbeat, digest), soundboard, chess, help
+                    tools (/scores, 🔮), ops (/bot model|stats|cost|thinking|digest), fun (/duel, heartbeat, digest), soundboard, chess, help
 modal_app.py        the Modal llama.cpp worker
 tools/              build_soundbank.py (sounds/sources.json → clips + manifest)
 models.json         model presets and profiles

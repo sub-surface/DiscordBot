@@ -266,8 +266,12 @@ class Responder:
         try:
             async with ask.channel.typing():
                 prepared = await self.prepare(ask)
+                called = time.perf_counter()
                 completion = None if prepared.canned else await backend.complete(prepared.messages)
+                model_seconds = time.perf_counter() - called
             wall = time.perf_counter() - started
+            if completion is not None and completion.cold is not None:
+                cold = completion.cold  # the worker knows; the status reaction was a guess
             if completion is None:
                 text, summary = prepared.canned, f"System 1 (Jev) · {wall:.1f}s · no model call"
             else:
@@ -281,7 +285,7 @@ class Responder:
                     summary = f"{summary} · System 1 leaned {notes.lean} ({notes.lean_confidence:.0%})"
             sent = await self._deliver(ask, prepared, text, summary)
             if completion is not None:
-                self._record(ask, prepared, completion, wall, cold, ok=True)
+                self._record(ask, prepared, completion, wall, cold, ok=True, model_seconds=model_seconds)
         except Exception as error:
             log.exception("Response failed in channel %s", ask.channel.id)
             self._record(ask, prepared, None, time.perf_counter() - started, cold, ok=False, error=repr(error)[:300])
@@ -289,6 +293,8 @@ class Responder:
             await self._report_failure(ask)
             return []
         await unreact(ask.reply_to, status, self.bot.user)
+        if completion is not None:
+            self.bot.model_warmed()
         if prepared.sounds_on and sent:
             sound = await self._pick_sound(ask.channel.id, tagged, ask.text, text)
             if sound is not None:
@@ -430,6 +436,7 @@ class Responder:
         cold: bool,
         ok: bool,
         error: str | None = None,
+        model_seconds: float | None = None,
     ) -> None:
         backend = self.bot.backend
         persona = prepared.persona.name if prepared else (ask.persona.name if ask.persona else "?")
@@ -449,6 +456,9 @@ class Responder:
                     cold_start=cold,
                     trimmed=bool(prepared and prepared.notice and "trimmed" in prepared.notice),
                     error=error,
+                    model_seconds=round(model_seconds, 3) if model_seconds is not None else None,
+                    boot_seconds=completion.boot_seconds if completion else None,
+                    thinking=getattr(backend, "thinking", None),
                 )
             )
         except Exception:

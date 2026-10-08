@@ -32,6 +32,7 @@ async def generate(
     except Exception:
         log.exception("Model call failed for %s", persona.name)
         return None
+    bot.model_warmed()
     return conversation.clean_reply(completion.text, persona.name, speakers) or None
 
 

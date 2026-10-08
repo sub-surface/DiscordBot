@@ -49,7 +49,7 @@ class BotTests(unittest.TestCase):
         groups = {name: {c.name for c in self.bot.tree.get_command(name).commands} for name in ("quick", "bot", "scores")}
         self.assertEqual(groups, {
             "quick": {"decide", "odds", "tier", "rate", "tone", "vibe", "chatter"},
-            "bot": {"model", "stats", "cost", "digest"},
+            "bot": {"model", "stats", "cost", "thinking", "digest"},
             "scores": {"debates", "predictions", "duels"},
         })
         self.assertIn("commentary", {command.name for command in self.bot.tree.get_command("chess").commands})

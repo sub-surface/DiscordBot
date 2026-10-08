@@ -189,6 +189,43 @@ class HeartbeatTests(unittest.TestCase):
         asyncio.run(heartbeat.drop(self.bot, channel, self.free_rng()))  # already resurfaced: nothing free lands
         self.assertEqual(len(self.backend.calls), 1)
 
+    def test_without_the_model_only_free_drops_are_tried(self) -> None:
+        channel = FakeChannel("shitpost", [message("Leon", "anyway", 2)])
+        self.bot.jev.ask = AsyncMock(return_value={"opening": {"noul": 0.9}, "who": choice("aura", {}), "line": choice("none", {}, 0.9)})
+        rng = random.Random()
+        rng.random = lambda: 0.99  # would normally go straight to the model
+
+        self.assertIsNone(asyncio.run(heartbeat.drop(self.bot, channel, rng, allow_model=False)))
+        self.assertEqual(self.backend.calls, [])
+
+    def test_a_slot_due_on_a_cold_gpu_waits_for_a_warm_one(self) -> None:
+        from unittest.mock import PropertyMock, patch
+
+        from psychograph.bot import PsychographBot
+        from psychograph.cogs.fun import FunCommands
+
+        cog = FunCommands(self.bot)
+        channel = FakeChannel("shitpost", [])
+        guild = SimpleNamespace(id=10, text_channels=[channel])
+        slot = heartbeat.slots(date(2026, 10, 7), "10:shitpost", 3, 13, 1)[0]
+        self.backend.likely_cold = True
+        with patch.object(PsychographBot, "guilds", new_callable=PropertyMock, return_value=[guild]), \
+                patch.object(heartbeat, "drop", AsyncMock()) as drop:
+            asyncio.run(cog._beat(slot + timedelta(minutes=1)))
+            drop.assert_not_awaited()  # parked, not waking the GPU
+
+            asyncio.run(cog.on_model_warm())
+            drop.assert_awaited_once_with(self.bot, channel)  # someone's reply warmed it: runs now
+            asyncio.run(cog.on_model_warm())
+            self.assertEqual(drop.await_count, 1)  # once
+
+            asyncio.run(cog._beat(slot + timedelta(minutes=2)))  # same slot again: already handled
+            self.backend.likely_cold = True
+            cog._fired.clear()
+            asyncio.run(cog._beat(slot + timedelta(minutes=1)))
+            asyncio.run(cog._beat(slot + heartbeat.WARM_WAIT + timedelta(minutes=2)))  # nobody warmed it in time
+            drop.assert_awaited_with(self.bot, channel, allow_model=False)
+
 
 class DigestTests(unittest.TestCase):
     def test_digest_counts_the_week_and_skips_the_editorial_without_a_tools_model(self) -> None:

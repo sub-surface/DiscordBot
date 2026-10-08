@@ -17,10 +17,14 @@ def stats_lines(stats: dict) -> list[str]:
     lines = [
         f"Replies: {replies} ({ok} ok, {stats['failures']} failed)",
         f"Average reply time: {seconds(stats['avg_seconds'])} · warm: {seconds(stats['avg_warm_seconds'])}",
-        f"Cold starts: {stats['cold_starts']} · context trimmed: {stats['trimmed']}",
+        f"Cold starts: {stats['cold_starts']}"
+        + (f" (boot {stats['avg_boot_seconds']:.1f}s)" if stats.get("avg_boot_seconds") else "")
+        + f" · context trimmed: {stats['trimmed']}",
         f"Tokens generated: {stats['tokens']:,}"
         + (f" · {stats['avg_tokens_per_second']:.1f} tok/s" if stats["avg_tokens_per_second"] else ""),
     ]
+    if stats.get("avg_prep_seconds") is not None:
+        lines.append(f"Bot-side prep before the model (triage, history): {seconds(stats['avg_prep_seconds'])}")
     if stats["personas"]:
         lines.append("Top personas: " + ", ".join(f"{name} ({count})" for name, count in stats["personas"]))
     if stats["profiles"]:

@@ -2,7 +2,8 @@
 
 A five-minute ticker (started once the bot is ready) fires the heartbeat's slots in each configured
 channel, refreshes the status line hourly (sometimes a persona's line), and on Monday from 09:00 UTC posts the
-week's digest to the digest channel once.
+week's digest to the digest channel once. A slot that comes due while the GPU is cold waits for the next
+`model_warm` event (dispatched after every model reply) rather than waking it; see heartbeat.WARM_WAIT.
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ class FunCommands(commands.Cog):
         self.bot = bot
         self._dueling: set[int] = set()
         self._fired: set[str] = set()
+        self._waiting: dict[str, tuple[discord.TextChannel, datetime]] = {}  # slot key → (channel, give up at)
         self._rng = random.Random()
 
     async def cog_unload(self) -> None:
@@ -133,7 +135,24 @@ class FunCommands(commands.Cog):
                 for key in heartbeat.due(now, f"{guild.id}:{channel.name}", settings.heartbeat_per_day, start, end):
                     if key not in self._fired:
                         self._fired.add(key)
-                        await heartbeat.drop(self.bot, channel)
+                        if self.bot.backend.likely_cold:
+                            self._waiting[key] = (channel, now + heartbeat.WARM_WAIT)
+                        else:
+                            await heartbeat.drop(self.bot, channel)
+        # Slots that waited out WARM_WAIT on a cold GPU: free drops only.
+        for key, (channel, give_up) in list(self._waiting.items()):
+            if now >= give_up and self._waiting.pop(key, None):
+                await heartbeat.drop(self.bot, channel, allow_model=False)
+
+    @commands.Cog.listener()
+    async def on_model_warm(self) -> None:
+        """The GPU just answered someone, so it's warm: run the slots that were waiting for it."""
+        waiting, self._waiting = self._waiting, {}
+        for channel, _give_up in waiting.values():
+            try:
+                await heartbeat.drop(self.bot, channel)
+            except Exception:
+                log.exception("Heartbeat drop failed in #%s", channel.name)
 
     async def _digest(self, now: datetime) -> None:
         key = digest.week_key(now)

@@ -82,7 +82,7 @@ def help_embed(bot: PsychographBot, channel_id: int, guild_id: int | None) -> di
             "`/persona` *name*: switch this channel's persona · `/persona-manage`: create, edit or picture one",
             "`/status`: channel settings and controls · `/verbosity` · `/reset`",
             "`/timeout` *member* *30m*: I ignore them for a while (moderators)",
-            "`/bot model` · `/bot stats` · `/bot cost` · `/bot digest` · `/sound` · `/chess new`",
+            "`/bot model` · `/bot stats` · `/bot cost` · `/bot thinking` · `/bot digest` · `/sound` · `/chess new`",
         ),
         inline=False,
     )

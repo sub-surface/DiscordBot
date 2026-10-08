@@ -20,7 +20,11 @@ const pythonArgs = [...pythonPrefix, "-m", "psychograph"]
 const modal = existsSync(join(root, "venv", "Scripts", "modal.exe"))
   ? join(root, "venv", "Scripts", "modal.exe")
   : "modal"
-const monthlyBudget = 30
+const monthlyBudget = Number(readEnv("MODAL_MONTHLY_BUDGET", "30")) || 30
+const deployedPath = join(root, ".modal-deployed.json")
+// What a deploy bakes into the worker; a difference from .env means the running worker is out of date.
+const deployKeys = ["MODAL_MODEL_ID", "MODAL_MODEL_FILE", "MODAL_GPU", "MODAL_MAX_MODEL_LEN", "MODAL_SCALEDOWN_SECONDS", "MODAL_ENABLE_THINKING", "MODAL_GPU_SNAPSHOT"]
+const gpus = { T4: "16 GB, cheapest", L4: "24 GB", A10G: "24 GB, faster prefill" }
 const modelStorageGiB = 5
 // Presets live in models.json, shared with the bot (chat tuning) and modal_app.py (deploy settings).
 const modalModelPresets = JSON.parse(readFileSync(join(root, "models.json"), "utf8")).models
@@ -30,7 +34,7 @@ const modalModelPresets = JSON.parse(readFileSync(join(root, "models.json"), "ut
     id: model.modal.id,
     file: model.modal.file,
     enableThinking: String(Boolean(model.modal.thinking)),
-    context: String(model.modal.context ?? 65536),
+    context: String(model.modal.context ?? 32768),
     storageGiB: model.modal.storage_gib ?? modelStorageGiB,
     contextMode: model.chat?.context_mode ?? "full",
   }))
@@ -68,8 +72,33 @@ process.env.MODAL_MODEL_FILE ||= readEnv("MODAL_MODEL_FILE", modalModelPresets[0
 process.env.MODAL_ENABLE_THINKING ||= readEnv("MODAL_ENABLE_THINKING", "true")
 process.env.MODAL_GPU ||= readEnv("MODAL_GPU", "L4")
 process.env.LOCAL_CONTEXT_TOKENS ||= readEnv("LOCAL_CONTEXT_TOKENS", "4096")
-process.env.MODAL_MAX_MODEL_LEN ||= readEnv("MODAL_MAX_MODEL_LEN", "65536")
-process.env.MODAL_SCALEDOWN_SECONDS ||= readEnv("MODAL_SCALEDOWN_SECONDS", "300")
+process.env.MODAL_MAX_MODEL_LEN ||= readEnv("MODAL_MAX_MODEL_LEN", "32768")
+process.env.MODAL_SCALEDOWN_SECONDS ||= readEnv("MODAL_SCALEDOWN_SECONDS", "60")
+process.env.MODAL_GPU_SNAPSHOT ||= readEnv("MODAL_GPU_SNAPSHOT", "false")
+
+function deployDrift() {
+  if (!existsSync(deployedPath)) return ["no deploy recorded from this dashboard yet"]
+  try {
+    const deployed = JSON.parse(readFileSync(deployedPath, "utf8"))
+    return deployKeys
+      .filter((key) => String(deployed[key] ?? "") !== String(process.env[key] ?? ""))
+      .map((key) => `${key.replace("MODAL_", "").toLowerCase()} ${deployed[key] ?? "—"} → ${process.env[key]}`)
+  } catch {
+    return ["deploy record unreadable"]
+  }
+}
+
+function recordDeploy() {
+  const record = Object.fromEntries(deployKeys.map((key) => [key, process.env[key] ?? ""]))
+  writeFileSync(deployedPath, `${JSON.stringify({ ...record, deployedAt: new Date().toISOString() }, null, 2)}\n`, "utf8")
+}
+
+function statusLine() {
+  const preset = modalModelPresets.find((entry) => entry.id === process.env.MODAL_MODEL_ID && entry.file === process.env.MODAL_MODEL_FILE)
+  if (process.env.LLM_BACKEND === "local") return `LM Studio · ${process.env.LLM_MODEL || "no model"}`
+  const name = preset ? preset.name.split(" (")[0] : process.env.MODAL_MODEL_FILE
+  return `Modal · ${name} · ${process.env.MODAL_GPU} · ${Number(process.env.MODAL_MAX_MODEL_LEN) / 1024}k ctx · ${process.env.MODAL_SCALEDOWN_SECONDS}s idle`
+}
 
 async function ask(question) {
   const readline = createInterface({ input: process.stdin, output: process.stdout })
@@ -170,37 +199,44 @@ async function chooseModel() {
   }
 }
 
-function readModalBudget() {
-  const result = spawnSync(modal, ["billing", "summary", "--for", "this month", "--json"], {
-    cwd: root,
-    encoding: "utf8",
-    timeout: 20000,
-    windowsHide: true,
-  })
+function modalJson(args) {
+  const result = spawnSync(modal, [...args, "--json"], { cwd: root, encoding: "utf8", timeout: 30000, windowsHide: true })
   if (result.error) throw result.error
-  if (result.status !== 0) throw new Error(result.stderr.trim() || "Modal billing query failed")
-  const report = JSON.parse(result.stdout)
+  if (result.status !== 0) throw new Error(result.stderr.trim() || `modal ${args.join(" ")} failed`)
+  return JSON.parse(result.stdout)
+}
+
+function readModalBudget() {
+  const report = modalJson(["billing", "summary", "--for", "this month"])
   const spent = Number(report.metered_cost)
-  return { spent, remaining: Math.max(0, monthlyBudget - spent), billed: Number(report.billed_cost) }
+  // Per-app costs, so this bot's spend isn't confused with other apps in the workspace (full days only).
+  const start = new Date().toISOString().slice(0, 8) + "01"
+  const apps = {}
+  for (const row of modalJson(["billing", "report", "--start", start])) {
+    apps[row.description] = (apps[row.description] ?? 0) + Number(row.cost)
+  }
+  return { spent, remaining: Math.max(0, monthlyBudget - spent), billed: Number(report.billed_cost), apps }
 }
 
 function showModalBudget() {
   try {
-    const { spent, remaining, billed } = readModalBudget()
+    const { spent, remaining, billed, apps } = readModalBudget()
     const selectedPreset = modalModelPresets.find(
       (preset) => preset.id === process.env.MODAL_MODEL_ID && preset.file === process.env.MODAL_MODEL_FILE,
     )
     const storageGiB = selectedPreset?.storageGiB ?? modelStorageGiB
     console.log(`\nModal workspace usage this month: $${spent.toFixed(2)} / $${monthlyBudget.toFixed(2)}`)
     console.log(`Budget remaining: $${remaining.toFixed(2)}  ·  billed after credits: $${billed.toFixed(2)}`)
-    console.log("Usage includes every app and temporary Modal run in this workspace.")
+    console.log("\nBy app (through yesterday):")
+    Object.entries(apps)
+      .sort(([, a], [, b]) => b - a)
+      .forEach(([name, cost]) => console.log(`  ${name === "psychograph" ? mint : ""}${name.padEnd(32)} $${cost.toFixed(2)}${reset}`))
     const rates = readModalRates()
     const storage = storageGiB * Number(rates.volume_storage_gib_month_cost)
-    const l4Hourly = Number(rates.gpu_hour_cost_l4)
-    const a10Hourly = Number(rates.gpu_hour_cost_a10g)
+    const hourly = Object.keys(gpus).map((gpu) => `${gpu} $${Number(rates[`gpu_hour_cost_${gpu.toLowerCase()}`]).toFixed(2)}`)
     console.log(`\n${process.env.MODAL_MODEL_FILE}: about $${storage.toFixed(2)}/month at a ${storageGiB} GiB estimate.`)
     console.log("The shared volume may retain previously downloaded models as well.")
-    console.log(`On-demand GPU: L4 $${l4Hourly.toFixed(2)}/hour · A10G $${a10Hourly.toFixed(2)}/hour.`)
+    console.log(`On-demand GPU per hour: ${hourly.join(" · ")} (this worker: ${process.env.MODAL_GPU}).`)
     console.log(`The worker scales to zero after ${process.env.MODAL_SCALEDOWN_SECONDS} seconds idle; cold starts and this idle tail are also billed.`)
   } catch (error) {
     console.log(`\nCouldn't read Modal usage: ${error.message}`)
@@ -208,39 +244,40 @@ function showModalBudget() {
 }
 
 function readModalRates() {
-  const result = spawnSync(modal, ["billing", "rates", "--json"], {
-    cwd: root,
-    encoding: "utf8",
-    timeout: 20000,
-    windowsHide: true,
-  })
-  if (result.error) throw result.error
-  if (result.status !== 0) throw new Error(result.stderr.trim() || "Modal rate query failed")
-  return JSON.parse(result.stdout)
+  return modalJson(["billing", "rates"])
 }
 
 async function configureRuntime() {
-  console.log(`\nBackend: ${process.env.LLM_BACKEND} · local context: ${process.env.LOCAL_CONTEXT_TOKENS} tokens · Modal context: ${process.env.MODAL_MAX_MODEL_LEN} tokens`)
-  console.log("1  Use local LM Studio")
-  console.log("2  Use on-demand Modal GPU")
-  console.log("3  Local context  ·  2048 tokens")
-  console.log("4  Local context  ·  4096 tokens")
-  console.log("5  Modal context  ·  40k tokens")
-  console.log("6  Modal context  ·  64k tokens")
-  console.log("7  Modal context  ·  128k tokens")
-  const choice = (await ask("> ")).trim()
-  if (choice === "1" || choice === "2") {
-    saveEnv("LLM_BACKEND", choice === "1" ? "local" : "modal")
-    console.log("Restart the local bot for the backend change to take effect.")
-  } else if (choice === "3" || choice === "4") {
-    saveEnv("LOCAL_CONTEXT_TOKENS", choice === "3" ? "2048" : "4096")
-  } else if (choice === "5" || choice === "6" || choice === "7") {
-    const contextTokens = { "5": "40960", "6": "65536", "7": "131072" }[choice]
-    saveEnv("MODAL_MAX_MODEL_LEN", contextTokens)
-    console.log("Redeploy the Modal worker to apply its context size.")
-  } else {
-    console.log("Choose 1 through 7.")
+  console.log(`\nBackend: ${process.env.LLM_BACKEND} · local context: ${process.env.LOCAL_CONTEXT_TOKENS} tokens`)
+  console.log(`Modal: ${process.env.MODAL_GPU} · ${Number(process.env.MODAL_MAX_MODEL_LEN) / 1024}k context · ${process.env.MODAL_SCALEDOWN_SECONDS}s idle window`)
+  console.log("1  Backend        ·  local LM Studio / on-demand Modal")
+  console.log("2  Local context  ·  2048 / 4096 tokens")
+  console.log("3  Modal context  ·  16k / 32k / 64k (prompts are trimmed to fit; 32k is ~5x the largest seen)")
+  console.log(`4  Modal GPU      ·  ${Object.entries(gpus).map(([gpu, note]) => `${gpu} (${note})`).join(" / ")}`)
+  console.log("5  Idle window    ·  60 / 120 / 300 s before scaling to zero (every idle second is billed)")
+  const pick = async (label, options) => {
+    const answer = (await ask(`${label} [${options.join(" / ")}]: `)).trim()
+    const match = options.find((option) => option.toLowerCase() === answer.toLowerCase())
+    if (!match) console.log("Unchanged.")
+    return match
   }
+  const choice = (await ask("> ")).trim()
+  let value
+  if (choice === "1" && (value = await pick("Backend", ["local", "modal"]))) {
+    saveEnv("LLM_BACKEND", value)
+    console.log("Restart the local bot for the backend change to take effect.")
+  } else if (choice === "2" && (value = await pick("Tokens", ["2048", "4096"]))) {
+    saveEnv("LOCAL_CONTEXT_TOKENS", value)
+  } else if (choice === "3" && (value = await pick("Context", ["16k", "32k", "64k"]))) {
+    saveEnv("MODAL_MAX_MODEL_LEN", String(parseInt(value, 10) * 1024))
+  } else if (choice === "4" && (value = await pick("GPU", Object.keys(gpus)))) {
+    saveEnv("MODAL_GPU", value)
+  } else if (choice === "5" && (value = await pick("Seconds", ["60", "120", "300"]))) {
+    saveEnv("MODAL_SCALEDOWN_SECONDS", value)
+  } else if (!["1", "2", "3", "4", "5"].includes(choice)) {
+    console.log("Choose 1 through 5.")
+  }
+  if (["3", "4", "5"].includes(choice) && value) console.log("Redeploy the Modal worker, then restart the bot, to apply it.")
 }
 
 function tailModalLogs() {
@@ -268,7 +305,11 @@ function tailModalLogs() {
 
 while (true) {
   console.clear()
-  console.log(`${mint}(｡•̀ᴗ-)✧  PSYCHOGRAPH${reset}\n`)
+  console.log(`${mint}(｡•̀ᴗ-)✧  PSYCHOGRAPH${reset}`)
+  console.log(statusLine())
+  const drift = process.env.LLM_BACKEND === "modal" ? deployDrift() : []
+  if (drift.length) console.log(`\x1b[33m⚠ Modal worker differs from .env: ${drift.join(", ")}. Deploy (2) to apply.${reset}`)
+  console.log("")
   console.log("1  Run bot locally  ·  configured backend")
   console.log("2  Deploy Modal worker  ·  zero GPU until called")
   console.log("3  Stop Modal worker deployment")
@@ -278,6 +319,7 @@ while (true) {
   console.log("7  Follow Modal logs  ·  mirror to bot.log")
   console.log("8  Config  ·  backend and context")
   console.log("9  Bot stats  ·  replies, speed, cold starts")
+  console.log(`b  Benchmark ${process.env.MODAL_GPU}  ·  one cold boot + 4 fixed prompts, ~1-2 GPU-min`)
   console.log("t  Run tests")
   console.log("q  Quit\n")
 
@@ -290,7 +332,7 @@ while (true) {
   } else if (choice === "2") {
     const confirmation = await ask("\nDeploy the on-demand Modal inference worker? No GPU starts during deploy. Type 'deploy' to confirm: ")
     if (confirmation.toLowerCase() === "deploy") {
-      await run(modal, ["deploy", "modal_app.py"])
+      if ((await run(modal, ["deploy", "modal_app.py"])) === 0) recordDeploy()
     } else {
       console.log("\nDeployment cancelled.")
     }
@@ -307,7 +349,7 @@ while (true) {
   } else if (choice === "5") {
     showModalBudget()
   } else if (choice === "6") {
-    const confirmation = await ask("\nRun one real completion on an L4? Cold start and generation are billed. Type 'test' to confirm: ")
+    const confirmation = await ask(`\nRun one real completion on a ${process.env.MODAL_GPU}? Cold start and generation are billed. Type 'test' to confirm: `)
     if (confirmation.toLowerCase() === "test") {
       console.log("\nRunning one on-demand completion...\n")
       await run(modal, ["run", "modal_app.py"])
@@ -322,11 +364,15 @@ while (true) {
     const period = (await ask("Period (day/week/month/all) [week]: ")).toLowerCase() || "week"
     console.log("")
     await run(python, [...pythonArgs, "stats", period])
+  } else if (choice === "b") {
+    const confirmation = await ask(`\nBenchmark on a ${process.env.MODAL_GPU} as a temporary app (billed, a few cents)? Type 'bench' to confirm: `)
+    if (confirmation.toLowerCase() === "bench") await run(modal, ["run", "modal_app.py::bench"])
+    else console.log("\nBenchmark cancelled.")
   } else if (choice === "t") {
     console.log("")
     await run(python, [...pythonPrefix, "-m", "unittest", "discover", "-s", "tests", "-t", "."])
   } else {
-    console.log("\nChoose 1 through 9, t, or q.")
+    console.log("\nChoose 1 through 9, b, t, or q.")
   }
 
   await ask("\nPress Enter to return to the menu.")

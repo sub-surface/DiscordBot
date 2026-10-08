@@ -19,3 +19,4 @@ sounds/downloads/
 
 # Local message logs for tools/persona_logs.py
 data/
+.modal-deployed.json

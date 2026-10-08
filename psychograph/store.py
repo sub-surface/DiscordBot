@@ -46,6 +46,9 @@ class Generation:
     cold_start: bool = False
     trimmed: bool = False
     error: str | None = None
+    model_seconds: float | None = None
+    boot_seconds: float | None = None
+    thinking: bool | None = None
 
 
 class Store:
@@ -128,6 +131,9 @@ class Store:
                     error TEXT
                 )"""
             )
+            # model_seconds: time inside the backend call (Modal scheduling, boot, generation), so wall minus it is
+            # the bot's own prep (Jev, Discord history); boot_seconds: the worker's container-to-ready time when cold.
+            self._ensure_columns("generations", {"model_seconds": "REAL", "boot_seconds": "REAL", "thinking": "INTEGER"})
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_generations_ts ON generations(ts)")
             # Uploaded persona pictures, per server. url points at the avatar of webhook_id, a small
             # webhook kept only to host the image (Discord attachment links expire; avatars don't).
@@ -627,7 +633,9 @@ class Store:
                        COALESCE(SUM(completion_tokens), 0) AS tokens,
                        AVG(CASE WHEN ok THEN wall_seconds END) AS avg_seconds,
                        AVG(CASE WHEN ok AND NOT cold_start THEN wall_seconds END) AS avg_warm_seconds,
-                       AVG(tokens_per_second) AS avg_tokens_per_second
+                       AVG(tokens_per_second) AS avg_tokens_per_second,
+                       AVG(CASE WHEN ok THEN wall_seconds - model_seconds END) AS avg_prep_seconds,
+                       AVG(boot_seconds) AS avg_boot_seconds
                 FROM generations WHERE {scope}""",
             params,
         ).fetchone()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass
 from typing import Protocol
@@ -12,6 +13,8 @@ from openai import AsyncOpenAI
 from .profiles import DEFAULT_PROFILE, ModelProfile, load_profiles, profile_for
 from .settings import Settings
 
+log = logging.getLogger("psychograph.backends")
+
 
 @dataclass(frozen=True)
 class Completion:
@@ -19,6 +22,8 @@ class Completion:
     tokens: int | None = None             # None when the backend didn't report a count
     seconds: float | None = None          # backend-measured generation time, if reported
     tokens_per_second: float | None = None
+    cold: bool | None = None              # the worker's own word on whether this request booted it (Modal)
+    boot_seconds: float | None = None     # container start → model server ready, on a cold request
 
 
 class Backend(Protocol):
@@ -31,6 +36,7 @@ class Backend(Protocol):
     temperature: float
     top_p: float
     in_flight: int
+    thinking: bool       # use the model's thinking mode, where it has one (/bot thinking)
 
     @property
     def likely_cold(self) -> bool: ...
@@ -54,6 +60,7 @@ class _Backend:
         self.temperature = profile.temperature if profile.temperature is not None else settings.temperature
         self.top_p = profile.top_p if profile.top_p is not None else settings.top_p
         self.in_flight = 0
+        self.thinking = False
         self._last_finished: float | None = None
 
     @property
@@ -97,7 +104,7 @@ class LocalBackend(_Backend):
                 temperature=self.temperature,
                 top_p=self.top_p,
                 max_tokens=self.output_limit,
-                extra_body={"top_k": self.settings.top_k},
+                extra_body={"top_k": self.settings.top_k, "chat_template_kwargs": {"enable_thinking": self.thinking}},
             )
         text = (result.choices[0].message.content or "").strip() if result.choices else ""
         tokens = result.usage.completion_tokens if result.usage else None
@@ -123,13 +130,16 @@ class ModalBackend(_Backend):
             settings.modal_max_output_tokens,
             profile,
         )
+        self._worker = None  # the deployed class, looked up once
+        self._legacy_worker = False  # deployed before `options` existed; redeploy to get thinking control
+        self.scaledown_seconds = settings.modal_scaledown_seconds  # replaced by what the worker reports
 
     @property
     def likely_cold(self) -> bool:
         """True when the worker has probably scaled to zero, so the next reply waits for a cold start."""
         if self.in_flight:
             return False
-        idle_limit = self.settings.modal_scaledown_seconds + 5
+        idle_limit = self.scaledown_seconds + 5
         return self._last_finished is None or time.monotonic() - self._last_finished > idle_limit
 
     async def _complete(self, messages: list[dict]) -> Completion:
@@ -137,20 +147,36 @@ class ModalBackend(_Backend):
         # policy to one without subprocess support, which must not affect the bot's loop.
         import modal
 
-        worker = modal.Cls.from_name(self.settings.modal_app, self.settings.modal_class)
-        result = await worker().complete.remote.aio(
-            messages, self.label, self.output_limit, self.temperature, self.top_p
-        )
+        if self._worker is None:
+            self._worker = modal.Cls.from_name(self.settings.modal_app, self.settings.modal_class)()
+        args = (messages, self.label, self.output_limit, self.temperature, self.top_p)
+        options = {"thinking": self.thinking, "top_k": self.settings.top_k}
+        if self._legacy_worker:
+            result = await self._worker.complete.remote.aio(*args)
+        else:
+            try:
+                result = await self._worker.complete.remote.aio(*args, options)
+            except TypeError:
+                log.warning("The deployed Modal worker predates per-request options; redeploy it. Retrying without them.")
+                self._legacy_worker = True
+                result = await self._worker.complete.remote.aio(*args)
         if not isinstance(result, dict):
             return Completion(text=str(result or "").strip())
         seconds = result.get("eval_seconds") or result.get("generation_seconds")
         tokens = result.get("completion_tokens")
         rate = result.get("tokens_per_second")
+        worker, boot = result.get("worker"), result.get("boot")
+        if isinstance(worker, dict) and isinstance(worker.get("scaledown"), int):
+            self.scaledown_seconds = worker["scaledown"]
+        boot_seconds = boot.get("container_seconds") if isinstance(boot, dict) else None
+        cold = result.get("cold")
         return Completion(
             text=str(result.get("text") or "").strip(),
             tokens=tokens if isinstance(tokens, int) else None,
             seconds=float(seconds) if isinstance(seconds, (int, float)) else None,
             tokens_per_second=float(rate) if isinstance(rate, (int, float)) else None,
+            cold=cold if isinstance(cold, bool) else None,
+            boot_seconds=float(boot_seconds) if isinstance(boot_seconds, (int, float)) else None,
         )
 
 

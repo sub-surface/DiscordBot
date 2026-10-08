@@ -20,6 +20,10 @@ Two drops in three skip the model (and the GPU) and try a free one first, in ran
   a vibe check     the /quick vibe card on the live chat, posted by the persona
 
 Only if none of them lands does the persona write something.
+
+A drop never wakes a cold GPU on its own: when the Modal worker has scaled to zero, the slot waits (up to
+WARM_WAIT) for someone's reply to warm it, then runs while it's warm; if nobody does, it tries only the free
+kinds. A written drop on a warm GPU costs seconds; on a cold one, a boot plus the idle tail.
 """
 
 from __future__ import annotations
@@ -53,6 +57,7 @@ NO_LORE = "none"
 FREE_SHARE = 2 / 3                     # drops that try the free kinds before the model
 STOCK_LINE = 0.8                       # Jev's confidence needed to post a `says` line as is
 RECEIPT_AGE = timedelta(days=7)        # a prediction this old is due for its receipt
+WARM_WAIT = timedelta(minutes=45)      # a slot due on a cold GPU waits this long for a warm one
 
 # What a drop-in does, picked at random so a day's drops don't all read the same.
 SHAPES = (
@@ -181,8 +186,11 @@ def _ago(delta: timedelta) -> str:
     return f"{hours:.0f} hours" if hours >= 1.5 else f"{delta.total_seconds() / 60:.0f} minutes"
 
 
-async def drop(bot: PsychographBot, channel: discord.TextChannel, rng: random.Random | None = None) -> discord.Message | None:
-    """One heartbeat in `channel`: a drop-in on live chat, or a pick-up of a loose end once it's gone quiet."""
+async def drop(
+    bot: PsychographBot, channel: discord.TextChannel, rng: random.Random | None = None, allow_model: bool = True
+) -> discord.Message | None:
+    """One heartbeat in `channel`: a drop-in on live chat, or a pick-up of a loose end once it's gone quiet.
+    Without `allow_model` (the GPU stayed cold) only the free kinds are tried."""
     rng = rng or random.Random()
     guild_id = channel.guild.id if getattr(channel, "guild", None) else None
     personas = candidates(bot, guild_id)
@@ -221,13 +229,16 @@ async def drop(bot: PsychographBot, channel: discord.TextChannel, rng: random.Ra
         log.info("Heartbeat in #%s: %s", channel.name, "no opening" if live else "no loose end")
         return None
     persona = next((p for p in personas if p.name == answers.get("who", {}).get("choice")), rng.choice(personas))
-    if rng.random() < FREE_SHARE and (free := await free_drop(bot, persona, recent, live, guild_id, rng)):
+    if (not allow_model or rng.random() < FREE_SHARE) and (free := await free_drop(bot, persona, recent, live, guild_id, rng)):
         text, kind = free
         message = await speak(bot, channel, persona, text)
         if message is not None:
             bot.store.save_message(message.id, None, channel.id, "assistant", text, answer_id=message.id, persona=persona.key)
             log.info("Heartbeat in #%s: %s posted a %s (no model)", channel.name, persona.name, kind)
         return message
+    if not allow_model:
+        log.info("Heartbeat in #%s: the GPU stayed cold and no free drop fit", channel.name)
+        return None
     context = conversation.channel_transcript(
         recent, conversation.CHAT_TRANSCRIPT_HEADER, you=persona.name, limit=conversation.CHAT_TRANSCRIPT_LINE_CHARS
     )

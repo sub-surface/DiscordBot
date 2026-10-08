@@ -65,6 +65,8 @@ class PsychographBot(commands.Bot):
         self.settings = settings
         self.store = store or Store(settings.db_path)
         self.backend = backend or make_backend(settings)
+        # Thinking mode is off unless /bot thinking turned it on: faster replies, less GPU time.
+        self.backend.thinking = self.store.state("thinking") == "on"
         self.personas = PersonaRegistry(self.store, settings.personas_dir, settings.default_persona)
         # Chess commentary only ever uses local LM Studio, whichever backend chat uses.
         commentator = self.backend if isinstance(self.backend, LocalBackend) else LocalBackend(settings)
@@ -75,6 +77,11 @@ class PsychographBot(commands.Bot):
         self.responder = Responder(self)
         self.ambient = Ambient(self)
         self._legacy_guild_commands_cleared = False
+
+    def model_warmed(self) -> None:
+        """The model just answered, so a Modal GPU is up for its idle window: let waiting work use it."""
+        if self.is_ready():
+            self.dispatch("model_warm")
 
     async def load_cogs(self) -> None:
         from .cogs import chat, chess, fun, help, ops, personas, quick, settings, slop, soundboard, tools
