@@ -38,12 +38,12 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self.store.channel_settings(1), ChannelSettings())
 
         self.store.update_channel(1, verbosity="detailed")
-        self.store.update_channel(1, chess_commentary=True, persona_reactions=True)
+        self.store.update_channel(1, chess_commentary=True, reactions=False)
         self.store.update_channel(1, persona="charlie")
 
         self.assertEqual(
             self.store.channel_settings(1),
-            ChannelSettings(persona="charlie", verbosity="detailed", chess_commentary=True, persona_reactions=True),
+            ChannelSettings(persona="charlie", verbosity="detailed", chess_commentary=True, reactions=False),
         )
         self.assertEqual(self.store.channel_settings(2), ChannelSettings())
 
@@ -128,6 +128,32 @@ class StoreTests(unittest.TestCase):
         self.assertAlmostEqual(stats["avg_warm_seconds"], 1.0)
         self.assertEqual(stats["personas"][0], ("charlie", 2))
         self.assertEqual(self.store.generation_stats()["replies"], 4)
+
+    def test_debate_table_counts_wins_losses_and_splits_and_replaces_rereviews(self) -> None:
+        self.store.record_debate(1, 10, 1, 5, [5, 6])
+        self.store.record_debate(2, 10, 1, None, [6, 5])   # same people, same channel: replaces review 1
+        self.store.record_debate(3, 10, 2, 6, [6, 7])
+        self.store.record_debate(4, 11, 3, 7, [6, 7])      # another server
+
+        self.assertEqual(self.store.debate_table(10), [
+            {"user_id": 6, "wins": 1, "losses": 0, "splits": 1},
+            {"user_id": 5, "wins": 0, "losses": 0, "splits": 1},
+            {"user_id": 7, "wins": 0, "losses": 1, "splits": 0},
+        ])
+        self.store.delete_debates([3])
+        self.assertEqual(len(self.store.debate_table(10)), 2)
+
+    def test_predictions_are_logged_once_and_settled_once(self) -> None:
+        self.assertTrue(self.store.add_prediction(9, 10, 1, 5, " btc 200k by march ", 6))
+        self.assertFalse(self.store.add_prediction(9, 10, 1, 5, "again", 7))
+        self.assertEqual([item["text"] for item in self.store.predictions(10)], ["btc 200k by march"])
+
+        self.assertTrue(self.store.resolve_prediction(9, "wrong", 6))
+        self.assertFalse(self.store.resolve_prediction(9, "right", 6))
+        self.assertEqual(self.store.predictions(10), [])
+        self.assertEqual(self.store.prediction_table(10), [{"author_id": 5, "right": 0, "wrong": 1, "open": 0}])
+        with self.assertRaises(ValueError):
+            self.store.resolve_prediction(9, "maybe", 6)
 
     def test_chess_moves_round_trip(self) -> None:
         self.assertIsNone(self.store.chess_moves(1))

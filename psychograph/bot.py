@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import logging
+import random
+import time
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
+from .ambient import Ambient
 from .backends import Backend, LocalBackend, make_backend
 from .chess_game import ChessService, Stockfish
+from .jev import Jev
 from .personas import PersonaRegistry
 from .responder import Responder
 from .settings import Settings, load_settings
@@ -16,6 +20,8 @@ from .store import Store
 from .webhooks import PersonaWebhooks
 
 log = logging.getLogger("psychograph")
+
+QUOTE_SHARE = 0.5   # how often the hourly status line is a persona's line rather than the model
 
 
 def is_allowed_channel(channel: object | None, allowed: tuple[str, ...]) -> bool:
@@ -29,7 +35,17 @@ class ChannelScopedCommandTree(app_commands.CommandTree):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         allowed = self.client.settings.allowed_channels
         if is_allowed_channel(interaction.channel, allowed):
-            return True
+            user = getattr(interaction, "user", None)
+            until = self.client.ignoring(getattr(interaction, "guild_id", None), user.id) if user else None
+            if until is None:
+                return True
+            if interaction.type is discord.InteractionType.autocomplete:
+                await interaction.response.autocomplete([])
+            else:
+                await interaction.response.send_message(
+                    f"You're timed out from me until <t:{int(until)}:t>.", ephemeral=True
+                )
+            return False
         if interaction.guild is None:
             return False
         if interaction.type is discord.InteractionType.autocomplete:
@@ -55,16 +71,27 @@ class PsychographBot(commands.Bot):
         self.chess = ChessService(self.store, Stockfish(settings), commentator)
         self.webhooks = PersonaWebhooks(self)
         self.soundbank = Soundbank(settings.sounds_dir)
+        self.jev = Jev(settings.jev_api_key, settings.jev_model)
         self.responder = Responder(self)
+        self.ambient = Ambient(self)
         self._legacy_guild_commands_cleared = False
 
     async def load_cogs(self) -> None:
-        from .cogs import chat, chess, help, ops, personas, settings, soundboard
+        from .cogs import chat, chess, fun, help, ops, personas, quick, settings, soundboard, tools
 
-        for module in (chat, chess, help, ops, personas, settings, soundboard):
+        for module in (chat, chess, fun, help, ops, personas, quick, settings, soundboard, tools):
             await module.setup(self)
 
-    def presence(self) -> discord.CustomActivity:
+    def ignoring(self, guild_id: int | None, user_id: int) -> float | None:
+        """When a /timeout on this member ends, if they're timed out from the bot right now."""
+        return self.store.timeout_until(guild_id, user_id, time.time())
+
+    def presence(self, rng: random.Random | None = None) -> discord.CustomActivity:
+        """The status line: the model, or now and then (`rng` given) a real line from one of the personas."""
+        lines = [(p.name, line) for p in self.personas.available(None) for line in p.says if len(line) <= 100]
+        if rng is not None and lines and rng.random() < QUOTE_SHARE:
+            name, line = rng.choice(lines)
+            return discord.CustomActivity(f"{name}: “{line}”")
         profile = self.backend.profile
         model = profile.name.split(" (")[0] if profile.key != "default" else self.backend.label.rsplit("/", 1)[-1]
         return discord.CustomActivity(f"🧠 {model} · {profile.context_mode} context · /help")
@@ -97,6 +124,7 @@ class PsychographBot(commands.Bot):
 
     async def close(self) -> None:
         await self.backend.close()
+        await self.jev.close()
         if self.chess.commentator is not None and self.chess.commentator is not self.backend:
             await self.chess.commentator.close()
         self.chess.engine.close()

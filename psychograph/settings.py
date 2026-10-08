@@ -27,6 +27,7 @@ class Settings:
     personas_dir: Path = ROOT / "personas"
     models_file: Path = ROOT / "models.json"
     sounds_dir: Path = ROOT / "sounds"
+    emotes_file: Path = ROOT / "emotes.json"
 
     temperature: float = 1.0
     top_p: float = 0.95
@@ -42,14 +43,29 @@ class Settings:
     modal_class: str = "MimoWorker"
     modal_model_id: str = "wepiqx/MiMo-V2.6-Distill-Qwen-9B-GGUF-MERNIK"
     modal_model_file: str = "MiMo-V2.6-Distill-Qwen-9B-MERNIK-5100.gguf"
-    modal_context_tokens: int = 65536
+    modal_context_tokens: int = 131072
     modal_max_output_tokens: int = 2048
-    modal_scaledown_seconds: int = 60
+    modal_scaledown_seconds: int = 300
 
     stockfish_path: str = ""
     stockfish_threads: int = 2
     stockfish_hash_mb: int = 128
     stockfish_move_time: float = 0.5
+
+    # The heartbeat: a few unprompted drops a day in these channels, inside a UTC hour window ("13-1" is
+    # 13:00 to 01:00); and the Monday digest, posted to digest_channel.
+    heartbeat_channels: tuple[str, ...] = ("shitpost", "leg-day")
+    heartbeat_per_day: int = 3
+    heartbeat_hours: str = "13-1"
+    digest_channel: str = "newsroom"
+    # Ambient reactions: the channel's persona reacting with a fitting server emote (emotes.json) to a message it
+    # wasn't sent, at most once per channel per cooldown. /status turns it off per channel.
+    ambient_reactions: bool = True
+    ambient_cooldown_minutes: int = 20
+
+    # Jev (TypeSafe's System One model): fast typed decisions — tool routing, debate notes, verdict reading.
+    jev_api_key: str = ""
+    jev_model: str = "jev-latest"
 
 
 # Settings field -> environment variable, for fields configurable from `.env`.
@@ -74,6 +90,8 @@ ENV_NAMES = {
     "stockfish_threads": "STOCKFISH_THREADS",
     "stockfish_hash_mb": "STOCKFISH_HASH_MB",
     "stockfish_move_time": "STOCKFISH_MOVE_TIME",
+    "jev_api_key": "JEV_API_KEY",
+    "jev_model": "JEV_MODEL",
 }
 
 

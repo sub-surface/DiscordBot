@@ -1,9 +1,13 @@
 """Personas: built-in files, the chess mode, and per-server custom personas.
 
 A persona is addressed by a key stored in channel settings:
-  "<file stem>"   built-in persona from personas/*.json (structured) or *.md (plain prompt)
+  "<file stem>"   built-in persona from personas/<group>/*.json (structured) or *.md (plain prompt)
   "chess"         the chess mode — moves are played by Stockfish, not the language model
   "custom:<id>"   a custom persona from the store, visible only in its own server
+
+Built-ins are grouped by folder: chatters (people from the server), characters, and tools
+(personas with a job, which may read the channel's recent messages). Chess counts as a tool;
+custom personas form their own group.
 """
 
 from __future__ import annotations
@@ -23,6 +27,9 @@ DEFAULT_REACTION = "✨"
 CUSTOM_REACTION = "🌱"
 CUSTOM_PROMPT_LIMIT = 3500
 COMPACT_PROMPT_LIMIT = 900
+GROUPS = ("chatters", "characters", "tools")
+CUSTOM_GROUP = "custom"
+GROUP_ICONS = {"chatters": "💬", "characters": "🎭", "tools": "🛠️", CUSTOM_GROUP: "🌱"}
 AVATAR_URL = "https://api.dicebear.com/9.x/notionists/png?seed={seed}&size=256&backgroundColor=d1f4e0,c0aede,ffdfbf,b6e3f4"
 
 
@@ -37,12 +44,25 @@ class Persona:
     guild_id: int | None = None
     compact_prompt: str = ""        # a short voice for weaker models; derived when not given
     avatar_url: str = ""
+    group: str = "characters"
+    channel_context: int = 0        # read this many recent channel messages as a transcript (tools)
+    about: str = ""                 # one line on what it's for, shown when choosing it
+    triggers: tuple[str, ...] = ()  # a mention starting with one of these calls this tool from any channel
+    intent: str = ""                # what a request for this tool looks like, for Jev's router
+    system1: str = ""               # a Jev pass run before the model ("debate")
+    emotes: tuple[str, ...] = ()    # favourite server emotes, which Jev leans toward when it reacts
+    says: tuple[str, ...] = ()      # real lines (the persona format), also shown now and then as the bot's status
 
     def __post_init__(self) -> None:
         if not self.compact_prompt:
             object.__setattr__(self, "compact_prompt", compact_text(self.prompt))
         if not self.avatar_url:
             object.__setattr__(self, "avatar_url", AVATAR_URL.format(seed=quote(self.name)))
+
+    @property
+    def label(self) -> str:
+        """The name with its group's icon, for pickers."""
+        return f"{GROUP_ICONS.get(self.group, '')} {self.name}".strip()
 
     @property
     def custom_id(self) -> int | None:
@@ -86,7 +106,10 @@ def split_compact_section(markdown: str) -> tuple[str, str]:
     return markdown[: match.start()].strip(), markdown[match.end():].strip()
 
 
-CHESS = Persona(key=CHESS_KEY, name="chess", prompt="", reaction="♟️", mode="chess")
+CHESS = Persona(
+    key=CHESS_KEY, name="chess", prompt="", reaction="♟️", mode="chess", group="tools",
+    about="Play Stockfish: /chess new, then mention me with moves.",
+)
 
 
 def display_name(key: str) -> str:
@@ -99,9 +122,42 @@ def can_manage(persona: Persona, user_id: int, manage_guild: bool) -> bool:
     return persona.custom_id is not None and (user_id == persona.creator_id or manage_guild)
 
 
+# The persona format, in prompt order: field → heading. Every field is short; `says` is real lines, which
+# carry a voice in fewer tokens than any description of it. Older files use `facts` and `state` instead.
+SECTIONS = (
+    ("register", "How you write"),
+    ("says", "Lines you'd say"),
+    ("believes", "What you believe"),
+    ("moves", "How you play it"),
+    ("people", "People"),
+    ("bits", "Running bits"),
+    ("never", "Never"),
+)
+
+
+def _section(heading: str, value: object, quoted: bool = False) -> str:
+    if isinstance(value, str):
+        return f"{heading}: {value.strip()}"
+    if isinstance(value, dict):
+        return f"{heading}:\n" + "\n".join(f"- {key}: {item}" for key, item in value.items())
+    return f"{heading}:\n" + "\n".join(f'- "{item}"' if quoted else f"- {item}" for item in value)
+
+
+def compact_structured(data: dict) -> str:
+    """A short voice for weaker models: who they are, how they write, and a few of their lines."""
+    if data.get("compact"):
+        return str(data["compact"])
+    parts = [str(data.get("voice", "")).strip(), str(data.get("register", "")).strip()]
+    says = [str(line) for line in data.get("says") or ()][:4]
+    if says:
+        parts.append("Lines like: " + " / ".join(f'"{line}"' for line in says))
+    return compact_text("\n\n".join(part for part in parts if part))
+
+
 def render_structured(data: dict) -> str:
-    """Flatten a structured persona into a system prompt: voice, then facts and state."""
+    """Flatten a structured persona into a system prompt: voice, the format's sections, then any facts and state."""
     parts = [str(data.get("voice", "")).strip()]
+    parts.extend(_section(heading, data[key], quoted=key == "says") for key, heading in SECTIONS if data.get(key))
     facts = data.get("facts") or {}
     if facts:
         lines = []
@@ -126,6 +182,7 @@ def _custom(row: dict) -> Persona:
         reaction=CUSTOM_REACTION,
         creator_id=row["creator_id"],
         guild_id=row["guild_id"],
+        group=CUSTOM_GROUP,
     )
 
 
@@ -135,27 +192,49 @@ class PersonaRegistry:
         self.personas_dir = personas_dir
         self.default_key = default_key
 
+    def _files(self) -> dict[str, Path]:
+        """Built-in persona files by key (file stem): personas/<group>/, or loose in personas/ as characters."""
+        files: dict[str, Path] = {}
+        for folder in (*(self.personas_dir / group for group in GROUPS), self.personas_dir):
+            # .json wins over .md for the same stem, and an earlier group over a later one.
+            for path in sorted(folder.glob("*"), key=lambda path: path.suffix != ".json"):
+                if path.suffix in (".json", ".md") and path.is_file():
+                    files.setdefault(path.stem, path)
+        return files
+
+    def _group_of(self, path: Path) -> str:
+        return path.parent.name if path.parent.name in GROUPS and path.parent.parent == self.personas_dir else "characters"
+
     def builtin_keys(self) -> list[str]:
-        stems = {path.stem for pattern in ("*.json", "*.md") for path in self.personas_dir.glob(pattern)}
-        return sorted(stems)
+        """Grouped (chatters, characters, tools), then alphabetical."""
+        files = self._files()
+        return sorted(files, key=lambda key: (GROUPS.index(self._group_of(files[key])), key.casefold()))
 
     def _builtin(self, key: str) -> Persona | None:
-        structured = self.personas_dir / f"{key}.json"
-        if structured.is_file():
-            data = json.loads(structured.read_text(encoding="utf-8"))
+        path = self._files().get(key)
+        if path is None:
+            return None
+        group = self._group_of(path)
+        if path.suffix == ".json":
+            data = json.loads(path.read_text(encoding="utf-8"))
             return Persona(
                 key=key,
                 name=display_name(key),
                 prompt=render_structured(data),
                 reaction=data.get("reaction", DEFAULT_REACTION),
-                compact_prompt=data.get("compact") or compact_text(str(data.get("voice", ""))),
+                compact_prompt=compact_structured(data),
                 avatar_url=data.get("avatar", ""),
+                group=group,
+                channel_context=int(data.get("channel_context", 0)),
+                about=str(data.get("about", "")),
+                triggers=tuple(str(item).casefold() for item in data.get("triggers", ())),
+                intent=str(data.get("intent", "")),
+                system1=str(data.get("system1", "")),
+                emotes=tuple(str(item) for item in data.get("emotes", ())),
+                says=tuple(str(item) for item in data.get("says", ())),
             )
-        plain = self.personas_dir / f"{key}.md"
-        if plain.is_file():
-            prompt, compact = split_compact_section(plain.read_text(encoding="utf-8"))
-            return Persona(key=key, name=display_name(key), prompt=prompt, compact_prompt=compact)
-        return None
+        prompt, compact = split_compact_section(path.read_text(encoding="utf-8"))
+        return Persona(key=key, name=display_name(key), prompt=prompt, compact_prompt=compact, group=group)
 
     def _dressed(self, persona: Persona, guild_id: int | None, avatars: dict[str, str] | None = None) -> Persona:
         """Apply this server's uploaded avatar for the persona, if any."""
@@ -175,7 +254,7 @@ class PersonaRegistry:
                 return None
             row = self.store.custom_persona(persona_id, guild_id) if guild_id is not None else None
             return self._dressed(_custom(row), guild_id) if row else None
-        if "/" in key or "\\" in key or key not in self.builtin_keys():
+        if "/" in key or "\\" in key:
             return None
         persona = self._builtin(key)
         return self._dressed(persona, guild_id) if persona else None
@@ -208,9 +287,27 @@ class PersonaRegistry:
             personas = [self._dressed(persona, guild_id, avatars) for persona in personas]
         return personas
 
+    def tools(self) -> list[Persona]:
+        """Built-in tool personas that talk (chess plays moves instead)."""
+        return [persona for key in self.builtin_keys() if (persona := self._builtin(key)) and persona.group == "tools"]
+
+    def tool_for(self, text: str) -> Persona | None:
+        """The tool a message calls by name ("judge: is it wrong to…", "who won?"), longest trigger first."""
+        text = text.strip().casefold()
+        calls = [(trigger, tool) for tool in self.tools() for trigger in (*tool.triggers, tool.name.casefold())]
+        for trigger, tool in sorted(calls, key=lambda call: -len(call[0])):
+            if re.match(rf"{re.escape(trigger)}(?!\w)", text):
+                return tool
+        return None
+
     def search(self, guild_id: int | None, query: str, custom_only: bool = False) -> list[Persona]:
-        wanted = query.casefold()
-        return [persona for persona in self.available(guild_id, custom_only) if wanted in persona.name.casefold()]
+        """Personas whose name, or group ("tools", "chatters"…), contains `query`."""
+        wanted = query.strip().casefold()
+        return [
+            persona
+            for persona in self.available(guild_id, custom_only)
+            if wanted in persona.name.casefold() or wanted in persona.group
+        ]
 
     def is_reserved(self, name: str) -> bool:
         reserved = {CHESS_KEY, *self.builtin_keys(), *(display_name(key) for key in self.builtin_keys())}

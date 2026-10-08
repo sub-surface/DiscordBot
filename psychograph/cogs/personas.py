@@ -1,4 +1,4 @@
-"""/persona, custom persona management, and persona profile pictures."""
+"""/persona, and /persona-manage: create, edit, delete and picture personas from one command."""
 
 from __future__ import annotations
 
@@ -10,16 +10,12 @@ from discord.ext import commands
 
 from ..bot import PsychographBot
 from ..personas import CUSTOM_PROMPT_LIMIT, Persona, can_manage
-from ..render import EMBED_COLOR
+from ..render import CHOICE_LIMIT, EMBED_COLOR, PERSONA_LEGEND, persona_choices
 from ..webhooks import AVATAR_MAX_BYTES, AVATAR_TYPES, member_named, square_png
 
 
 def _manage_guild(interaction: discord.Interaction) -> bool:
     return bool(interaction.permissions and interaction.permissions.manage_guild)
-
-
-def _choices(personas: list[Persona]) -> list[app_commands.Choice[str]]:
-    return [app_commands.Choice(name=persona.name[:100], value=persona.key) for persona in personas][:25]
 
 
 async def _is_member_name(guild: discord.Guild, name: str) -> bool:
@@ -123,123 +119,155 @@ class PersonaDeleteView(discord.ui.View):
         await interaction.response.edit_message(content="Deletion cancelled.", view=None)
 
 
+NEW_PERSONA = "__new__"
+
+
+def _may_picture(persona: Persona, interaction: discord.Interaction) -> bool:
+    """Custom personas: their creator or a server manager. Built-ins are shared, so server managers only."""
+    if persona.custom_id is not None:
+        return can_manage(persona, interaction.user.id, _manage_guild(interaction))
+    return _manage_guild(interaction)
+
+
+def manage_embed(bot: PsychographBot, persona: Persona, guild_id: int) -> discord.Embed:
+    uploaded = bot.store.persona_avatar(guild_id, persona.key) is not None
+    summary = persona.about or (persona.prompt[:300] + ("…" if len(persona.prompt) > 300 else ""))
+    embed = discord.Embed(title=f"{persona.label}", description=summary or None, color=EMBED_COLOR)
+    embed.set_thumbnail(url=persona.avatar_url)
+    embed.add_field(name="Group", value=persona.group.title(), inline=True)
+    embed.add_field(name="Picture", value="Uploaded" if uploaded else "Generated", inline=True)
+    if persona.creator_id:
+        embed.add_field(name="Creator", value=f"<@{persona.creator_id}>", inline=True)
+    embed.set_footer(text=f"New picture: /persona-manage name:{persona.name} image:<file>")
+    return embed
+
+
+class ManageView(discord.ui.View):
+    """Edit, delete and picture controls for one persona; only the ones this person may use are shown."""
+
+    def __init__(self, bot: PsychographBot, persona: Persona, interaction: discord.Interaction) -> None:
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.persona = persona
+        self.requester_id = interaction.user.id
+        editable = can_manage(persona, interaction.user.id, _manage_guild(interaction))
+        uploaded = bot.store.persona_avatar(interaction.guild_id, persona.key) is not None
+        if not editable:
+            self.remove_item(self.edit_button)
+            self.remove_item(self.delete_button)
+        if not (uploaded and _may_picture(persona, interaction)):
+            self.remove_item(self.reset_button)
+
+    @property
+    def empty(self) -> bool:
+        return not self.children
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.requester_id:
+            return True
+        await interaction.response.send_message("Run `/persona-manage` to open your own controls.", ephemeral=True)
+        return False
+
+    @discord.ui.button(label="Edit", emoji="✏️", style=discord.ButtonStyle.primary)
+    async def edit_button(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await interaction.response.send_modal(CustomPersonaModal(self.bot, self.persona))
+
+    @discord.ui.button(label="Delete", emoji="🗑️", style=discord.ButtonStyle.danger)
+    async def delete_button(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        self.stop()
+        await interaction.response.edit_message(
+            content=f"Delete **{self.persona.name}**? Channels using it will return to **{self.bot.personas.default_key}**.",
+            embed=None,
+            view=PersonaDeleteView(self.bot, self.persona, interaction.user.id),
+        )
+
+    @discord.ui.button(label="Reset picture", emoji="🖼️", style=discord.ButtonStyle.secondary)
+    async def reset_button(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        self.stop()
+        guild_id = interaction.guild_id
+        existing = self.bot.store.persona_avatar(guild_id, self.persona.key)
+        self.bot.store.delete_persona_avatar(guild_id, self.persona.key)
+        await interaction.response.edit_message(
+            content=f"**{self.persona.name}** is back to its generated avatar.", embed=None, view=None
+        )
+        if existing:
+            await self.bot.webhooks.drop_avatar(existing["webhook_id"])
+
+
 class PersonaCommands(commands.Cog):
     def __init__(self, bot: PsychographBot) -> None:
         self.bot = bot
 
-    def _managed_persona(self, interaction: discord.Interaction, key: str) -> tuple[Persona | None, str | None]:
-        """The custom persona `key` names, or an error message if it's missing or not the user's to manage."""
-        persona = self.bot.personas.find(interaction.guild_id, key) if interaction.guild_id else None
-        if persona is None or persona.custom_id is None:
-            return None, "Choose a custom persona from this server."
-        if not can_manage(persona, interaction.user.id, _manage_guild(interaction)):
-            return None, "Only its creator or a server manager can change this persona."
-        return persona, None
-
-    async def _custom_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
-        return _choices(self.bot.personas.search(interaction.guild_id, current, custom_only=True))
-
-    @app_commands.command(name="persona", description="Show or choose this channel's persona")
-    @app_commands.describe(name="Leave blank to view the current persona and available choices")
-    async def persona(self, interaction: discord.Interaction, name: str | None = None) -> None:
-        registry = self.bot.personas
-        if name is None:
-            current = registry.for_channel(interaction.channel_id, interaction.guild_id)
-            available = ", ".join(persona.name for persona in registry.available(interaction.guild_id))
-            await interaction.response.send_message(
-                f"Current persona: **{current.name}**\nAvailable: {available}", ephemeral=True
-            )
-            return
-        persona = registry.find(interaction.guild_id, name)
+    # `name` is required so Discord opens the persona list as soon as /persona is picked
+    # (an optional one needs another Tab). The list marks the current persona; /status shows it too.
+    @app_commands.command(name="persona", description="Choose this channel's persona")
+    @app_commands.describe(name=PERSONA_LEGEND)
+    async def persona(self, interaction: discord.Interaction, name: str) -> None:
+        persona = self.bot.personas.find(interaction.guild_id, name)
         if persona is None:
             await interaction.response.send_message("That persona isn't available in this server.", ephemeral=True)
             return
         self.bot.store.update_channel(interaction.channel_id, persona=persona.key)
-        await interaction.response.send_message(f"This channel now uses **{persona.name}**.", ephemeral=True)
+        notes = [persona.about] if persona.about else []
+        if not self.bot.responder.can_run(persona):
+            notes.append(self.bot.responder.tools_unavailable(persona))
+        details = "".join(f"\n-# {note}" for note in notes)
+        await interaction.response.send_message(f"This channel now uses **{persona.label}**.{details}", ephemeral=True)
 
     @persona.autocomplete("name")
     async def persona_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
-        return _choices(self.bot.personas.search(interaction.guild_id, current))
+        registry = self.bot.personas
+        selected = registry.for_channel(interaction.channel_id, interaction.guild_id).key
+        return persona_choices(registry.search(interaction.guild_id, current), selected)
 
-    @app_commands.command(name="persona-create", description="Create and select a custom server persona")
-    async def persona_create(self, interaction: discord.Interaction) -> None:
-        if interaction.guild_id is None:
-            await interaction.response.send_message("Custom personas can only be created in a server.", ephemeral=True)
-            return
-        await interaction.response.send_modal(CustomPersonaModal(self.bot))
-
-    @app_commands.command(name="persona-edit", description="Edit a custom persona you own")
-    @app_commands.describe(name="Custom persona to edit")
-    async def persona_edit(self, interaction: discord.Interaction, name: str) -> None:
-        persona, error = self._managed_persona(interaction, name)
-        if error:
-            await interaction.response.send_message(error, ephemeral=True)
-            return
-        await interaction.response.send_modal(CustomPersonaModal(self.bot, persona))
-
-    @app_commands.command(name="persona-delete", description="Delete a custom persona you own")
-    @app_commands.describe(name="Custom persona to delete")
-    async def persona_delete(self, interaction: discord.Interaction, name: str) -> None:
-        persona, error = self._managed_persona(interaction, name)
-        if error:
-            await interaction.response.send_message(error, ephemeral=True)
-            return
-        await interaction.response.send_message(
-            f"Delete **{persona.name}**? Channels using it will return to **{self.bot.personas.default_key}**.",
-            view=PersonaDeleteView(self.bot, persona, interaction.user.id),
-            ephemeral=True,
-        )
-
-    persona_edit.autocomplete("name")(_custom_autocomplete)
-    persona_delete.autocomplete("name")(_custom_autocomplete)
-
-    @app_commands.command(name="persona-avatar", description="Give a persona its own profile picture, or reset it")
+    @app_commands.command(name="persona-manage", description="Create a persona, or edit, delete or picture one")
     @app_commands.describe(
-        name="The persona",
-        image="PNG, JPG, GIF or WebP up to 8 MB — cropped to a square",
-        reset="Go back to the generated avatar",
+        name="＋ New persona, or one to manage",
+        image="A new profile picture: PNG, JPG, GIF or WebP up to 8 MB, cropped to a square",
     )
-    async def persona_avatar(
-        self,
-        interaction: discord.Interaction,
-        name: str,
-        image: discord.Attachment | None = None,
-        reset: bool = False,
-    ) -> None:
+    async def persona_manage(self, interaction: discord.Interaction, name: str, image: discord.Attachment | None = None) -> None:
         send = interaction.response.send_message
         guild = interaction.guild
-        persona = self.bot.personas.find(guild.id, name) if guild else None
+        if guild is None:
+            await send("Personas can only be managed in a server.", ephemeral=True)
+            return
+        if name == NEW_PERSONA:
+            await interaction.response.send_modal(CustomPersonaModal(self.bot))
+            return
+        persona = self.bot.personas.find(guild.id, name)
         if persona is None or persona.mode != "chat":
-            await send("Choose a chat persona from this server.", ephemeral=True)
+            await send("Choose a persona from the list.", ephemeral=True)
             return
-        # Custom personas: their creator or a server manager. Built-ins are shared, so server managers only.
-        allowed = (
-            can_manage(persona, interaction.user.id, _manage_guild(interaction))
-            if persona.custom_id is not None
-            else _manage_guild(interaction)
+        if image is not None:
+            await self._set_picture(interaction, persona, image)
+            return
+        view = ManageView(self.bot, persona, interaction)
+        await send(
+            embed=manage_embed(self.bot, persona, guild.id),
+            view=None if view.empty else view,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
         )
-        existing = self.bot.store.persona_avatar(guild.id, persona.key)
 
-        if image is None and not reset:
-            embed = discord.Embed(
-                title=persona.name,
-                description="Uploaded picture." if existing else "Generated avatar — upload an `image` to change it.",
-                color=EMBED_COLOR,
-            )
-            embed.set_thumbnail(url=persona.avatar_url)
-            await send(embed=embed, ephemeral=True)
-            return
-        if not allowed:
+    @persona_manage.autocomplete("name")
+    async def persona_manage_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        """＋ New persona first, then the personas this person can change: their own customs, or all for managers."""
+        manager = _manage_guild(interaction)
+        personas = [
+            persona
+            for persona in self.bot.personas.search(interaction.guild_id, current)
+            if persona.mode == "chat" and (manager or can_manage(persona, interaction.user.id, manager))
+        ]
+        new = [app_commands.Choice(name="＋ New persona", value=NEW_PERSONA)] if "new".startswith(current.strip().casefold()[:3]) else []
+        return (new + persona_choices(personas))[:CHOICE_LIMIT]
+
+    async def _set_picture(self, interaction: discord.Interaction, persona: Persona, image: discord.Attachment) -> None:
+        send = interaction.response.send_message
+        guild = interaction.guild
+        if not _may_picture(persona, interaction):
             who = "its creator or a server manager" if persona.custom_id is not None else "a server manager"
             await send(f"Only {who} can change **{persona.name}**'s picture.", ephemeral=True)
             return
-        if reset:
-            self.bot.store.delete_persona_avatar(guild.id, persona.key)
-            await send(f"**{persona.name}** is back to its generated avatar.", ephemeral=True)
-            if existing:
-                await self.bot.webhooks.drop_avatar(existing["webhook_id"])
-            return
-
         content_type = (image.content_type or "").split(";")[0].strip().lower()
         if content_type not in AVATAR_TYPES or image.size > AVATAR_MAX_BYTES:
             await send("Use a PNG, JPG, GIF or WebP image up to 8 MB.", ephemeral=True)
@@ -248,6 +276,7 @@ class PersonaCommands(commands.Cog):
             await send("I need the **Manage Webhooks** permission in this channel to keep pictures.", ephemeral=True)
             return
 
+        existing = self.bot.store.persona_avatar(guild.id, persona.key)
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             png = await asyncio.to_thread(square_png, await image.read())
@@ -271,10 +300,6 @@ class PersonaCommands(commands.Cog):
         )
         embed.set_thumbnail(url=url)
         await interaction.followup.send(embed=embed, ephemeral=True)
-
-    @persona_avatar.autocomplete("name")
-    async def persona_avatar_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
-        return _choices([p for p in self.bot.personas.search(interaction.guild_id, current) if p.mode == "chat"])
 
 
 async def setup(bot: PsychographBot) -> None:

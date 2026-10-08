@@ -1,6 +1,7 @@
 import unittest
 
 from psychograph.personas import (
+    render_structured,
     CHESS,
     COMPACT_PROMPT_LIMIT,
     CUSTOM_REACTION,
@@ -25,7 +26,8 @@ class PersonaTests(unittest.TestCase):
         mochi = self.registry.get(None, "mochi")
 
         self.assertIn("Charlie", charlie.prompt)
-        self.assertIn("[Facts]", charlie.prompt)
+        self.assertIn("Lines you'd say:\n", charlie.prompt)
+        self.assertIn('- "skill issue"', charlie.prompt)
         self.assertIn("Mochi", mochi.prompt)
         self.assertIn("A Quigley", self.registry.builtin_keys())
 
@@ -34,10 +36,18 @@ class PersonaTests(unittest.TestCase):
 
         self.assertTrue(mochi.compact_prompt.startswith("You are Mochi"))
         self.assertNotIn("## Compact", mochi.prompt)
-        self.assertIn("Voice:", charlie.compact_prompt)
+        self.assertIn('Lines like: "', charlie.compact_prompt)
         self.assertTrue(charlie.compact_prompt.startswith("You are Charlie"))
         for key in self.registry.builtin_keys():
             self.assertLessEqual(len(self.registry.get(None, key).compact_prompt), COMPACT_PROMPT_LIMIT, key)
+
+    def test_both_persona_formats_render(self) -> None:
+        new = render_structured({"voice": "You are X.", "register": "Terse.", "says": ["no"], "people": {"Hugh": "rival"}})
+        old = render_structured({"voice": "You are Y.", "facts": {"likes": ["tea"]}, "state": {"mood": "calm"}})
+
+        self.assertEqual(new, 'You are X.\n\nHow you write: Terse.\n\nLines you\'d say:\n- "no"\n\nPeople:\n- Hugh: rival')
+        self.assertIn("[Facts]\n  likes: tea", old)
+        self.assertIn("[Current state]\n  mood: calm", old)
 
     def test_compact_text_falls_back_to_sentences(self) -> None:
         text = "One sentence here. " * 100
@@ -123,6 +133,23 @@ class PersonaTests(unittest.TestCase):
         self.assertIn("Campfire", names)
         self.assertNotIn("Elsewhere", names)
         self.assertEqual([persona.name for persona in self.registry.search(10, "camp", custom_only=True)], ["Campfire"])
+
+    def test_personas_are_grouped_by_folder_in_order(self) -> None:
+        self.store.create_custom_persona(10, 100, "Campfire", "Speak gently.")
+        groups = [persona.group for persona in self.registry.available(10)]
+
+        self.assertEqual(groups, sorted(groups, key=["chatters", "characters", "tools", "custom"].index))
+        self.assertEqual(self.registry.get(None, "zack").label, "💬 zack")
+        self.assertEqual(self.registry.get(None, "mochi").group, "characters")
+        self.assertEqual(CHESS.group, "tools")
+        self.assertEqual({p.key for p in self.registry.search(None, "tools")}, {"chess", "debate_review", "judge", "minutes", "steelman"})
+
+    def test_tool_personas_read_the_channel(self) -> None:
+        review, judge = self.registry.get(None, "debate_review"), self.registry.get(None, "judge")
+
+        self.assertEqual((review.channel_context, judge.channel_context), (60, 25))
+        self.assertTrue(review.about and judge.about)
+        self.assertEqual(self.registry.get(None, "zack").channel_context, 0)
 
     def test_management_is_limited_to_creator_or_server_managers(self) -> None:
         persona = self.registry.get(10, f"custom:{self.store.create_custom_persona(10, 100, 'Campfire', 'Hi.')}")

@@ -59,7 +59,8 @@ class FakeDiscord:
 
     async def _post(self, content=None, embed=None, **_kwargs) -> SimpleNamespace:
         message = SimpleNamespace(
-            id=next(self.ids), content=content, embed=embed, add_reaction=AsyncMock(), remove_reaction=AsyncMock()
+            id=(message_id := next(self.ids)), content=content, embed=embed, add_reaction=AsyncMock(),
+            remove_reaction=AsyncMock(), jump_url=f"https://discord.com/channels/10/1/{message_id}",
         )
         self.posted.append(message)
         return message

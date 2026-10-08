@@ -1,8 +1,9 @@
 """A soundbank of short meme clips the personas can play, sent as Discord voice messages.
 
 Models choose a sound by writing a tag such as ``[sound: vine_boom]`` (the tag is removed from
-the text). When a model doesn't, a keyword match on the conversation may pick one, at a
-lower rate and with a per-channel cooldown so channels don't turn into a soundboard.
+the text). When a model doesn't, Jev judges whether the exchange suits a sound and which one
+(see jev.py); without Jev, a keyword match may pick one at a lower rate. Untagged sounds share a
+long per-channel cooldown so channels don't turn into a soundboard.
 
 Clips are built by tools/build_soundbank.py into sounds/ (Ogg Opus plus a manifest with each
 clip's duration and waveform). The audio files are git-ignored: they come from a local sample
@@ -149,17 +150,24 @@ class Soundbank:
         ]
         return self.rng.choice(matches) if matches else None
 
+    def ready(self, channel_id: int, tagged: bool) -> bool:
+        """Whether a sound may play: a tagged one needs a short gap since the last, an untagged pick a long one."""
+        since = time.monotonic() - self._last_played.get(channel_id, -1e9)
+        return since >= (TAG_COOLDOWN_SECONDS if tagged else KEYWORD_COOLDOWN_SECONDS)
+
+    def played(self, channel_id: int) -> None:
+        self._last_played[channel_id] = time.monotonic()
+
     def choose(self, channel_id: int, tagged: Sound | None, *texts: str) -> Sound | None:
         """Apply cooldowns: a tagged sound needs a short gap; a keyword match is rarer and needs a long one."""
-        since = time.monotonic() - self._last_played.get(channel_id, -1e9)
         if tagged is not None:
-            sound = tagged if since >= TAG_COOLDOWN_SECONDS else None
-        elif since >= KEYWORD_COOLDOWN_SECONDS and self.rng.random() < KEYWORD_CHANCE:
+            sound = tagged if self.ready(channel_id, tagged=True) else None
+        elif self.ready(channel_id, tagged=False) and self.rng.random() < KEYWORD_CHANCE:
             sound = self.by_keyword(*texts)
         else:
             sound = None
         if sound is not None:
-            self._last_played[channel_id] = time.monotonic()
+            self.played(channel_id)
         return sound
 
 

@@ -86,17 +86,21 @@ class PersonaAvatarCommandTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.bot.store.close()
 
-    def run_command(self, name: str, user_id: int, manage_guild: bool, image=None, reset=False):
-        interaction = SimpleNamespace(
+    def interaction(self, user_id: int, manage_guild: bool) -> SimpleNamespace:
+        response = SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock(), send_modal=AsyncMock(), edit_message=AsyncMock())
+        return SimpleNamespace(
             guild=SimpleNamespace(id=10),
             guild_id=10,
             channel=SimpleNamespace(),
             user=SimpleNamespace(id=user_id),
             permissions=SimpleNamespace(manage_guild=manage_guild),
-            response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock()),
+            response=response,
             followup=SimpleNamespace(send=AsyncMock()),
         )
-        asyncio.run(self.cog.persona_avatar.callback(self.cog, interaction, name, image, reset))
+
+    def run_command(self, name: str, user_id: int, manage_guild: bool, image=None):
+        interaction = self.interaction(user_id, manage_guild)
+        asyncio.run(self.cog.persona_manage.callback(self.cog, interaction, name, image))
         return interaction
 
     def attachment(self, data: bytes, content_type: str = "image/png") -> SimpleNamespace:
@@ -141,11 +145,39 @@ class PersonaAvatarCommandTests(unittest.TestCase):
     def test_reset_returns_to_the_generated_avatar_and_frees_the_webhook(self) -> None:
         self.run_command("charlie", 1, True, self.attachment(png(64, 64)))
 
-        self.run_command("charlie", 1, True, reset=True)
+        async def open_panel_and_reset() -> None:
+            opened = self.interaction(1, True)
+            await self.cog.persona_manage.callback(self.cog, opened, "charlie", None)
+            view = opened.response.send_message.await_args.kwargs["view"]
+            self.assertNotIn(view.edit_button, view.children)  # built-ins can't be edited
+            await view.reset_button.callback(self.interaction(1, True))
+
+        asyncio.run(open_panel_and_reset())
 
         self.assertIsNone(self.bot.store.persona_avatar(10, "charlie"))
         self.bot.webhooks.drop_avatar.assert_awaited_once_with(4242)
         self.assertIn("dicebear", self.bot.personas.get(10, "charlie").avatar_url)
+
+
+    def test_manage_panel_offers_only_what_the_person_may_do(self) -> None:
+        persona_id = self.bot.store.create_custom_persona(10, 100, "Campfire", "Speak gently.")
+
+        async def panels() -> tuple:
+            mine, theirs = self.interaction(100, False), self.interaction(101, False)
+            await self.cog.persona_manage.callback(self.cog, mine, f"custom:{persona_id}", None)
+            await self.cog.persona_manage.callback(self.cog, theirs, f"custom:{persona_id}", None)
+            return mine.response.send_message.await_args.kwargs, theirs.response.send_message.await_args.kwargs
+
+        mine, theirs = asyncio.run(panels())
+
+        self.assertEqual({item.label for item in mine["view"].children}, {"Edit", "Delete"})
+        self.assertIsNone(theirs["view"])
+        self.assertEqual(mine["embed"].title, "🌱 Campfire")
+
+    def test_new_persona_opens_the_create_form(self) -> None:
+        interaction = self.run_command("__new__", 100, False)
+
+        interaction.response.send_modal.assert_awaited_once()
 
 
 if __name__ == "__main__":

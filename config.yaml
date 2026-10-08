@@ -5,3 +5,18 @@ allowed_channels:
   - little-st-james
   - shitpost
   - games
+  - zack’s-padded-room
+  - zack’s-waiting-room
+  - leg-day
+# A few unprompted persona drops a day (drop-ins on live chat, openers when quiet), in a UTC window.
+heartbeat_channels:
+  - shitpost
+  - leg-day
+heartbeat_per_day: 3
+heartbeat_hours: "13-1"
+# The Monday digest of the week, posted at 09:00 UTC by the minutes persona.
+digest_channel: newsroom
+# Now and then the channel's persona reacts to a message it wasn't sent with a fitting server emote (emotes.json):
+# one per channel per cooldown. /status turns it off per channel.
+ambient_reactions: true
+ambient_cooldown_minutes: 20

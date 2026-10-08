@@ -1,4 +1,4 @@
-"""SQLite persistence: reply-chain history, channel settings, custom personas, chess games."""
+"""SQLite persistence: reply-chain history, channel settings, custom personas, chess games, debates, predictions."""
 
 from __future__ import annotations
 
@@ -7,6 +7,8 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 
 VERBOSITY_LEVELS = ("concise", "balanced", "detailed")
+PREDICTION_OUTCOMES = ("right", "wrong", "void")
+REVIEW_REPLACES_HOURS = 6   # a new review of the same people in a channel replaces one this recent
 
 
 @dataclass(frozen=True)
@@ -14,7 +16,7 @@ class ChannelSettings:
     persona: str | None = None
     verbosity: str = "balanced"
     chess_commentary: bool = False
-    persona_reactions: bool = False
+    reactions: bool = True           # the persona may react to messages with server emotes
     persona_voice: bool = False      # speak through a webhook as the persona
     sounds: bool = False             # let personas play soundbank clips
 
@@ -23,7 +25,7 @@ SETTING_COLUMNS = {
     "persona": "TEXT",
     "verbosity": "TEXT",
     "chess_commentary": "INTEGER NOT NULL DEFAULT 0",
-    "persona_reactions": "INTEGER NOT NULL DEFAULT 0",
+    "reactions": "INTEGER NOT NULL DEFAULT 1",
     "persona_voice": "INTEGER NOT NULL DEFAULT 0",
     "sounds": "INTEGER NOT NULL DEFAULT 0",
 }
@@ -71,11 +73,18 @@ class Store:
                 )"""
             )
             # For assistant rows: reply_to is the user message answered, requester_id who asked for the
-            # answer (not always that message's author), and answer_id the answer's first message. One
-            # request can have several answers (e.g. via "Ask persona"); controls act on just one.
+            # answer (not always that message's author), answer_id the answer's first message, and persona
+            # the key of the persona that gave it (replies continue with it). One request can have several
+            # answers (e.g. via "Ask persona"); controls act on just one.
             self._ensure_columns(
                 "messages",
-                {"author_id": "INTEGER", "reply_to": "INTEGER", "requester_id": "INTEGER", "answer_id": "INTEGER"},
+                {
+                    "author_id": "INTEGER",
+                    "reply_to": "INTEGER",
+                    "requester_id": "INTEGER",
+                    "answer_id": "INTEGER",
+                    "persona": "TEXT",
+                },
             )
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_channel ON messages(channel_id, discord_msg_id)")
             self._conn.execute("CREATE TABLE IF NOT EXISTS channel_settings (channel_id INTEGER PRIMARY KEY)")
@@ -133,6 +142,57 @@ class Store:
                     PRIMARY KEY (guild_id, persona)
                 )"""
             )
+            # Debate reviews for the leaderboard: one row per review answer. participants are the
+            # members who argued, as sorted space-separated ids; winner_id is None for a split decision.
+            self._conn.execute(
+                """CREATE TABLE IF NOT EXISTS debates (
+                    answer_id INTEGER PRIMARY KEY,
+                    guild_id INTEGER,
+                    channel_id INTEGER NOT NULL,
+                    winner_id INTEGER,
+                    participants TEXT NOT NULL,
+                    ts DATETIME DEFAULT CURRENT_TIMESTAMP
+                )"""
+            )
+            # Persona duels: winner is a persona key, or None for a draw.
+            self._conn.execute(
+                """CREATE TABLE IF NOT EXISTS duels (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guild_id INTEGER,
+                    channel_id INTEGER NOT NULL,
+                    persona_a TEXT NOT NULL,
+                    persona_b TEXT NOT NULL,
+                    winner TEXT,
+                    topic TEXT NOT NULL,
+                    ts DATETIME DEFAULT CURRENT_TIMESTAMP
+                )"""
+            )
+            # Small bits of bot state that must survive restarts (e.g. which week's digest went out).
+            self._conn.execute("CREATE TABLE IF NOT EXISTS bot_state (key TEXT PRIMARY KEY, value TEXT)")
+            # Members the bot ignores until a moment (unix seconds), per server: /timeout.
+            self._conn.execute(
+                """CREATE TABLE IF NOT EXISTS timeouts (
+                    guild_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    until REAL NOT NULL,
+                    set_by INTEGER,
+                    PRIMARY KEY (guild_id, user_id)
+                )"""
+            )
+            self._conn.execute(
+                """CREATE TABLE IF NOT EXISTS predictions (
+                    message_id INTEGER PRIMARY KEY,
+                    guild_id INTEGER,
+                    channel_id INTEGER NOT NULL,
+                    author_id INTEGER NOT NULL,
+                    text TEXT NOT NULL,
+                    logged_by INTEGER,
+                    status TEXT NOT NULL DEFAULT 'open',
+                    resolved_by INTEGER,
+                    ts DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    resolved_ts DATETIME
+                )"""
+            )
 
     def _ensure_columns(self, table: str, columns: dict[str, str]) -> None:
         existing = {row["name"] for row in self._conn.execute(f"PRAGMA table_info({table})")}
@@ -153,18 +213,29 @@ class Store:
         reply_to: int | None = None,
         requester_id: int | None = None,
         answer_id: int | None = None,
+        persona: str | None = None,
     ) -> None:
         with self._conn:
             self._conn.execute(
                 "INSERT OR REPLACE INTO messages (discord_msg_id, parent_msg_id, channel_id, author_id, role, "
-                "content, reply_to, requester_id, answer_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (discord_msg_id, parent_msg_id, channel_id, author_id, role, content, reply_to, requester_id, answer_id),
+                "content, reply_to, requester_id, answer_id, persona) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    discord_msg_id, parent_msg_id, channel_id, author_id, role, content,
+                    reply_to, requester_id, answer_id, persona,
+                ),
+            )
+
+    def append_to_message(self, discord_msg_id: int, text: str) -> None:
+        """Add context to a stored message (the System 1 notes behind an answer, say)."""
+        with self._conn:
+            self._conn.execute(
+                "UPDATE messages SET content = content || ? WHERE discord_msg_id = ?", (text, discord_msg_id)
             )
 
     def message(self, discord_msg_id: int) -> dict | None:
         row = self._conn.execute(
             "SELECT discord_msg_id, parent_msg_id, channel_id, author_id, role, content, reply_to, requester_id, "
-            "answer_id FROM messages WHERE discord_msg_id = ?",
+            "answer_id, persona FROM messages WHERE discord_msg_id = ?",
             (discord_msg_id,),
         ).fetchone()
         return dict(row) if row else None
@@ -199,15 +270,15 @@ class Store:
     def message_chain(self, start_msg_id: int, channel_id: int, limit: int = 40) -> list[dict]:
         """The reply chain ending at `start_msg_id`, oldest first, within one channel."""
         rows = self._conn.execute(
-            """WITH RECURSIVE chain(discord_msg_id, parent_msg_id, author_id, role, content, depth) AS (
-                SELECT discord_msg_id, parent_msg_id, author_id, role, content, 0
+            """WITH RECURSIVE chain(discord_msg_id, parent_msg_id, author_id, role, content, persona, depth) AS (
+                SELECT discord_msg_id, parent_msg_id, author_id, role, content, persona, 0
                 FROM messages WHERE discord_msg_id = ? AND channel_id = ?
                 UNION ALL
-                SELECT m.discord_msg_id, m.parent_msg_id, m.author_id, m.role, m.content, c.depth + 1
+                SELECT m.discord_msg_id, m.parent_msg_id, m.author_id, m.role, m.content, m.persona, c.depth + 1
                 FROM messages m JOIN chain c ON m.discord_msg_id = c.parent_msg_id
                 WHERE m.channel_id = ? AND c.depth < ?
             )
-            SELECT discord_msg_id, author_id, role, content FROM chain ORDER BY depth DESC""",
+            SELECT discord_msg_id, author_id, role, content, persona FROM chain ORDER BY depth DESC""",
             (start_msg_id, channel_id, channel_id, limit),
         ).fetchall()
         return [dict(row) for row in rows]
@@ -352,6 +423,168 @@ class Store:
     def delete_chess_game(self, channel_id: int) -> None:
         with self._conn:
             self._conn.execute("DELETE FROM chess_games WHERE channel_id = ?", (channel_id,))
+
+    # ── Debates ─────────────────────────────────────────────────────
+
+    def record_debate(
+        self, answer_id: int, guild_id: int | None, channel_id: int, winner_id: int | None, participants: list[int]
+    ) -> None:
+        """Record a review's result. A recent review of the same people in the channel is replaced, not added to."""
+        people = " ".join(str(user_id) for user_id in sorted(set(participants)))
+        with self._conn:
+            self._conn.execute(
+                "DELETE FROM debates WHERE channel_id = ? AND participants = ? AND ts >= datetime('now', ?)",
+                (channel_id, people, f"-{REVIEW_REPLACES_HOURS} hours"),
+            )
+            self._conn.execute(
+                "INSERT OR REPLACE INTO debates (answer_id, guild_id, channel_id, winner_id, participants) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (answer_id, guild_id, channel_id, winner_id, people),
+            )
+
+    def delete_debates(self, answer_ids: list[int]) -> None:
+        with self._conn:
+            self._conn.executemany("DELETE FROM debates WHERE answer_id = ?", [(i,) for i in answer_ids])
+
+    def debate_table(self, guild_id: int) -> list[dict]:
+        """Per member: wins, losses and splits, best record first."""
+        table: dict[int, dict] = {}
+        for row in self._conn.execute("SELECT winner_id, participants FROM debates WHERE guild_id = ?", (guild_id,)):
+            for user_id in map(int, row["participants"].split()):
+                record = table.setdefault(user_id, {"user_id": user_id, "wins": 0, "losses": 0, "splits": 0})
+                if row["winner_id"] is None:
+                    record["splits"] += 1
+                else:
+                    record["wins" if row["winner_id"] == user_id else "losses"] += 1
+        return sorted(table.values(), key=lambda r: (-r["wins"], r["losses"], -r["splits"], r["user_id"]))
+
+    # ── Duels ───────────────────────────────────────────────────────
+
+    def record_duel(
+        self, guild_id: int | None, channel_id: int, persona_a: str, persona_b: str, winner: str | None, topic: str
+    ) -> None:
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO duels (guild_id, channel_id, persona_a, persona_b, winner, topic) VALUES (?, ?, ?, ?, ?, ?)",
+                (guild_id, channel_id, persona_a, persona_b, winner, topic.strip()),
+            )
+
+    def duel_table(self, guild_id: int, since: str = "-100 years") -> list[dict]:
+        """Per persona key: wins, losses and draws, best record first."""
+        table: dict[str, dict] = {}
+        rows = self._conn.execute(
+            "SELECT persona_a, persona_b, winner FROM duels WHERE guild_id = ? AND ts >= datetime('now', ?)",
+            (guild_id, since),
+        )
+        for row in rows:
+            for persona in (row["persona_a"], row["persona_b"]):
+                record = table.setdefault(persona, {"persona": persona, "wins": 0, "losses": 0, "draws": 0})
+                if row["winner"] is None:
+                    record["draws"] += 1
+                else:
+                    record["wins" if row["winner"] == persona else "losses"] += 1
+        return sorted(table.values(), key=lambda r: (-r["wins"], r["losses"], -r["draws"], r["persona"]))
+
+    # ── Bot state ───────────────────────────────────────────────────
+
+    def state(self, key: str) -> str | None:
+        row = self._conn.execute("SELECT value FROM bot_state WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+
+    def set_state(self, key: str, value: str) -> None:
+        with self._conn:
+            self._conn.execute("INSERT OR REPLACE INTO bot_state (key, value) VALUES (?, ?)", (key, value))
+
+    def week_counts(self, guild_id: int) -> dict:
+        """What the scoreboards gained in the last seven days, for the Monday digest."""
+        since = ("-7 days",)
+        return {
+            "debates": self._conn.execute(
+                "SELECT COUNT(*) FROM debates WHERE guild_id = ? AND ts >= datetime('now', ?)", (guild_id, *since)
+            ).fetchone()[0],
+            "predictions_logged": self._conn.execute(
+                "SELECT COUNT(*) FROM predictions WHERE guild_id = ? AND ts >= datetime('now', ?)", (guild_id, *since)
+            ).fetchone()[0],
+            "predictions_settled": self._conn.execute(
+                "SELECT COUNT(*) FROM predictions WHERE guild_id = ? AND resolved_ts >= datetime('now', ?)",
+                (guild_id, *since),
+            ).fetchone()[0],
+            "duels": self._conn.execute(
+                "SELECT COUNT(*) FROM duels WHERE guild_id = ? AND ts >= datetime('now', ?)", (guild_id, *since)
+            ).fetchone()[0],
+        }
+
+    # ── Timeouts ────────────────────────────────────────────────────
+
+    def set_timeout(self, guild_id: int, user_id: int, until: float, set_by: int) -> None:
+        with self._conn:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO timeouts (guild_id, user_id, until, set_by) VALUES (?, ?, ?, ?)",
+                (guild_id, user_id, until, set_by),
+            )
+
+    def clear_timeout(self, guild_id: int, user_id: int) -> bool:
+        with self._conn:
+            cursor = self._conn.execute("DELETE FROM timeouts WHERE guild_id = ? AND user_id = ?", (guild_id, user_id))
+        return cursor.rowcount > 0
+
+    def timeout_until(self, guild_id: int | None, user_id: int, now: float) -> float | None:
+        """When the member's timeout ends, if it hasn't yet."""
+        if guild_id is None:
+            return None
+        row = self._conn.execute(
+            "SELECT until FROM timeouts WHERE guild_id = ? AND user_id = ? AND until > ?", (guild_id, user_id, now)
+        ).fetchone()
+        return row["until"] if row else None
+
+    # ── Predictions ─────────────────────────────────────────────────
+
+    def add_prediction(
+        self, message_id: int, guild_id: int | None, channel_id: int, author_id: int, text: str, logged_by: int
+    ) -> bool:
+        """False if that message is already logged."""
+        with self._conn:
+            cursor = self._conn.execute(
+                "INSERT OR IGNORE INTO predictions (message_id, guild_id, channel_id, author_id, text, logged_by) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (message_id, guild_id, channel_id, author_id, text.strip(), logged_by),
+            )
+        return cursor.rowcount > 0
+
+    def prediction(self, message_id: int) -> dict | None:
+        row = self._conn.execute("SELECT * FROM predictions WHERE message_id = ?", (message_id,)).fetchone()
+        return dict(row) if row else None
+
+    def predictions(self, guild_id: int, status: str = "open", limit: int = 25) -> list[dict]:
+        """Newest first."""
+        rows = self._conn.execute(
+            "SELECT * FROM predictions WHERE guild_id = ? AND status = ? ORDER BY message_id DESC LIMIT ?",
+            (guild_id, status, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def resolve_prediction(self, message_id: int, outcome: str, resolved_by: int) -> bool:
+        """Settle an open prediction as right, wrong or void; False if it's gone or already settled."""
+        if outcome not in PREDICTION_OUTCOMES:
+            raise ValueError(f"Unknown outcome {outcome!r}")
+        with self._conn:
+            cursor = self._conn.execute(
+                "UPDATE predictions SET status = ?, resolved_by = ?, resolved_ts = CURRENT_TIMESTAMP "
+                "WHERE message_id = ? AND status = 'open'",
+                (outcome, resolved_by, message_id),
+            )
+        return cursor.rowcount > 0
+
+    def prediction_table(self, guild_id: int) -> list[dict]:
+        """Per member: right, wrong and open predictions, most right first."""
+        rows = self._conn.execute(
+            """SELECT author_id, SUM(status = 'right') AS "right", SUM(status = 'wrong') AS wrong,
+                      SUM(status = 'open') AS open
+               FROM predictions WHERE guild_id = ? GROUP BY author_id
+               ORDER BY "right" DESC, wrong ASC, open DESC, author_id""",
+            (guild_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     # ── Generation log ──────────────────────────────────────────────
 

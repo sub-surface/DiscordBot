@@ -69,7 +69,7 @@ process.env.MODAL_ENABLE_THINKING ||= readEnv("MODAL_ENABLE_THINKING", "true")
 process.env.MODAL_GPU ||= readEnv("MODAL_GPU", "L4")
 process.env.LOCAL_CONTEXT_TOKENS ||= readEnv("LOCAL_CONTEXT_TOKENS", "4096")
 process.env.MODAL_MAX_MODEL_LEN ||= readEnv("MODAL_MAX_MODEL_LEN", "65536")
-process.env.MODAL_SCALEDOWN_SECONDS ||= readEnv("MODAL_SCALEDOWN_SECONDS", "60")
+process.env.MODAL_SCALEDOWN_SECONDS ||= readEnv("MODAL_SCALEDOWN_SECONDS", "300")
 
 async function ask(question) {
   const readline = createInterface({ input: process.stdin, output: process.stdout })

@@ -1,14 +1,36 @@
-"""Per-channel settings: /status (with controls), /verbosity, /reactions, /reset."""
+"""Per-channel settings: /status (with controls for everything), /verbosity, /reset, and /timeout."""
 
 from __future__ import annotations
+
+import re
+import time
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
 from ..bot import PsychographBot
-from ..render import EMBED_COLOR
+from ..render import CHOICE_LIMIT, EMBED_COLOR
 from ..store import VERBOSITY_LEVELS
+
+
+MAX_TIMEOUT_SECONDS = 7 * 24 * 3600
+PERSONA_MENUS = (  # one dropdown each, since Discord caps a dropdown at 25
+    ("Chatters", lambda persona: persona.group == "chatters"),
+    ("Characters, tools and custom", lambda persona: persona.group != "chatters"),
+)
+_DURATION = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(s|sec|secs|m|min|mins|h|hr|hrs|hours?|d|days?)?\s*$", re.IGNORECASE)
+_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
+
+def parse_duration(text: str) -> int | None:
+    """ "30m" → 1800. A bare number is minutes. None if unreadable, zero, or over a week."""
+    match = _DURATION.match(text)
+    if not match:
+        return None
+    unit = (match.group(2) or "m")[0].casefold()
+    seconds = int(float(match.group(1)) * _UNITS[unit])
+    return seconds if 0 < seconds <= MAX_TIMEOUT_SECONDS else None
 
 
 def status_embed(bot: PsychographBot, channel_id: int, guild_id: int | None, channel_name: str) -> discord.Embed:
@@ -23,7 +45,7 @@ def status_embed(bot: PsychographBot, channel_id: int, guild_id: int | None, cha
     embed.set_thumbnail(url=persona.avatar_url)
     embed.add_field(name="Persona", value=f"{persona.reaction} {persona.name}", inline=True)
     embed.add_field(name="Reply detail", value=settings.verbosity.title(), inline=True)
-    embed.add_field(name="Persona reactions", value="On" if settings.persona_reactions else "Off", inline=True)
+    embed.add_field(name="Reactions", value="Server emotes" if settings.reactions else "Off", inline=True)
     embed.add_field(name="Voice", value="Speaks as persona" if settings.persona_voice else "Bot embeds", inline=True)
     embed.add_field(
         name="Sounds", value=f"On · {len(bot.soundbank)} clips" if settings.sounds else "Off", inline=True
@@ -96,28 +118,57 @@ class StatusView(discord.ui.View):
         self.guild_id = guild_id
         self.channel_name = channel_name
         self.requester_id = requester_id
-        self.persona_select = discord.ui.Select(placeholder="Choose a persona", options=self._persona_options(), row=0)
-        self.persona_select.callback = self.select_persona
-        self.add_item(self.persona_select)
+        # One dropdown per menu (Discord caps each at 25): chatters, then everyone else.
+        self.persona_selects: list[discord.ui.Select] = []
+        for row, (placeholder, _belongs) in enumerate(PERSONA_MENUS):
+            select = discord.ui.Select(placeholder=placeholder, options=[discord.SelectOption(label="…")], row=row)
+            select.callback = self.select_persona
+            self.persona_selects.append(select)
+        self._fill_persona_selects()
         if not can_manage_messages:
             self.remove_item(self.reaction_button)
             self.remove_item(self.voice_button)
             self.remove_item(self.sounds_button)
         self._refresh_labels()
 
-    def _persona_options(self) -> list[discord.SelectOption]:
-        current = self.bot.personas.for_channel(self.channel_id, self.guild_id).key
-        personas = self.bot.personas.available(self.guild_id)
-        personas.sort(key=lambda persona: persona.key != current)  # current first, so it survives the cap
+    def _fill_persona_selects(self) -> None:
+        """Each menu's personas in group order; a menu with none is left out."""
+        available = self.bot.personas.available(self.guild_id)
+        current = self.bot.personas.for_channel(self.channel_id, self.guild_id)
+        for select, (_placeholder, belongs) in zip(self.persona_selects, PERSONA_MENUS):
+            personas = [persona for persona in available if belongs(persona)]
+            options = self._persona_options(personas, current)
+            if options:
+                select.options = options
+                if select not in self.children:
+                    self.add_item(select)
+            elif select in self.children:
+                self.remove_item(select)
+
+    def _persona_options(self, personas: list, current) -> list[discord.SelectOption]:
+        """In group order; past the cap, the current persona takes the last slot so it stays selected."""
+        if not personas:
+            return []
+        in_menu = any(persona.key == current.key for persona in personas)
+        personas = personas[:CHOICE_LIMIT]
+        if in_menu and current.key not in {persona.key for persona in personas}:
+            personas[-1] = current
         return [
-            discord.SelectOption(label=persona.name[:100], value=persona.key, default=persona.key == current)
-            for persona in personas[:25]
+            discord.SelectOption(
+                label=persona.label[:100],
+                value=persona.key,
+                description=(
+                    persona.about if self.bot.responder.can_run(persona) else "Needs a tools model (MiMo)"
+                )[:100] or persona.group.title(),
+                default=persona.key == current.key,
+            )
+            for persona in personas
         ]
 
     def _refresh_labels(self) -> None:
         settings = self.bot.store.channel_settings(self.channel_id)
         self.verbosity_button.label = f"Detail: {settings.verbosity.title()}"
-        self.reaction_button.label = f"Reactions: {'On' if settings.persona_reactions else 'Off'}"
+        self.reaction_button.label = f"Reactions: {'On' if settings.reactions else 'Off'}"
         self.voice_button.label = f"Voice: {'Persona' if settings.persona_voice else 'Embed'}"
         self.sounds_button.label = f"Sounds: {'On' if settings.sounds else 'Off'}"
 
@@ -131,21 +182,21 @@ class StatusView(discord.ui.View):
         return True
 
     async def _refresh(self, interaction: discord.Interaction) -> None:
-        self.persona_select.options = self._persona_options()
+        self._fill_persona_selects()
         self._refresh_labels()
         await interaction.response.edit_message(
             embed=status_embed(self.bot, self.channel_id, self.guild_id, self.channel_name), view=self
         )
 
     async def select_persona(self, interaction: discord.Interaction) -> None:
-        persona = self.bot.personas.get(self.guild_id, self.persona_select.values[0])
+        persona = self.bot.personas.get(self.guild_id, (interaction.data or {}).get("values", [""])[0])
         if persona is None:
             await interaction.response.send_message("That persona isn't available in this server.", ephemeral=True)
             return
         self.bot.store.update_channel(self.channel_id, persona=persona.key)
         await self._refresh(interaction)
 
-    @discord.ui.button(label="Detail", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Detail", style=discord.ButtonStyle.secondary, row=2)
     async def verbosity_button(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         current = self.bot.store.channel_settings(self.channel_id).verbosity
         index = VERBOSITY_LEVELS.index(current) if current in VERBOSITY_LEVELS else -1
@@ -153,16 +204,16 @@ class StatusView(discord.ui.View):
         self.bot.store.update_channel(self.channel_id, verbosity=next_level)
         await self._refresh(interaction)
 
-    @discord.ui.button(label="Reactions", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Reactions", style=discord.ButtonStyle.secondary, row=2)
     async def reaction_button(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         if not interaction.permissions.manage_messages:
             await interaction.response.send_message("Manage Messages permission is required.", ephemeral=True)
             return
-        enabled = self.bot.store.channel_settings(self.channel_id).persona_reactions
-        self.bot.store.update_channel(self.channel_id, persona_reactions=not enabled)
+        enabled = self.bot.store.channel_settings(self.channel_id).reactions
+        self.bot.store.update_channel(self.channel_id, reactions=not enabled)
         await self._refresh(interaction)
 
-    @discord.ui.button(label="Voice", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Voice", style=discord.ButtonStyle.secondary, row=2)
     async def voice_button(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         if not interaction.permissions.manage_messages:
             await interaction.response.send_message("Manage Messages permission is required.", ephemeral=True)
@@ -176,7 +227,7 @@ class StatusView(discord.ui.View):
         self.bot.store.update_channel(self.channel_id, persona_voice=not enabled)
         await self._refresh(interaction)
 
-    @discord.ui.button(label="Sounds", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Sounds", style=discord.ButtonStyle.secondary, row=3)
     async def sounds_button(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         if not interaction.permissions.manage_messages:
             await interaction.response.send_message("Manage Messages permission is required.", ephemeral=True)
@@ -190,7 +241,7 @@ class StatusView(discord.ui.View):
         self.bot.store.update_channel(self.channel_id, sounds=not enabled)
         await self._refresh(interaction)
 
-    @discord.ui.button(label="Reset history", style=discord.ButtonStyle.danger, row=1)
+    @discord.ui.button(label="Reset history", style=discord.ButtonStyle.danger, row=2)
     async def reset_button(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         await interaction.response.send_message(**reset_prompt(self.bot, interaction))
 
@@ -229,23 +280,32 @@ class SettingsCommands(commands.Cog):
         self.bot.store.update_channel(interaction.channel_id, verbosity=level)
         await interaction.response.send_message(f"Future replies in this channel will be **{level}**.", ephemeral=True)
 
-    @app_commands.command(name="reactions", description="Toggle persona signature reactions in this channel")
-    @app_commands.default_permissions(manage_messages=True)
-    @app_commands.describe(enabled="Whether the bot should add a persona reaction after replies")
-    @app_commands.choices(enabled=[app_commands.Choice(name="On", value="on"), app_commands.Choice(name="Off", value="off")])
-    async def reactions(self, interaction: discord.Interaction, enabled: str | None = None) -> None:
-        if interaction.guild is None:
-            await interaction.response.send_message("This setting is only available in a server.", ephemeral=True)
+    @app_commands.command(name="timeout", description="Make the bot ignore someone for a while (moderators)")
+    @app_commands.default_permissions(moderate_members=True)
+    @app_commands.describe(member="Who to ignore", duration="How long: 30m, 2h, 1d (up to 7d), or off")
+    async def timeout(self, interaction: discord.Interaction, member: discord.Member, duration: str) -> None:
+        send = interaction.response.send_message
+        perms = interaction.permissions
+        if interaction.guild is None or not (perms and (perms.moderate_members or perms.manage_guild)):
+            await send("Only moderators can time people out from the bot.", ephemeral=True)
             return
-        if not interaction.permissions.manage_messages:
-            await interaction.response.send_message("You need Manage Messages to change channel reactions.", ephemeral=True)
+        if duration.strip().casefold() in {"off", "0", "none", "clear"}:
+            cleared = self.bot.store.clear_timeout(interaction.guild.id, member.id)
+            await send(
+                f"{member.mention} can talk to me again." if cleared else f"{member.mention} wasn't timed out.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
             return
-        if enabled is None:
-            state = "on" if self.bot.store.channel_settings(interaction.channel_id).persona_reactions else "off"
-            await interaction.response.send_message(f"Persona reactions are **{state}** in this channel.", ephemeral=True)
+        seconds = parse_duration(duration)
+        if seconds is None:
+            await send("Give a duration like `30m`, `2h` or `1d` (up to 7 days), or `off`.", ephemeral=True)
             return
-        self.bot.store.update_channel(interaction.channel_id, persona_reactions=enabled == "on")
-        await interaction.response.send_message(f"Persona reactions are now **{enabled}** in this channel.", ephemeral=True)
+        until = time.time() + seconds
+        self.bot.store.set_timeout(interaction.guild.id, member.id, until, interaction.user.id)
+        await send(
+            f"Ignoring {member.mention} until <t:{int(until)}:t> (<t:{int(until)}:R>).",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     @app_commands.command(name="reset", description="Clear this channel's conversation history")
     async def reset(self, interaction: discord.Interaction) -> None:

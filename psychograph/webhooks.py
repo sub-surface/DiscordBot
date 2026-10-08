@@ -80,16 +80,19 @@ class PersonaWebhooks:
 
     async def username(self, channel: discord.abc.Messageable, persona: Persona) -> str:
         """The persona's name, marked "(persona)" if a member of this server goes by it."""
-        name = webhook_username(persona.name)
         guild = getattr(channel, "guild", None)
-        if guild is None:
-            return name
+        if guild is not None and await self.member_has_name(guild, persona.name):
+            return webhook_username(f"{persona.name[:68]} (persona)")
+        return webhook_username(persona.name)
+
+    async def member_has_name(self, guild: discord.Guild, name: str) -> bool:
+        """Whether a member of `guild` goes by `name`, looked up at most every ten minutes."""
         key = (guild.id, name.casefold())
         taken, checked = self._member_names.get(key, (False, 0.0))
         if time.monotonic() - checked > MEMBER_CHECK_SECONDS:
-            taken = await member_named(guild, persona.name)
+            taken = await member_named(guild, name)
             self._member_names[key] = (taken, time.monotonic())
-        return webhook_username(f"{persona.name[:68]} (persona)") if taken else name
+        return taken
 
     @staticmethod
     def _base(channel: discord.abc.Messageable) -> discord.TextChannel | None:

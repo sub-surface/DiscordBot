@@ -9,12 +9,14 @@
         "id": "wepiqx/MiMo-V2.6-Distill-Qwen-9B-GGUF-MERNIK",
         "file": "MiMo-V2.6-Distill-Qwen-9B-MERNIK-5100.gguf",
         "thinking": true,
-        "context": 65536,
+        "context": 131072,
         "storage_gib": 5
       },
       "chat": {
         "context_mode": "full",
-        "history_messages": 40,
+        "tools": true,
+        "history_messages": 100,
+        "channel_messages": 60,
         "max_output_tokens": 2048,
         "temperature": 1.0,
         "top_p": 0.95

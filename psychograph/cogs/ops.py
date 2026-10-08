@@ -1,4 +1,4 @@
-"""/model and /cost: what the bot runs on and what it costs."""
+"""/bot model | stats | cost | digest: what the bot runs on, how it's doing, what it costs, and the digest preview."""
 
 from __future__ import annotations
 
@@ -12,8 +12,9 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from .. import digest
 from ..bot import PsychographBot
-from ..render import EMBED_COLOR
+from ..render import EMBED_COLOR, model_summary
 from ..settings import ROOT
 from ..stats import PERIODS, stats_lines
 
@@ -43,29 +44,25 @@ def read_modal_billing() -> dict:
 
 
 class OpsCommands(commands.Cog):
+    about = app_commands.Group(name="bot", description="About the bot: its model, stats and costs")
+
     def __init__(self, bot: PsychographBot) -> None:
         self.bot = bot
 
-    @app_commands.command(name="model", description="Show the configured inference model")
+    @about.command(name="model", description="Which model the bot runs on, and how it's tuned")
     async def model(self, interaction: discord.Interaction) -> None:
-        backend = self.bot.backend
-        await interaction.response.send_message(
-            f"Backend: **{backend.name}**\nModel: `{backend.label}`\nProfile: {backend.profile.describe()}\n"
-            f"Sampling: temperature {backend.temperature}, top-p {backend.top_p}\n{backend.note}",
-            ephemeral=True,
-        )
+        await interaction.response.send_message(model_summary(self.bot.backend), ephemeral=True)
 
-    @app_commands.command(name="stats", description="Reply counts, speed and cold starts in this server")
+    @about.command(name="stats", description="Reply counts, speed and cold starts in this server")
     @app_commands.describe(period="How far back to look")
     @app_commands.choices(period=[app_commands.Choice(name=name.title(), value=name) for name in PERIODS])
     async def stats(self, interaction: discord.Interaction, period: str = "day") -> None:
         lines = stats_lines(self.bot.store.generation_stats(PERIODS[period], interaction.guild_id))
-        embed = discord.Embed(title=f"📊 Last {period}", description="\n".join(lines), color=EMBED_COLOR)
+        embed = discord.Embed(title=f"Last {period}", description="\n".join(lines), color=EMBED_COLOR)
         embed.set_footer(text=self.bot.backend.profile.describe())
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="cost", description="Show this month's Modal workspace usage")
-    @app_commands.default_permissions(manage_guild=True)
+    @about.command(name="cost", description="This month's Modal workspace bill (Manage Server)")
     async def cost(self, interaction: discord.Interaction) -> None:
         if interaction.guild and not interaction.permissions.manage_guild:
             await interaction.response.send_message("You need Manage Server permission to view workspace costs.", ephemeral=True)
@@ -86,8 +83,20 @@ class OpsCommands(commands.Cog):
             return
         await interaction.followup.send(
             f"Modal workspace usage this month: **${metered:.2f} metered**, **${billed:.2f} billed after credits**. "
-            "This is workspace-wide across Modal apps, not just Psychograph.",
+            "This is workspace-wide across Modal apps, not just this bot.",
             ephemeral=True,
+        )
+
+    @about.command(name="digest", description="Preview this week's Monday digest, just for you (Manage Server)")
+    async def digest_preview(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None or not interaction.permissions.manage_guild:
+            await interaction.response.send_message("You need Manage Server permission to preview the digest.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        text = await digest.build(self.bot, interaction.guild)
+        who = digest.voice(self.bot, interaction.guild.id).name
+        await interaction.followup.send(
+            f"-# Posted on Monday as **{who}**:\n{text}"[:2000], ephemeral=True, allowed_mentions=discord.AllowedMentions.none()
         )
 
 

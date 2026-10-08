@@ -21,10 +21,12 @@ class ModelProfile:
     match: tuple[str, ...] = ()
     context_mode: Literal["full", "compact"] = "full"
     history_messages: int = 40
+    channel_messages: int = 0               # recent channel messages chat personas also see
     prompt_budget: int | None = None        # cap on input tokens, below the server's context
     max_output_tokens: int | None = None    # None → the backend's configured limit
     temperature: float | None = None
     top_p: float | None = None
+    tools: bool = False                     # strong enough for tool personas (debate review, judge…)
     modal: dict = field(default_factory=dict, compare=False)
 
     @property
@@ -37,7 +39,9 @@ class ModelProfile:
 
     def describe(self) -> str:
         budget = f", ≤{self.prompt_budget:,} prompt tokens" if self.prompt_budget else ""
-        return f"{self.name} · {self.context_mode} context ({self.history_messages} msgs{budget})"
+        tools = " · tools on" if self.tools else " · tools off"
+        channel = f" + {self.channel_messages} channel" if self.channel_messages else ""
+        return f"{self.name} · {self.context_mode} context ({self.history_messages} msgs{channel}{budget}){tools}"
 
 
 DEFAULT_PROFILE = ModelProfile()
@@ -56,10 +60,12 @@ def load_profiles(path: Path) -> list[ModelProfile]:
                 match=tuple(entry.get("match", [entry["key"]])),
                 context_mode=chat.get("context_mode", "full"),
                 history_messages=int(chat.get("history_messages", 40)),
+                channel_messages=int(chat.get("channel_messages", 0)),
                 prompt_budget=chat.get("prompt_budget"),
                 max_output_tokens=chat.get("max_output_tokens"),
                 temperature=chat.get("temperature"),
                 top_p=chat.get("top_p"),
+                tools=bool(chat.get("tools", False)),
                 modal=entry.get("modal", {}),
             )
         )

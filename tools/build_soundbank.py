@@ -3,7 +3,8 @@
     python tools/build_soundbank.py            # build clips that are missing or whose source changed
     python tools/build_soundbank.py --force    # rebuild everything
 
-sources.json entries: {"key", "path", "keywords", "mood", "description", optional "start" and "seconds"}.
+sources.json entries: {"key", "path", "keywords", "mood", "description", optional "start" and "seconds"};
+a relative path is inside sounds/ (downloaded clips live in sounds/downloads/, git-ignored).
 ffmpeg runs single-threaded at below-normal priority so it stays out of the way of other work.
 """
 
@@ -116,6 +117,8 @@ def main() -> None:
         key = source["key"]
         clip = SOUNDS / f"{key}.ogg"
         origin = Path(source["path"])
+        if not origin.is_absolute():
+            origin = SOUNDS / origin  # e.g. downloads/bruh.mp3
         stamp = f"{origin}|{source.get('start', 0)}|{source.get('seconds', MAX_SECONDS)}|{PROCESSING_STAMP}"
         old = previous.get(key)
         try:

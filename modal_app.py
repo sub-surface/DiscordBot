@@ -34,8 +34,10 @@ def _model_preset() -> dict:
 PRESET = _model_preset()
 MODEL_ALIAS = "psychograph-model"
 GPU = os.getenv("MODAL_GPU", "L4")
-MAX_MODEL_LEN = int(os.getenv("MODAL_MAX_MODEL_LEN") or PRESET.get("context", 65536))
-SCALEDOWN_SECONDS = int(os.getenv("MODAL_SCALEDOWN_SECONDS", "60"))
+MAX_MODEL_LEN = int(os.getenv("MODAL_MAX_MODEL_LEN") or PRESET.get("context", 131072))
+# Five idle minutes before scaling to zero: people often take over a minute to reply, and a cold
+# start costs ~30-60 s of waiting plus the billed boot, so a longer warm tail is worth it.
+SCALEDOWN_SECONDS = int(os.getenv("MODAL_SCALEDOWN_SECONDS", "300"))
 ENABLE_THINKING = (
     os.getenv("MODAL_ENABLE_THINKING") or str(PRESET.get("thinking", True))
 ).lower() in {"1", "true", "yes", "on"}

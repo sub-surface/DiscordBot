@@ -129,6 +129,56 @@ class LinkedPostTests(unittest.TestCase):
         self.assertIn("address Santiago directly", prompt)
 
 
+def channel_message(name, text="", bot=False, embeds=(), attachments=(), minute=0):
+    from datetime import datetime, timedelta, timezone
+
+    return SimpleNamespace(
+        id=1000 + minute,
+        author=SimpleNamespace(id=7, name=name, display_name=name, bot=bot),
+        clean_content=text,
+        content=text,
+        embeds=list(embeds),
+        attachments=list(attachments),
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=minute),
+    )
+
+
+class TranscriptTests(unittest.TestCase):
+    def test_bot_answers_are_credited_to_their_persona_without_subtext(self) -> None:
+        answer = discord.Embed(description="hewwo~")
+        answer.set_author(name="mochi")
+
+        said = conversation.said(channel_message("Psychograph", bot=True, embeds=[answer]))
+        self.assertEqual((said.speaker, said.text, said.author_id), ("mochi", "hewwo~", None))
+        voiced = conversation.said(channel_message("zack", "-# ↪ [Leon](<https://x>)\ncommit this.", bot=True))
+        self.assertEqual(conversation.transcript_line(voiced), "[bot as zack]: commit this.")
+        self.assertEqual(conversation.transcript_line(voiced, you="zack"), "[you]: commit this.")
+        member = conversation.said(channel_message("Zack", "commit this."))
+        self.assertEqual(conversation.transcript_line(member, you="zack"), "Zack: commit this.")  # the real Zack
+
+    def test_lines_are_clipped_indented_and_note_attachments(self) -> None:
+        said = conversation.said(channel_message("Leon", "point one\npoint two " + "x " * 50), limit=40)
+        line = conversation.transcript_line(said)
+        self.assertTrue(line.startswith("Leon: point one\n    point two"))
+        self.assertTrue(line.endswith("…"))
+        self.assertEqual(said.author_id, 7)
+        image = conversation.said(channel_message("Leon", attachments=[SimpleNamespace(filename="proof.png")]))
+        self.assertEqual(image.text, "[attachment: proof.png]")
+        self.assertIsNone(conversation.said(channel_message("Leon")))
+
+    def test_transcript_marks_long_pauses_and_is_empty_without_messages(self) -> None:
+        items = [
+            conversation.said(channel_message("Leon", "a")),
+            conversation.said(channel_message("Zack", "b", minute=5)),
+            conversation.said(channel_message("Leon", "c", minute=185)),
+        ]
+
+        transcript = conversation.channel_transcript(items)
+
+        self.assertEqual(transcript.splitlines()[1:], ["Leon: a", "Zack: b", "(… 3 hours later)", "Leon: c"])
+        self.assertEqual(conversation.channel_transcript([]), "")
+
+
 class CompactModeTests(unittest.TestCase):
     def test_compact_history_drops_quoted_posts_and_clips(self) -> None:
         turn = conversation.user_turn("summarize", [("u", "body")], None, "Leon")

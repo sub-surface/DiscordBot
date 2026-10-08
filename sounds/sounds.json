@@ -5,12 +5,13 @@
       "file": "boom.ogg",
       "seconds": 2.5,
       "keywords": [
-        "vine boom",
         "plot twist",
-        "dramatic reveal"
+        "dramatic reveal",
+        "kaboom",
+        "huge"
       ],
       "mood": "dramatic",
-      "description": "deep dramatic boom, vine-boom style reveal",
+      "description": "deep cinematic boom, heavier than the vine boom",
       "waveform": "mMT+sr+G3MGpg3qGq4TDtFKFkHCfsJlvrFtgRWNnoGlMYWVcVUReKSlDWUZOS0gtKTRNOz1CLTUnOixLMSYqMA==",
       "source": "E:\\The Shop\\MISC\\Samples\\01 - Packs\\NiKUTRAX RESOURCES [sample pack1]\\SFX\\big boom.wav|0|2.5|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     },
@@ -654,6 +655,388 @@
       "description": "robot voice: beware, I live",
       "waveform": "6+vSyv/q1N/K1ce1xcWmpbujvKyVnZmGgpdyZayvtaG0m5+2kq+4vtCwuOTA7+Ccj8uln4iBb3JrbpauTQMBAg==",
       "source": "E:\\The Shop\\MISC\\Samples\\01 - Packs\\NiKUTRAX RESOURCES [sample pack1]\\retroish console sounds\\Atari\\Sinistar\\beware_i.wav|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
+    },
+    {
+      "key": "vine_boom",
+      "file": "vine_boom.ogg",
+      "seconds": 1.17,
+      "keywords": [
+        "vine boom",
+        "plot twist",
+        "realisation",
+        "wait what"
+      ],
+      "mood": "dramatic",
+      "description": "the original Vine boom: a heavy reveal thud",
+      "waveform": "46OetbGsp+bgjtbKk/T04s692q+f4Kzh89yrt7bX5sn+yMzM8JXHzp3a/uGEqLWtv6a9kLiDtsKbvXGugKKEFQ==",
+      "source": "C:\\Users\\Leon\\Desktop\\Psychograph\\DiscordBot\\sounds\\downloads\\vine_boom.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
+    },
+    {
+      "key": "bruh",
+      "file": "bruh.ogg",
+      "seconds": 0.79,
+      "keywords": [
+        "bruh",
+        "bro what",
+        "come on man"
+      ],
+      "mood": "disbelief",
+      "description": "a flat, disappointed 'bruh'",
+      "waveform": "Nj9hdYaIjsje/fzs+Pbx2NzM09a9v7iars7HydT/3q2Xn4R2WkYqFQ0LBwMCAwIBAQEBAAAAAAAAAAAAAAAAAA==",
+      "source": "C:\\Users\\Leon\\Desktop\\Psychograph\\DiscordBot\\sounds\\downloads\\bruh.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
+    },
+    {
+      "key": "emotional_damage",
+      "file": "emotional_damage.ogg",
+      "seconds": 3.15,
+      "keywords": [
+        "emotional damage",
+        "destroyed",
+        "violated",
+        "cooked"
+      ],
+      "mood": "roast",
+      "description": "Steven He: 'emotional damage!'",
+      "waveform": "Hw0GCB0RNEh1oJ2afDs0HxANC0Sew7vHvMK+z/X/56zIVS8ostPJocjVx8bBroVaRqzo08jGu62ztL6dfDdBpw==",
+      "source": "C:\\Users\\Leon\\Desktop\\Psychograph\\DiscordBot\\sounds\\downloads\\emotional_damage.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
+    },
+    {
+      "key": "metal_pipe",
+      "file": "metal_pipe.ogg",
+      "seconds": 2.61,
+      "keywords": [
+        "metal pipe",
+        "clang",
+        "fell over",
+        "crash"
+      ],
+      "mood": "chaos",
+      "description": "the falling metal pipe clang",
+      "waveform": "1uvj7ur2+P7/2d6qu8e9y8691c/F4OTO1rvI29jOuNXl2d3lvq25zdPZ1Ne9rL+4psGyw8i8ta+torGxqJ9/Hw==",
+      "source": "C:\\Users\\Leon\\Desktop\\Psychograph\\DiscordBot\\sounds\\downloads\\metal_pipe.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
+    },
+    {
+      "key": "taco_bell",
+      "file": "taco_bell.ogg",
+      "seconds": 1.82,
+      "keywords": [
+        "taco bell",
+        "bong",
+        "anyway"
+      ],
+      "mood": "absurd",
+      "description": "the Taco Bell bong",
+      "waveform": "/+Pv6+rk49/b3tzj4uTb2djWy86/vLK5ura1s7CqoZ2ZmH1oXlxWUExDQDUvLiYgFxUWEhAQDAkKCwkLAgAAAA==",
+      "source": "C:\\Users\\Leon\\Desktop\\Psychograph\\DiscordBot\\sounds\\downloads\\taco_bell.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
+    },
+    {
+      "key": "windows_error",
+      "file": "windows_error.ogg",
+      "seconds": 1.15,
+      "keywords": [
+        "error",
+        "crashed",
+        "doesn't compute",
+        "windows"
+      ],
+      "mood": "fail",
+      "description": "Windows XP error chime",
+      "waveform": "jP/SytXV9OXY29Ldjrp8qbViyXC9dpF5U4VsXWVFWzhBRio0JSgmFBgNDAYEAwEAAAAAAAAAAAAAAAAAAAAAAA==",
+      "source": "C:\\Users\\Leon\\Desktop\\Psychograph\\DiscordBot\\sounds\\downloads\\windows_error.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
+    },
+    {
+      "key": "dun_dun_dun",
+      "file": "dun_dun_dun.ogg",
+      "seconds": 1.28,
+      "keywords": [
+        "dun dun dun",
+        "dramatic",
+        "suspicious",
+        "uh oh"
+      ],
+      "mood": "dramatic",
+      "description": "dramatic 'dun dun dunnn' sting",
+      "waveform": "ZXn/9OXs2eXByL3Dwdyx7eDGztT53drH2cjVyOW02b6vup3JoZqroauffXFyfYF2dnVjVE9GRT4uKx8nGBENAA==",
+      "source": "C:\\Users\\Leon\\Desktop\\Psychograph\\DiscordBot\\sounds\\downloads\\dun_dun_dun.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
+    },
+    {
+      "key": "huh_cat",
+      "file": "huh_cat.ogg",
+      "seconds": 0.3,
+      "keywords": [
+        "huh",
+        "what",
+        "confused"
+      ],
+      "mood": "confused",
+      "description": "the confused cat 'huh?'",
+      "waveform": "ISMmLjdTTFx3WG+SzJSzvMnYqNWh1MC96tzx/tf/3ufoye7jw9S0yK7XwcXQvKG+ubacsKOTZG1iS0EwLiArHg==",
+      "source": "C:\\Users\\Leon\\Desktop\\Psychograph\\DiscordBot\\sounds\\downloads\\huh_cat.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
+    },
+    {
+      "key": "to_be_continued",
+      "file": "to_be_continued.ogg",
+      "seconds": 3.42,
+      "keywords": [
+        "to be continued",
+        "cliffhanger",
+        "stay tuned"
+      ],
+      "mood": "dramatic",
+      "description": "JoJo 'to be continued' outro",
+      "waveform": "uceFl46RnKGNm6WhnaTx5caenoKGrazIy66Vg5aqy/7Er6Kxr8jEr6q4lL1dhGnV5KTLuKixvLi+yZnZPK24bg==",
+      "source": "C:\\Users\\Leon\\Desktop\\Psychograph\\DiscordBot\\sounds\\downloads\\to_be_continued.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
+    },
+    {
+      "key": "boowomp",
+      "file": "boowomp.ogg",
+      "seconds": 1.26,
+      "keywords": [
+        "boowomp",
+        "sad",
+        "ouch",
+        "deflated"
+      ],
+      "mood": "sad",
+      "description": "SpongeBob sad 'boowomp'",
+      "waveform": "cMTX79ralYSXn5+7sdr/mRwMBQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+      "source": "C:\\Users\\Leon\\Desktop\\Psychograph\\DiscordBot\\sounds\\downloads\\boowomp.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
+    },
+    {
+      "key": "among_us",
+      "file": "among_us.ogg",
+      "seconds": 4.33,
+      "keywords": [
+        "sus",
+        "impostor",
+        "among us",
+        "suspicious"
+      ],
+      "mood": "suspicious",
+      "description": "Among Us role reveal sting",
+      "waveform": "HS0xJy82QVhqa2yHmP/Q28a/xs2uppR0RoVhXHxQQEBXPzMtPiwnHiAZFxMQEBMTDw4NDAsIBwcFBAMCAAAAAA==",
+      "source": "C:\\Users\\Leon\\Desktop\\Psychograph\\DiscordBot\\sounds\\downloads\\among_us.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
+    },
+    {
+      "key": "fbi_open_up",
+      "file": "fbi_open_up.ogg",
+      "seconds": 1.82,
+      "keywords": [
+        "fbi",
+        "open up",
+        "arrested",
+        "illegal"
+      ],
+      "mood": "busted",
+      "description": "'FBI, open up!' with a door bash",
+      "waveform": "/+XDy5Ssbe/ux7S6oqfv/ajlqH6Sf1uTrN+NTS8bbJKOoKWvypvIva234/antZZRSlZ1gZOc3v2vr5SbXjohCw==",
+      "source": "C:\\Users\\Leon\\Desktop\\Psychograph\\DiscordBot\\sounds\\downloads\\fbi_open_up.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
+    },
+    {
+      "key": "mission_failed",
+      "file": "mission_failed.ogg",
+      "seconds": 3.06,
+      "keywords": [
+        "mission failed",
+        "next time",
+        "we lost",
+        "failed"
+      ],
+      "mood": "fail",
+      "description": "'Mission failed, we'll get 'em next time'",
+      "waveform": "/MKwye7LxMjj9vvz8/Pk3NjGoLbRx8fDx9XRy/z5zM3w7fbS6+/b0szq+v/lzMPDzMXkz8LEvM28NQAAAAAAAA==",
+      "source": "C:\\Users\\Leon\\Desktop\\Psychograph\\DiscordBot\\sounds\\downloads\\mission_failed.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
+    },
+    {
+      "key": "car_horn",
+      "file": "car_horn.ogg",
+      "seconds": 2.97,
+      "keywords": [
+        "goofy",
+        "car horn",
+        "beep",
+        "clown"
+      ],
+      "mood": "goofy",
+      "description": "goofy ahh car horn",
+      "waveform": "U9za1pnV2+Orss/Wy7Wp0Njbyp3M1MSKxeXfptnq4ZrG1rSSy8XFwsLEvc/R16bEyNTT0Kfg+//luQ8AAAAAAA==",
+      "source": "C:\\Users\\Leon\\Desktop\\Psychograph\\DiscordBot\\sounds\\downloads\\car_horn.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
+    },
+    {
+      "key": "aughhh",
+      "file": "aughhh.ogg",
+      "seconds": 3.04,
+      "keywords": [
+        "aughhh",
+        "pain",
+        "agony",
+        "nooo"
+      ],
+      "mood": "pain",
+      "description": "the anguished 'AUGHHHH'",
+      "waveform": "MJSryOLSxuDFzuzK1+HVr9Hv6f7oxsHKsuTd69TS18S+jYtrhEQaFw8QDhIYHRoUEg0OEhEQDBEQEA8NAAAAAA==",
+      "source": "C:\\Users\\Leon\\Desktop\\Psychograph\\DiscordBot\\sounds\\downloads\\aughhh.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
+    },
+    {
+      "key": "spongebob_fail",
+      "file": "spongebob_fail.ogg",
+      "seconds": 3.36,
+      "keywords": [
+        "fail",
+        "flop",
+        "didn't work"
+      ],
+      "mood": "fail",
+      "description": "SpongeBob failure jingle",
+      "waveform": "+vT66uzh6Pr/8f3v2tjP1siLmKisrKm0sqCvuqqduLW2u7Ozu7epoaOfoqKsoZ+im5uel5SVmo2MiX96g4JMCw==",
+      "source": "C:\\Users\\Leon\\Desktop\\Psychograph\\DiscordBot\\sounds\\downloads\\spongebob_fail.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
+    },
+    {
+      "key": "sad_violin",
+      "file": "sad_violin.ogg",
+      "seconds": 5.98,
+      "keywords": [
+        "sad violin",
+        "so sad",
+        "tragic",
+        "tiny violin"
+      ],
+      "mood": "sad",
+      "description": "mocking sad violin",
+      "waveform": "cHyIhG6Cq7/K1t7r8o2irbO2hmWUsri2wabgnt7/4Lnb2s2F5Ozy0rOibISMj3dgX19XWQAAAAAAAAAAAAAAAA==",
+      "source": "C:\\Users\\Leon\\Desktop\\Psychograph\\DiscordBot\\sounds\\downloads\\sad_violin.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
+    },
+    {
+      "key": "rock_eyebrow",
+      "file": "rock_eyebrow.ogg",
+      "seconds": 3.3,
+      "keywords": [
+        "the rock",
+        "eyebrow",
+        "sus",
+        "really"
+      ],
+      "mood": "suspicious",
+      "description": "The Rock eyebrow-raise boom",
+      "waveform": "0cvW1Nrv28T/1ubu8c/b3rnJq8aspJyAi5KMpZeuo5B1bmJXk6GdgXFtdYOPdGdhXF9WSz4qGAAAAAAAAAAAAA==",
+      "source": "C:\\Users\\Leon\\Desktop\\Psychograph\\DiscordBot\\sounds\\downloads\\rock_eyebrow.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
+    },
+    {
+      "key": "rizz",
+      "file": "rizz.ogg",
+      "seconds": 1.73,
+      "keywords": [
+        "rizz",
+        "smooth",
+        "flirt",
+        "w rizz"
+      ],
+      "mood": "smooth",
+      "description": "the rizz sound",
+      "waveform": "z//t9e3g4NzT0ca9rpSIlZaNj4qMin99dnFrZFtUSkI8OjYxLCYlIR4bGRUTEQ8NCwoJCAcGBQQDAAAAAAAAAA==",
+      "source": "C:\\Users\\Leon\\Desktop\\Psychograph\\DiscordBot\\sounds\\downloads\\rizz.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
+    },
+    {
+      "key": "titanic_flute",
+      "file": "titanic_flute.ogg",
+      "seconds": 7.0,
+      "keywords": [
+        "titanic",
+        "flute",
+        "awful",
+        "terrible cover"
+      ],
+      "mood": "absurd",
+      "description": "the horribly played Titanic flute",
+      "waveform": "NnN/n7SPqnvPrG6loam9pZ6wq62lhpWU98VsXcSsqbKtusqmeh4oJaS0i4+su8SadbKxutC6rKWyq3Le8fn/NA==",
+      "source": "C:\\Users\\Leon\\Desktop\\Psychograph\\DiscordBot\\sounds\\downloads\\titanic_flute.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
+    },
+    {
+      "key": "villager",
+      "file": "villager.ogg",
+      "seconds": 1.05,
+      "keywords": [
+        "hmm",
+        "villager",
+        "minecraft",
+        "trade"
+      ],
+      "mood": "skeptical",
+      "description": "Minecraft villager 'hmm'",
+      "waveform": "NE9ZSjI2YJquurvY4bLAtNXj9v/kuKa60qu/w5Ssp5GQjYuLf4lVOCAKBQMCAQEBAQEBAQEBAQABAAEAAAAAAA==",
+      "source": "C:\\Users\\Leon\\Desktop\\Psychograph\\DiscordBot\\sounds\\downloads\\villager.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
+    },
+    {
+      "key": "losing_horn",
+      "file": "losing_horn.ogg",
+      "seconds": 4.56,
+      "keywords": [
+        "you lose",
+        "price is right",
+        "loser",
+        "wrong"
+      ],
+      "mood": "fail",
+      "description": "Price Is Right losing horn",
+      "waveform": "//2pW8rHjVJ94H7c4MS7rqago6mpwZ+upaSrqaikqainrKapraavqaqtsKqipaKPoZColY+Lgn59enRRLRgMAg==",
+      "source": "C:\\Users\\Leon\\Desktop\\Psychograph\\DiscordBot\\sounds\\downloads\\losing_horn.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
+    },
+    {
+      "key": "wait_a_minute",
+      "file": "wait_a_minute.ogg",
+      "seconds": 6.81,
+      "keywords": [
+        "wait a minute",
+        "who are you",
+        "hold on"
+      ],
+      "mood": "confused",
+      "description": "'Wait a minute... who are you?'",
+      "waveform": "IRssJiMfJB4eGBcZEhYbFBUXFRUYGx4WHBiShe/4xJq/p7OjIBccGR4aExXC/+pDCG7fcKV+eqKcuFs0GwAAAA==",
+      "source": "C:\\Users\\Leon\\Desktop\\Psychograph\\DiscordBot\\sounds\\downloads\\wait_a_minute.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
+    },
+    {
+      "key": "oh_no_laugh",
+      "file": "oh_no_laugh.ogg",
+      "seconds": 7.0,
+      "keywords": [
+        "oh no",
+        "laughing",
+        "oh no no no"
+      ],
+      "mood": "mocking",
+      "description": "'oh no, no no no' laugh",
+      "waveform": "p7qdrDGZaHKNl1lkt6iaupGkvI86yDgnpdLQb7VoTbeJGicsQ2GH4b7y/7C5rsTEpJOaQ5kbExLIfbi/xufVug==",
+      "source": "C:\\Users\\Leon\\Desktop\\Psychograph\\DiscordBot\\sounds\\downloads\\oh_no_laugh.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
+    },
+    {
+      "key": "run",
+      "file": "run.ogg",
+      "seconds": 7.0,
+      "keywords": [
+        "run",
+        "flee",
+        "get out",
+        "danger"
+      ],
+      "mood": "panic",
+      "description": "Vine 'RUN' scream",
+      "waveform": "pKSJkNGWBjeTcASQ0b3L0cPa29W4yKquqqTf1sXL2/7Ny9DRu83LwrvEzfS+xqvbwePK07e/4tDjy8PNtMHJ6Q==",
+      "source": "C:\\Users\\Leon\\Desktop\\Psychograph\\DiscordBot\\sounds\\downloads\\run.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
+    },
+    {
+      "key": "sus",
+      "file": "sus.ogg",
+      "seconds": 1.03,
+      "keywords": [
+        "sus",
+        "suspicious",
+        "kinda sus"
+      ],
+      "mood": "suspicious",
+      "description": "short 'sus' sting",
+      "waveform": "kP68mm9zcWVqU2qTY+648M6syHDStpKBfomBd3JQRHVhW1NMSURGTtDGo0ADAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+      "source": "C:\\Users\\Leon\\Desktop\\Psychograph\\DiscordBot\\sounds\\downloads\\sus.mp3|0|7.0|v3|highpass=f=40,lowpass=f=13000,equalizer=f=3000:t=q:w=1:g=-3,acompressor=threshold=-20dB:ratio=3:attack=5:release=120:makeup=1|-24.0|alimiter=limit=0.63:attack=1:release=60:level=false"
     }
   ]
 }

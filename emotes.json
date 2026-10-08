@@ -1,0 +1,164 @@
+{
+  "_about": "Liberated Speech's emotes, grouped by mood. Jev picks the mood that fits a message; the bot picks one of its emotes at random (a persona's favourites, \"emotes\": [...] in its file, three times as often), so the same moment doesn't always get the same emote. Names match the server's emoji (any case); missing ones are skipped. 'status' is the mood shown while the bot thinks; 'revival' goes on the first message in a channel quiet for four days.",
+  "moods": {
+    "funny": {
+      "when": "Genuinely funny: a joke, a bit or a burn that lands.",
+      "emotes": [
+        "kekw",
+        "omegalul",
+        "ikikikik",
+        "dead"
+      ]
+    },
+    "thinking": {
+      "when": "Worth chewing on: a puzzler, a strange claim, a thought experiment, an argument going in circles.",
+      "emotes": [
+        "pepethink",
+        "hmmm",
+        "spinningfish",
+        "OntoSomething",
+        "scheming",
+        "monkaHmm"
+      ]
+    },
+    "baffled": {
+      "when": "Baffling or cursed: it makes no sense, or the wrong kind of sense.",
+      "emotes": [
+        "blursed",
+        "BroWhat",
+        "bruhhh",
+        "NiggaWhat"
+      ]
+    },
+    "roast": {
+      "when": "A vulgar roast, a your-mom joke, a crude line delivered with total confidence.",
+      "emotes": [
+        "WooYeah2x"
+      ]
+    },
+    "cope": {
+      "when": "Cope and seethe: someone losing an argument, making excuses, visibly upset, or posting a dumb take with conviction.",
+      "emotes": [
+        "copium",
+        "youreupset",
+        "NGMI",
+        "clown",
+        "gaytarded",
+        "copedge"
+      ]
+    },
+    "based": {
+      "when": "Based and correct: a strong take, a flex, a point that lands hard.",
+      "emotes": [
+        "true",
+        "gigachad"
+      ]
+    },
+    "zen": {
+      "when": "Zen and unbothered: calm wisdom, chilling out, letting it go, a relaxed good vibe.",
+      "emotes": [
+        "laoma",
+        "paradise"
+      ]
+    },
+    "sweet": {
+      "when": "Wholesome: something sweet, kind, cute or quietly sad.",
+      "emotes": [
+        "adorable",
+        "pepehug",
+        "pepehappysad",
+        "Blesstiny"
+      ]
+    },
+    "doom": {
+      "when": "Cursed knowledge or a self-own: something you can't unsee, a terrible plan, a take that should stop now.",
+      "emotes": [
+        "deathwish",
+        "sepuku",
+        "MustForget",
+        "TimeToStop",
+        "Jahannam"
+      ]
+    },
+    "rage": {
+      "when": "Exasperation played for laughs: a maddening take, someone being impossible.",
+      "emotes": [
+        "REEE",
+        "gaaah",
+        "gaah",
+        "gah"
+      ]
+    },
+    "theory": {
+      "when": "Continental theory, discourse and power, or someone going full Foucault.",
+      "emotes": [
+        "foucault",
+        "distressedfoucault"
+      ]
+    },
+    "clanker": {
+      "when": "AI slop, a chatbot being dumb, or someone talking like one.",
+      "emotes": [
+        "LousyClanker"
+      ]
+    },
+    "delicious": {
+      "when": "Food, or something that sounds delicious.",
+      "emotes": [
+        "delicieux"
+      ]
+    },
+    "signal": {
+      "when": "Someone performing for the room: a status move, virtue signalling, a flex disguised as a question, a message that's really about who's watching.",
+      "emotes": [
+        "catSTARE",
+        "Look"
+      ]
+    },
+    "agree": {
+      "when": "Quiet agreement: a point that's simply right, said plainly.",
+      "emotes": [
+        "nodders",
+        "FireNodders"
+      ]
+    },
+    "feels": {
+      "when": "Solidarity or bittersweet feeling: a small win, a shared struggle, a sincere confession.",
+      "emotes": [
+        "FeelsStrongMan",
+        "Depresstiny",
+        "Sadge"
+      ]
+    },
+    "smug": {
+      "when": "Smug victory: someone got owned, or called it before anyone else.",
+      "emotes": [
+        "EZ",
+        "SoySmug",
+        "PEPE"
+      ]
+    },
+    "yikes": {
+      "when": "Nervous yikes: something risky, unhinged or about to go very wrong.",
+      "emotes": [
+        "MonkaGIGA",
+        "SWEATSTINY"
+      ]
+    },
+    "hype": {
+      "when": "Excited: good news, a banger, something genuinely cool.",
+      "emotes": [
+        "Pog",
+        "CrabRave"
+      ]
+    },
+    "nah": {
+      "when": "Flat refusal: a take so wrong it only deserves a no.",
+      "emotes": [
+        "NAHH"
+      ]
+    }
+  },
+  "status": "thinking",
+  "revival": "mmm"
+}

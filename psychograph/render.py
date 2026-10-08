@@ -5,12 +5,24 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import discord
+from discord import app_commands
 
 from .backends import Completion
+from .personas import GROUP_ICONS, Persona
 
 EMBED_COLOR = 0x347A68
 RESPONSE_EMBED_LIMIT = 4000
 VOICE_MESSAGE_LIMIT = 1900  # plain messages cap at 2,000; leave room for a subtext line
+CHOICE_LIMIT = 25           # Discord's cap on autocomplete choices and select options
+PERSONA_LEGEND = " · ".join(f"{icon} {group}" for group, icon in GROUP_ICONS.items())
+
+
+def persona_choices(personas: Sequence[Persona], current: str | None = None) -> list[app_commands.Choice[str]]:
+    """Autocomplete choices in group order, each with its group's icon; the channel's current one is marked."""
+    return [
+        app_commands.Choice(name=f"{persona.label}{' · current' if persona.key == current else ''}"[:100], value=persona.key)
+        for persona in personas[:CHOICE_LIMIT]
+    ]
 
 
 def split_response(text: str, limit: int = RESPONSE_EMBED_LIMIT) -> list[str]:
@@ -29,6 +41,14 @@ def split_response(text: str, limit: int = RESPONSE_EMBED_LIMIT) -> list[str]:
     if remaining:
         chunks.append(remaining)
     return chunks or [""]
+
+
+def model_summary(backend) -> str:
+    """What the bot runs on, for /model and the instant answer to "what model are you?"."""
+    return (
+        f"Backend: **{backend.name}**\nModel: `{backend.label}`\nProfile: {backend.profile.describe()}\n"
+        f"Sampling: temperature {backend.temperature}, top-p {backend.top_p}\n{backend.note}"
+    )
 
 
 def generation_summary(completion: Completion, wall_seconds: float) -> str:
