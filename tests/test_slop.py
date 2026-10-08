@@ -102,3 +102,29 @@ class SlopTests(unittest.TestCase):
         self.assertNotIn("@everyone", label)
         post.url = "https://x.com/OpenAI/status/123"
         self.assertEqual(slop._safe_url(post), post.url)
+
+    def test_jev_rates_each_post_once_and_the_sloppiest_gets_the_award(self) -> None:
+        from unittest.mock import AsyncMock
+
+        share = {"sharer": "Santi", "reacts": 0, "guild_id": 10, "channel_id": 5, "message_id": 1}
+        posts = [slop.Post(str(i), "", [share], name=f"p{i}") for i in range(3)]
+        ratings = iter([0.2, 0.9, 0.6])
+        self.bot.jev.ask = AsyncMock(side_effect=lambda *_: {"kind": {"choice": "slop"}, "slop": {"noul": next(ratings)}})
+        asyncio.run(slop.rate(self.bot, posts))
+        self.assertIs(slop.sloppiest(posts), posts[1])
+
+        again = [slop.Post(str(i), "", [share]) for i in range(3)]
+        asyncio.run(slop.rate(self.bot, again))  # kept: no new calls, same meters
+        self.assertEqual(self.bot.jev.ask.await_count, 3)
+        self.assertEqual([p.sloppiness for p in again], [0.2, 0.9, 0.6])
+        self.assertIsNone(slop.sloppiest(again[:1]))  # one rated post is no contest
+
+    def test_santi_captions_the_report_with_one_of_his_lines(self) -> None:
+        from unittest.mock import AsyncMock
+
+        santi = self.bot.personas.get(None, "santi")
+        share = {"sharer": "Santi", "reacts": 0, "guild_id": 10, "channel_id": 5, "message_id": 1}
+        self.bot.jev.ask = AsyncMock(return_value={"line": {"choice": santi.says[0]}})
+        self.assertEqual(asyncio.run(slop.caption(self.bot, None, [slop.Post("1", "", [share])])), santi.says[0])
+        self.bot.jev.ask = AsyncMock(return_value={"line": {"choice": "made up"}})
+        self.assertIsNone(asyncio.run(slop.caption(self.bot, None, [slop.Post("1", "", [share])])))

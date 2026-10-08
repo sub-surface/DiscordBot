@@ -5,7 +5,9 @@
             link is kept as a share: who posted it, when, and how many reactions it got here
   rank      each post's public numbers come from the FxEmbed API (cached for six hours) and are blended with
             how it did here: log(likes + 2·reposts + quotes) + ¼·log(views) + reactions and repeat shares
-  rate      Jev reads the top few and says what each one is (news, hype, meme or slop) and how sloppy
+  rate      Jev reads the top few and says what each one is (news, hype, meme or slop) and how sloppy, once per
+            post (kept, so a post's meter never changes); the sloppiest gets a badge, and Jev picks the line of
+            Santi's that captions the report
   render    a dark card drawn with Pillow: rank, avatar, author, the post, its numbers and a slop meter
 """
 
@@ -171,6 +173,10 @@ async def rate(bot: PsychographBot, posts: list[Post]) -> None:
     """Jev's read of each post: what kind it is, and how sloppy (fails soft: no meter)."""
 
     async def one(post: Post) -> None:
+        key = f"slop_rating:{post.status_id}"
+        if cached := bot.store.state(key):
+            post.kind, post.sloppiness = json.loads(cached)
+            return
         answers = await bot.jev.ask(
             {"post": f"{post.name} (@{post.handle}): {post.text[:600]}"},
             {
@@ -181,12 +187,35 @@ async def rate(bot: PsychographBot, posts: list[Post]) -> None:
         if answers:
             post.kind = (answers.get("kind") or {}).get("choice", "")
             post.sloppiness = (answers.get("slop") or {}).get("noul")
+            if post.kind and post.sloppiness is not None:
+                bot.store.set_state(key, json.dumps([post.kind, post.sloppiness]))
 
     async def avatar(post: Post) -> None:
         if post.avatar_url:
             post.avatar = await asyncio.to_thread(_download, post.avatar_url)
 
     await asyncio.gather(*(one(post) for post in posts), *(avatar(post) for post in posts))
+
+
+async def caption(bot: PsychographBot, guild_id: int | None, posts: list[Post]) -> str | None:
+    """The line of Santi's that best sums up the top posts, or None (no santi, no posts, no Jev)."""
+    santi = bot.personas.get(guild_id, "santi")
+    if santi is None or not santi.says or not posts:
+        return None
+    answers = await bot.jev.ask(
+        {"posts": [f"{post.name}: {post.text[:200]}" for post in posts[:3]]},
+        {"line": {"type": "choice", "instructions": "Which reaction best sums up `posts`?",
+                  "criteria": {line: None for line in santi.says}}},
+    )
+    line = ((answers or {}).get("line") or {}).get("choice")
+    return line if line in santi.says else None
+
+
+def sloppiest(posts: list[Post]) -> Post | None:
+    """The post with the highest slop rating, if at least two are rated and it's at least half slop."""
+    rated = [post for post in posts if post.sloppiness is not None]
+    best = max(rated, key=lambda post: post.sloppiness, default=None)
+    return best if len(rated) >= 2 and best.sloppiness >= 0.5 else None
 
 
 # ── Render ──────────────────────────────────────────────────────────
@@ -213,6 +242,8 @@ def _fonts() -> dict:
         "stats": face(["seguisb.ttf", "DejaVuSans.ttf"], 17),
         "meter": face(["seguibl.ttf", "segoeuib.ttf", "DejaVuSans-Bold.ttf"], 30),
         "foot": face(["segoeui.ttf", "DejaVuSans.ttf"], 16),
+        "quote": face(["segoeuii.ttf", "DejaVuSans-Oblique.ttf"], 21),
+        "badge": face(["seguibl.ttf", "segoeuib.ttf", "DejaVuSans-Bold.ttf"], 14),
     }
 
 
@@ -262,7 +293,8 @@ def _avatar(post: Post, size: int):
     return face, mask
 
 
-def render(posts: list[Post], period: str, channel: str, shared: int, dealers: list[tuple[str, int]]) -> bytes:
+def render(posts: list[Post], period: str, channel: str, shared: int, dealers: list[tuple[str, int]],
+           quote: str | None = None) -> bytes:
     from PIL import Image, ImageDraw
 
     f = _fonts()
@@ -275,7 +307,11 @@ def render(posts: list[Post], period: str, channel: str, shared: int, dealers: l
     draw.text((PAD, 34), "S A N T I   P R E S E N T S", font=f["kicker"], fill=SLIME)
     draw.text((PAD, 56), "The Slop Report", font=f["title"], fill=TEXT)
     scope = "all time" if period == "all" else f"the past {period}"
-    draw.text((W - PAD, 92), f"#{channel} · {scope}", font=f["sub"], fill=MUTED, anchor="rm")
+    draw.text((W - PAD, 76), f"#{channel} · {scope}", font=f["sub"], fill=MUTED, anchor="rm")
+    if quote:
+        said = _wrap(draw, f"“{quote}”", f["quote"], 420, 1)[0]
+        draw.text((W - PAD - 62, 112), said, font=f["quote"], fill=TEXT, anchor="rm")
+        draw.text((W - PAD, 112), "santi", font=f["chip"], fill=SLIME, anchor="rm")
     chips = [f"{shared} posts shared", f"{len({name for name, _ in dealers})} dealers"]
     if dealers:
         chips.append(f"top dealer: {dealers[0][0]} ×{dealers[0][1]}")
@@ -291,9 +327,15 @@ def render(posts: list[Post], period: str, channel: str, shared: int, dealers: l
     if not posts:
         draw.text((W / 2, HEAD + ROW / 2), "No posts shared yet. Suspiciously clean.", font=f["sub"], fill=MUTED, anchor="mm")
 
+    worst = sloppiest(posts)
     for index, post in enumerate(posts):
         top = HEAD + index * ROW
-        draw.rounded_rectangle((PAD - 12, top, W - PAD + 12, top + ROW - 14), radius=18, fill=PANEL)
+        draw.rounded_rectangle((PAD - 12, top, W - PAD + 12, top + ROW - 14), radius=18, fill=PANEL,
+                               outline=SLIME if post is worst else None, width=2)
+        if post is worst:
+            bw = draw.textlength("SLOPPIEST", font=f["badge"]) + 24
+            draw.rounded_rectangle((W - PAD - 8 - bw, top - 11, W - PAD - 8, top + 13), radius=12, fill=SLIME)
+            draw.text((W - PAD - 8 - bw / 2, top + 1), "SLOPPIEST", font=f["badge"], fill=BG, anchor="mm")
         draw.text((PAD + 30, top + 54), f"{index + 1}", font=f["rank"], fill=SLIME if index == 0 else DIM, anchor="mm")
         face, mask = _avatar(post, 64)
         image.paste(face, (PAD + 70, top + 22), mask)
@@ -358,11 +400,12 @@ async def report(bot: PsychographBot, channel: discord.TextChannel, period: str)
     posts, shares = await rank(bot, channel.id, PERIODS[period])
     top = posts[:SHOWN]
     await rate(bot, top)
+    quote = await caption(bot, channel.guild.id, top)
     counts: dict[str, int] = {}
     for share in shares:
         counts[share["sharer"]] = counts.get(share["sharer"], 0) + 1
     dealers = sorted(counts.items(), key=lambda item: -item[1])
-    png = await asyncio.to_thread(render, top, period, channel.name, len(shares), dealers)
+    png = await asyncio.to_thread(render, top, period, channel.name, len(shares), dealers, quote)
     lines = [
         f"`{index}` [{_label(post)}](<{_safe_url(post)}>) · [shared here]({post.jump})"
         for index, post in enumerate(top, 1)
