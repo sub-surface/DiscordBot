@@ -338,6 +338,19 @@ def render(posts: list[Post], period: str, channel: str, shared: int, dealers: l
     return out.getvalue()
 
 
+def _label(post: Post) -> str:
+    """The author's name for link text: their own text, so no markdown or brackets survive."""
+    name = re.sub(r"[\[\]()<>`|*_~\\]", "", post.name or post.handle).strip()[:40]
+    return discord.utils.escape_mentions(name) or "post"
+
+
+def _safe_url(post: Post) -> str:
+    """The post's link, only if it's an x.com / twitter.com status; else rebuilt from its id."""
+    if re.fullmatch(r"https://(?:x|twitter)\.com/\w+/status/\d+", post.url):
+        return post.url
+    return f"https://x.com/i/status/{post.status_id}"
+
+
 # ── The whole report ────────────────────────────────────────────────
 
 async def report(bot: PsychographBot, channel: discord.TextChannel, period: str) -> tuple[discord.Embed, discord.File]:
@@ -351,7 +364,7 @@ async def report(bot: PsychographBot, channel: discord.TextChannel, period: str)
     dealers = sorted(counts.items(), key=lambda item: -item[1])
     png = await asyncio.to_thread(render, top, period, channel.name, len(shares), dealers)
     lines = [
-        f"`{index}` [{(post.name or post.handle)[:40]}](<{post.url}>) · [shared here]({post.jump})"
+        f"`{index}` [{_label(post)}](<{_safe_url(post)}>) · [shared here]({post.jump})"
         for index, post in enumerate(top, 1)
     ]
     embed = discord.Embed(description="\n".join(lines) or None, color=0x96E85C)

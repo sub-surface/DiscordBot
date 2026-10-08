@@ -30,6 +30,13 @@ class SlopCommands(commands.Cog):
         if channel is None:
             await interaction.response.send_message(f"There's no #{self.bot.settings.slop_channel} here.", ephemeral=True)
             return
+        if self.bot.ignoring(interaction.guild_id, interaction.user.id):
+            await interaction.response.send_message("The bot is ignoring you for now.", ephemeral=True)
+            return
+        if not channel.permissions_for(interaction.user).read_message_history:
+            # the report reposts the channel's contents, so only for those who can read it
+            await interaction.response.send_message(f"You can't read #{channel.name}.", ephemeral=True)
+            return
         await interaction.response.defer(thinking=True)
         try:
             async with self._lock:

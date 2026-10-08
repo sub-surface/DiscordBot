@@ -91,3 +91,14 @@ class SlopTests(unittest.TestCase):
         png = slop.render([post], "week", "sim-city", 12, [("Santi", 9)])
         self.assertTrue(png.startswith(b"\x89PNG"))
         self.assertEqual(slop.compact(75_100_000), "75.1M")
+
+    def test_link_text_and_urls_from_the_api_cannot_inject_markdown(self) -> None:
+        share = {"sharer": "Santi", "reacts": 0, "guild_id": 10, "channel_id": 5, "message_id": 1}
+        post = slop.Post("42", "https://evil.example/x](https://phish)", [share],
+                         name="Free Nitro](https://phish.example) @everyone *")
+        self.assertEqual(slop._safe_url(post), "https://x.com/i/status/42")
+        label = slop._label(post)
+        self.assertNotIn("](", label)
+        self.assertNotIn("@everyone", label)
+        post.url = "https://x.com/OpenAI/status/123"
+        self.assertEqual(slop._safe_url(post), post.url)
