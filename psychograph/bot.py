@@ -77,9 +77,9 @@ class PsychographBot(commands.Bot):
         self._legacy_guild_commands_cleared = False
 
     async def load_cogs(self) -> None:
-        from .cogs import chat, chess, fun, help, ops, personas, quick, settings, soundboard, tools
+        from .cogs import chat, chess, fun, help, ops, personas, quick, settings, slop, soundboard, tools
 
-        for module in (chat, chess, fun, help, ops, personas, quick, settings, soundboard, tools):
+        for module in (chat, chess, fun, help, ops, personas, quick, settings, slop, soundboard, tools):
             await module.setup(self)
 
     def ignoring(self, guild_id: int | None, user_id: int) -> float | None:

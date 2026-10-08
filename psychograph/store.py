@@ -194,6 +194,24 @@ class Store:
                 )"""
             )
 
+        with self._conn:
+            self._conn.execute(
+                """CREATE TABLE IF NOT EXISTS slop_shares (
+                    message_id INTEGER NOT NULL,
+                    status_id TEXT NOT NULL,
+                    guild_id INTEGER,
+                    channel_id INTEGER NOT NULL,
+                    sharer_id INTEGER NOT NULL,
+                    sharer TEXT NOT NULL,
+                    shared_at REAL NOT NULL,
+                    reacts INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (message_id, status_id)
+                )"""
+            )
+            self._conn.execute(
+                "CREATE TABLE IF NOT EXISTS tweet_stats (status_id TEXT PRIMARY KEY, data TEXT NOT NULL, fetched_at REAL NOT NULL)"
+            )
+
     def _ensure_columns(self, table: str, columns: dict[str, str]) -> None:
         existing = {row["name"] for row in self._conn.execute(f"PRAGMA table_info({table})")}
         for name, ddl in columns.items():
@@ -627,3 +645,31 @@ class Store:
             "personas": [(row["persona"], row["replies"]) for row in personas],
             "profiles": [(row["profile"], row["replies"]) for row in models],
         }
+
+    # ── The slop report: posts shared in a channel, and their cached public stats ──
+
+    def save_share(self, message_id: int, status_id: str, guild_id: int | None, channel_id: int,
+                   sharer_id: int, sharer: str, shared_at: float, reacts: int) -> None:
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO slop_shares VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (message_id, status_id) DO UPDATE SET reacts = excluded.reacts, sharer = excluded.sharer",
+                (message_id, status_id, guild_id, channel_id, sharer_id, sharer, shared_at, reacts),
+            )
+
+    def shares(self, channel_id: int, since: float = 0.0) -> list[dict]:
+        """Oldest first."""
+        rows = self._conn.execute(
+            "SELECT * FROM slop_shares WHERE channel_id = ? AND shared_at >= ? ORDER BY shared_at", (channel_id, since)
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def tweet_stats(self, status_id: str, max_age: float, now: float) -> str | None:
+        row = self._conn.execute(
+            "SELECT data FROM tweet_stats WHERE status_id = ? AND fetched_at >= ?", (status_id, now - max_age)
+        ).fetchone()
+        return row["data"] if row else None
+
+    def save_tweet_stats(self, status_id: str, data: str, now: float) -> None:
+        with self._conn:
+            self._conn.execute("INSERT OR REPLACE INTO tweet_stats VALUES (?, ?, ?)", (status_id, data, now))

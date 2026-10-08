@@ -68,6 +68,7 @@ def help_embed(bot: PsychographBot, channel_id: int, guild_id: int | None) -> di
         name="Duels and scores",
         value=_lines(
             "`/duel` *persona* *persona* *topic*: two personas argue in rounds, Jev judges · `/scores duels`",
+            "`/santi-slop` *day|week|month|all*: the Slop Report, the most viral posts shared in #sim-city",
             "`/scores debates`: the debate leaderboard",
             "React 🔮 on a message to log it as a prediction · `/scores predictions` to settle them",
         )

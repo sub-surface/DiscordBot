@@ -58,6 +58,7 @@ class Settings:
     heartbeat_channels: tuple[str, ...] = ("shitpost", "leg-day")
     heartbeat_per_day: int = 3
     heartbeat_hours: str = "13-1"
+    slop_channel: str = "sim-city"           # where /santi-slop looks for shared posts
     digest_channel: str = "newsroom"
     # Ambient reactions: the channel's persona reacting with a fitting server emote (emotes.json) to a message it
     # wasn't sent, at most once per channel per cooldown. /status turns it off per channel.
