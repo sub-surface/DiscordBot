@@ -130,6 +130,18 @@ Clips are trimmed of leading silence, capped at 7 seconds, EQ'd (40 Hz high-pass
 
 Tabletop tools that never touch the model, the GPU or Jev. `/roll` takes dice notation (`d20`, `2d6+3`, `1d8+1d6+2`, `4d6kh3` / `kl` / `dh` / `dl`, exploding `d6!`, `d%`, `adv+5` / `dis`, `6x 4d6kh3` for a stat block, then `for stealth` or `# sneak` as the reason); so does mentioning the bot ("@bot roll for initiative" is a d20) or a message that is *only* a roll ("roll d20 for stealth"), matched strictly so chat about rolling never sets it off. The reply is plain text: the total first, the faces in `-#` subtext with dropped dice struck through, and *natural 20* / *natural 1* on a lone d20. The die icons are drawn by the bot (`psychograph/icons.py`) and uploaded once as application emojis, falling back to 🎲 until they are (`psychograph/dice.py`, `cogs/party.py`).
 
+### The Scrollands
+
+The server's tabletop game, played in the game channel (`game_channel`, default `#games`). It uses no model and no GPU; a person, or Claude, runs the story.
+
+- **Characters** (`psychograph/characters.py`): `/character create` is a form (name, class, faction, keepsake, look) followed by a step to roll the spawnpill (`4d6kh3` ×4) or take 15/13/11/9 and place each score. Four scores (MOG, COPE, AURA, LORE); eleven classes, each named after the D&D class it plays like (the Tapewarden is a Fighter, the Lurker a Rogue, the Promptlock a Warlock…); six factions. Sheets are drawn images (`sheet.py`), shown by `/character sheet` or right-click a member → **Character sheet**.
+- **Checks**: `roll perception`, `roll cope for the door`, `save mog`, `roll initiative`. Classic skills map onto the four scores. A check is d20 + modifier: 1–9 it goes wrong, 10–14 yes but, 15+ yes, a natural 20 is mogged and a natural 1 spawnpilled. A roll written into a roleplay message ("…Roll lore") counts.
+- **The world** (`psychograph/world.py`): `/world map` draws the realm and every character's portrait at their place; `/world travel` moves you. The Crier posts a world-status line now and then, only while people have been around.
+- **Right-click actions**: **Challenge to a contest** (both roll, higher wins), **Pay keks**, and on a message **Give a Chuckle** (rewards, up to three).
+- **Tarot**: `assets/tarot/deck.json` links all 78 Rider–Waite–Smith cards at full resolution on Wikimedia Commons; Discord fetches them, so the bot hosts nothing.
+- **Canon**: `assets/world/scrollands.md` holds tone, places, factions, the campaign and what has happened so far.
+- **Running a session with Claude as DM**: the `scrollands-dm` skill (`.claude/skills/`) and `tools/dm/`. `setup.py` creates the Narrator webhook and NPC voices (secrets go in `data/dm.json`), `run_bot.py` runs the bot in game-channel-only mode on the local backend, `watch.py` streams the channel to Claude's Monitor, `say.py` posts as the Narrator or an NPC, and `game.py` reads the party and rolls, rewards, hurts and moves characters.
+
 ### Chess
 
 `/chess new` starts a game in the channel and switches its persona to `chess`; then mention the bot with moves (`e4`, `Nf3`, `e2e4`) or use `/chess move`. Black is played by local Stockfish — never the language model. `/chess commentary on` adds a one-line note from local LM Studio only. If Stockfish fails, your move isn't saved.

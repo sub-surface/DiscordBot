@@ -11,13 +11,15 @@ from __future__ import annotations
 
 import io
 import random
+import time
+from datetime import datetime, timedelta, timezone
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from .. import characters as rules
-from .. import dice, icons, sheet
+from .. import dice, icons, sheet, world
 from ..actions import act
 from ..bot import PsychographBot
 from .help import dice_embed
@@ -83,7 +85,8 @@ class CreateForm(discord.ui.Modal, title="A new adventurer"):
         super().__init__(timeout=900)
         self.cog = cog
         self.role = discord.ui.Label(text="Class", component=discord.ui.Select(options=[
-            discord.SelectOption(label=role.name, value=role.key, description=f"{rules.STAT_NAMES[role.stat]} · {role.blurb}"[:100])
+            discord.SelectOption(label=f"{role.name} ({role.classic})", value=role.key,
+                                 description=f"{rules.STAT_NAMES[role.stat]} · {role.blurb}"[:100])
             for role in rules.CLASSES.values()
         ]))
         self.faction = discord.ui.Label(text="Faction", component=discord.ui.Select(options=[
@@ -180,23 +183,219 @@ class ScoresView(discord.ui.View):
         act("^", interaction.channel, interaction.user, f"created character {character.name[:30]}")
 
 
+# ── Right-click actions ─────────────────────────────────────────────
+
+CONTEST_CHECKS = ["mog", "cope", "aura", "lore", "athletics", "stealth", "persuasion", "deception", "perception", "insight"]
+CRIER_EVERY = timedelta(hours=6)         # at most one Crier line this often
+CRIER_QUIET_AFTER = timedelta(hours=48)  # and only while someone has spoken in the game channel lately
+
+
+def contest_text(a: rules.Character, b: rules.Character, label: str, ra: rules.Check, rb: rules.Check, who_a: str, who_b: str) -> str:
+    if ra.total == rb.total:
+        verdict = "A stalemate. Nobody yields."
+    else:
+        verdict = f"**{(a if ra.total > rb.total else b).name}** wins."
+    return "\n".join((
+        f"### A contest of {label}",
+        f"**{a.name}** {ra.total} · **{b.name}** {rb.total} · {verdict}",
+        f"-# {a.name} ({who_a}) [{ra.kept}] {rules.signed(ra.bonus)} · {b.name} ({who_b}) [{rb.kept}] {rules.signed(rb.bonus)}",
+    ))
+
+
+class ContestView(discord.ui.View):
+    """Pick what the contest is of; both characters roll it and the higher total wins."""
+
+    def __init__(self, challenger: discord.abc.User, target: discord.abc.User, mine: rules.Character, theirs: rules.Character) -> None:
+        super().__init__(timeout=300)
+        self.challenger, self.target, self.mine, self.theirs = challenger, target, mine, theirs
+        self.select = discord.ui.Select(placeholder="A contest of…", options=[
+            discord.SelectOption(label=rules.stat_request(word)[3], value=word) for word in CONTEST_CHECKS
+        ])
+        self.select.callback = self._contest
+        self.add_item(self.select)
+
+    async def _contest(self, interaction: discord.Interaction) -> None:
+        stat, _lean, _reason, label = rules.stat_request(self.select.values[0])
+        ra, rb = rules.check(self.mine, stat, label=label), rules.check(self.theirs, stat, label=label)
+        tones = [{"crit": "crit", "fumble": "fumble"}.get(r.band[0], "normal") for r in (ra, rb)]
+        picture = icons.roll_image([(20, str(ra.total), tones[0]), (20, str(rb.total), tones[1])])
+        self.stop()
+        await interaction.response.edit_message(content="Thrown down.", view=None)
+        text = contest_text(self.mine, self.theirs, label, ra, rb, _who(self.challenger), _who(self.target))
+        await interaction.followup.send(f"{self.target.mention}\n{text}", file=discord.File(io.BytesIO(icons.png(picture)), filename="contest.png"),
+                                        allowed_mentions=discord.AllowedMentions(users=[self.target]))
+        act("^", interaction.channel, interaction.user, f"contest of {label} with {_who(self.target)[:20]}")
+
+
+class PayForm(discord.ui.Modal, title="Pay keks"):
+    amount = discord.ui.TextInput(label="How many keks", placeholder="25", max_length=7)
+    note = discord.ui.TextInput(label="What for (optional)", required=False, max_length=80, placeholder="for the pizza")
+
+    def __init__(self, bot: PsychographBot, target: discord.abc.User) -> None:
+        super().__init__(timeout=300)
+        self.bot, self.target = bot, target
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild_id
+        payer, payee = load_character(self.bot, guild, interaction.user.id), load_character(self.bot, guild, self.target.id)
+        try:
+            amount = int(self.amount.value.strip().replace(",", ""))
+        except ValueError:
+            amount = 0
+        if payer is None or payee is None or amount <= 0 or amount > payer.keks:
+            reason = ("Both of you need a character." if payer is None or payee is None
+                      else f"You have {payer.keks} keks." if amount > 0 else "Enter a whole number of keks.")
+            await interaction.response.send_message(reason, ephemeral=True)
+            return
+        payer.keks -= amount
+        payee.keks += amount
+        self.bot.store.save_character(guild, interaction.user.id, payer.to_dict())
+        self.bot.store.save_character(guild, self.target.id, payee.to_dict())
+        note = f" {self.note.value.strip()}" if self.note.value.strip() else ""
+        await interaction.response.send_message(f"-# {payer.name} paid {payee.name} **{amount} keks**{note}.", allowed_mentions=NO_PINGS)
+        act("^", interaction.channel, interaction.user, f"paid {amount} keks to {_who(self.target)[:20]}")
+
+
 class PartyCog(commands.Cog):
     character = app_commands.Group(name="character", description="Your adventurer in the Scrollands")
+    world_group = app_commands.Group(name="world", description="The Scrollands: the map, and travel")
 
     def __init__(self, bot: PsychographBot) -> None:
         self.bot = bot
         self._synced = False
-        self.sheet_menu = app_commands.ContextMenu(name="Character sheet", callback=self.sheet_of)
-        self.bot.tree.add_command(self.sheet_menu)
+        self.menus = [
+            app_commands.ContextMenu(name="Character sheet", callback=self.sheet_of),
+            app_commands.ContextMenu(name="Challenge to a contest", callback=self.challenge),
+            app_commands.ContextMenu(name="Pay keks", callback=self.pay),
+            app_commands.ContextMenu(name="Give a Chuckle", callback=self.give_chuckle),
+        ]
+        for menu in self.menus:
+            self.bot.tree.add_command(menu)
 
     async def cog_unload(self) -> None:
-        self.bot.tree.remove_command(self.sheet_menu.name, type=self.sheet_menu.type)
+        self.crier.cancel()
+        for menu in self.menus:
+            self.bot.tree.remove_command(menu.name, type=menu.type)
 
     @commands.Cog.listener()
     async def on_ready(self) -> None:
         if not self._synced:
             self._synced = True
             await icons.sync(self.bot)
+        if not self.crier.is_running():
+            self.crier.start()
+
+    # ── The Crier: world status, now and then, while people are around ──
+
+    def game_channel(self) -> discord.TextChannel | None:
+        for guild in self.bot.guilds:
+            found = discord.utils.get(guild.text_channels, name=self.bot.settings.game_channel)
+            if found is not None:
+                return found
+        return None
+
+    @tasks.loop(minutes=30)
+    async def crier(self) -> None:
+        last = float(self.bot.store.state("crier:last") or 0)
+        if time.time() - last < CRIER_EVERY.total_seconds() or random.random() > 0.35:
+            return
+        channel = self.game_channel()
+        if channel is None:
+            return
+        recent = [message async for message in channel.history(limit=20)]
+        since = datetime.now(timezone.utc) - CRIER_QUIET_AFTER
+        if not any(not message.author.bot and message.created_at > since for message in recent):
+            return  # nobody has been around: a crier shouting into an empty square is just noise
+        self.bot.store.set_state("crier:last", str(time.time()))
+        await channel.send(world.crier_line(), allowed_mentions=NO_PINGS)
+        act(".", channel, "-", "the Crier spoke")
+
+    # ── Right-click: contests, keks and Chuckles ──
+
+    async def _both(self, interaction: discord.Interaction, member: discord.abc.User):
+        mine = load_character(self.bot, interaction.guild_id, interaction.user.id)
+        theirs = load_character(self.bot, interaction.guild_id, member.id)
+        if member.id == interaction.user.id:
+            await interaction.response.send_message("That's you.", ephemeral=True)
+        elif mine is None:
+            await interaction.response.send_message("Make a character first: `/character create`.", ephemeral=True)
+        elif theirs is None:
+            await interaction.response.send_message(f"{_who(member)} hasn't made a character yet.", ephemeral=True)
+        else:
+            return mine, theirs
+        return None
+
+    async def challenge(self, interaction: discord.Interaction, member: discord.Member) -> None:
+        if (pair := await self._both(interaction, member)) is not None:
+            await interaction.response.send_message(f"Challenge **{pair[1].name}** to a contest of:", ephemeral=True,
+                                                    view=ContestView(interaction.user, member, *pair))
+
+    async def pay(self, interaction: discord.Interaction, member: discord.Member) -> None:
+        if await self._both(interaction, member) is not None:
+            await interaction.response.send_modal(PayForm(self.bot, member))
+
+    async def give_chuckle(self, interaction: discord.Interaction, message: discord.Message) -> None:
+        """Right-click a message → Apps → Give a Chuckle: its author's character earns one (up to three)."""
+        author = message.author
+        character = None if author.bot else load_character(self.bot, interaction.guild_id, author.id)
+        key = f"chuckle:{message.id}:{interaction.user.id}"
+        if author.id == interaction.user.id:
+            reply = "You can't chuckle at your own post. Well, you can, but it doesn't count."
+        elif character is None:
+            reply = "Only a member with a character can earn a Chuckle."
+        elif self.bot.store.state(key):
+            reply = "You already gave a Chuckle for that one."
+        elif character.chuckles >= rules.MAX_CHUCKLES:
+            reply = f"{character.name} is already holding all {rules.MAX_CHUCKLES}."
+        else:
+            character.chuckles += 1
+            self.bot.store.save_character(interaction.guild_id, author.id, character.to_dict())
+            self.bot.store.set_state(key, "1")
+            await interaction.response.send_message(f"-# {_who(interaction.user)} gave **{character.name}** a Chuckle for {message.jump_url}",
+                                                    allowed_mentions=NO_PINGS)
+            return
+        await interaction.response.send_message(reply, ephemeral=True)
+
+    # ── The map ──
+
+    @world_group.command(name="map", description="The map of the Scrollands, and where everyone's characters are")
+    async def world_map(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+        people = []
+        for user_id, data in self.bot.store.characters(interaction.guild_id):
+            character = rules.Character.from_dict(data)
+            portrait = None
+            try:
+                member = interaction.guild.get_member(user_id) or await interaction.guild.fetch_member(user_id)
+                portrait = await member.display_avatar.replace(size=128, format="png").read()
+            except (discord.HTTPException, AttributeError):
+                pass
+            people.append((character.name, character.location, portrait))
+        listing: dict[str, list[str]] = {}
+        for name, key, _portrait in people:
+            listing.setdefault(world.place(key).name, []).append(name)
+        summary = "\n".join(f"-# **{place}** · {', '.join(names)}" for place, names in listing.items()) or "-# Nobody has set out yet."
+        await interaction.followup.send(summary, file=discord.File(io.BytesIO(world.map_png(people)), filename="scrollands.png"),
+                                        allowed_mentions=NO_PINGS)
+
+    @world_group.command(name="travel", description="Move your character to a place on the map")
+    @app_commands.describe(place="Where to")
+    async def travel(self, interaction: discord.Interaction, place: str) -> None:
+        character = load_character(self.bot, interaction.guild_id, interaction.user.id)
+        destination = world.PLACES.get(place) or world.find_place(place)
+        if character is None or destination is None:
+            await interaction.response.send_message("Make a character first: `/character create`." if character is None
+                                                    else "Pick a place from the list.", ephemeral=True)
+            return
+        character.location = destination.key
+        self.bot.store.save_character(interaction.guild_id, interaction.user.id, character.to_dict())
+        await interaction.response.send_message(f"**{character.name}** sets out for **{destination.name}**.\n-# {destination.blurb}",
+                                                allowed_mentions=NO_PINGS)
+
+    @travel.autocomplete("place")
+    async def travel_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        return [app_commands.Choice(name=p.name, value=p.key) for p in world.PLACES.values()
+                if current.lower() in p.name.lower()][:25]
 
     @app_commands.command(name="roll", description="Roll dice (2d6+3, adv+5) or a check with your character (cope, mog adv)")
     @app_commands.describe(dice="Dice notation (2d6+3, 4d6kh3, adv+5) or a score (mog, cope, aura, lore)", reason="What it's for")

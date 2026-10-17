@@ -91,7 +91,7 @@ def _shape(sides: int, big: float, margin: float):
 def draw_die(sides: int, label: str | None = None, size: int = SIZE, tone: str = "normal"):
     """A die face as an RGBA image: a solid polyhedron in line art (its real facet lines), with `label` (default: the
     side count) set as large as the front face allows. tone "crit" is brass, "fumble" ember-edged and cracked."""
-    from PIL import Image, ImageDraw
+    from PIL import Image, ImageChops, ImageDraw
 
     sides = sides if sides in (4, 6, 8, 10, 12, 20) else 20
     face, edge, facet, numeral = _TONES.get(tone, _TONES["normal"])
@@ -104,9 +104,6 @@ def draw_die(sides: int, label: str | None = None, size: int = SIZE, tone: str =
     draw.polygon(outline, fill=face)
     for a, b in facets:
         draw.line([a, b], fill=facet, width=max(1, round(line * 0.55)))
-    if tone == "fumble":  # a crack from the top edge into the face
-        crack = [(big * 0.6, big * 0.06), (big * 0.53, big * 0.24), (big * 0.6, big * 0.34), (big * 0.5, big * 0.47)]
-        draw.line(crack, fill=EMBER, width=max(1, round(line * 0.8)), joint="curve")
     label = str(sides) if label is None else label
     if len(label) >= 3:
         room_w *= 1.25
@@ -125,7 +122,31 @@ def draw_die(sides: int, label: str | None = None, size: int = SIZE, tone: str =
         draw.rectangle(knock, fill=face)
     draw.polygon(outline, outline=edge, width=line)
     draw.text((centre[0] - (box[0] + box[2]) / 2, centre[1] - (box[1] + box[3]) / 2), label, font=font, fill=numeral)
+    if tone == "fumble":  # split clean through: a gap you can see the table through, with a branch and a chip
+        die_alpha = image.getchannel("A")  # the crack stays inside the die's silhouette
+        _fissure(draw, [(0.70, -0.02), (0.63, 0.16), (0.72, 0.27), (0.62, 0.40), (0.69, 0.50), (0.64, 0.58)], big, big * 0.085)
+        _fissure(draw, [(0.63, 0.16), (0.52, 0.22), (0.45, 0.18)], big, big * 0.04)
+        _fissure(draw, [(0.04, 0.70), (0.17, 0.76), (0.20, 0.86)], big, big * 0.05)
+        image.putalpha(ImageChops.darker(image.getchannel("A"), die_alpha))
     return image.resize((size, size), Image.LANCZOS)
+
+
+def _fissure(draw, path: list[tuple[float, float]], big: float, width: float) -> None:
+    """A crack as a tapering wedge cut out of the die (wide where it breaks the edge, closing to nothing), rimmed in ember."""
+    points = [(x * big, y * big) for x, y in path]
+    left, right = [], []
+    for index, (x, y) in enumerate(points):
+        nx, ny = points[min(index + 1, len(points) - 1)]
+        px, py = points[max(index - 1, 0)]
+        dx, dy = nx - px, ny - py
+        length = math.hypot(dx, dy) or 1
+        half = width * (1 - index / (len(points) - 1)) ** 0.8 / 2
+        left.append((x - dy / length * half, y + dx / length * half))
+        right.append((x + dy / length * half, y - dx / length * half))
+    wedge = left + right[::-1]
+    draw.polygon(wedge, fill=(0, 0, 0, 0))
+    draw.line(left, fill=EMBER, width=max(1, round(width * 0.14)), joint="curve")
+    draw.line(right, fill=EMBER, width=max(1, round(width * 0.14)), joint="curve")
 
 
 def png(image) -> bytes:

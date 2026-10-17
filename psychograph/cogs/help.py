@@ -51,6 +51,33 @@ def dice_embed(bot: PsychographBot) -> discord.Embed:
     return embed
 
 
+def game_embed(bot: PsychographBot) -> discord.Embed:
+    """The Scrollands at a glance: making a character, checks, the map and the right-click actions."""
+    embed = discord.Embed(
+        title="The Scrollands",
+        description=("A dark, very online fantasy world played in #" + bot.settings.game_channel + ". Make an adventurer, "
+                     "roll checks with your scores, and wander a realm built out of the server's memes."),
+        color=EMBED_COLOR,
+    )
+    embed.add_field(name="Your character", value=_lines(
+        "`/character create`: name, class (each plays like a D&D class), faction, keepsake, then your scores",
+        "`/character sheet`, or right-click a member → Apps → **Character sheet**",
+        "Scores: **MOG** body · **COPE** nerve and argument · **AURA** presence · **LORE** knowing things",
+    ), inline=False)
+    embed.add_field(name="Checks", value=_lines(
+        "`roll perception`, `roll stealth for the guards`, `roll cope adv`, `save mog`, `roll initiative`",
+        "1–9 it goes wrong · 10–14 yes, but · 15+ yes · natural 20 mogged · natural 1 spawnpilled",
+        "A roll at the end of a roleplay message counts too: *…I pick the lock. Roll sleight*",
+    ), inline=False)
+    embed.add_field(name="The world", value=_lines(
+        "`/world map`: the realm and where everyone is · `/world travel`: set out somewhere",
+        "Right-click a member → **Challenge to a contest** · **Pay keks**",
+        "Right-click a great post → **Give a Chuckle** (spend Chuckles for advantage or a reroll)",
+    ), inline=False)
+    embed.set_footer(text="Dice and sheets are instant · /help dice for the notation")
+    return embed
+
+
 def help_embed(bot: PsychographBot, channel_id: int, guild_id: int | None) -> discord.Embed:
     """The /help card: what to type, grouped by what answers it (the model, tools, or instantly)."""
     persona = bot.personas.for_channel(channel_id, guild_id)
@@ -104,6 +131,7 @@ def help_embed(bot: PsychographBot, channel_id: int, guild_id: int | None) -> di
         value=_lines(
             f"`/roll` *2d6+3* · or just say **roll d20 for stealth** · or {me} roll for initiative",
             "`adv+5` / `dis` · `4d6kh3` keep highest · `d6!` exploding · `6x 4d6kh3` stats · **`/help dice`** explains it all",
+            "**The Scrollands**, the server's tabletop game: `/character create` · `/world map` · **`/help game`**",
         ),
         inline=False,
     )
@@ -171,9 +199,10 @@ class HelpCommands(commands.Cog):
 
     @app_commands.command(name="help", description="What I can do and how to use it")
     @app_commands.describe(topic="A cheat sheet for one feature")
-    @app_commands.choices(topic=[app_commands.Choice(name="dice", value="dice")])
+    @app_commands.choices(topic=[app_commands.Choice(name="dice", value="dice"), app_commands.Choice(name="game", value="game")])
     async def help(self, interaction: discord.Interaction, topic: str = "") -> None:
-        embed = dice_embed(self.bot) if topic == "dice" else help_embed(self.bot, interaction.channel_id, interaction.guild_id)
+        embed = (dice_embed(self.bot) if topic == "dice" else game_embed(self.bot) if topic == "game"
+                 else help_embed(self.bot, interaction.channel_id, interaction.guild_id))
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 

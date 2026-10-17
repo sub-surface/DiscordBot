@@ -35,6 +35,7 @@ MAX_CHUCKLES = 3
 class Role:
     key: str
     name: str
+    classic: str     # the D&D class it plays like, so people know what they're picking
     stat: str
     blurb: str
     move: str
@@ -42,19 +43,42 @@ class Role:
 
 
 CLASSES: dict[str, Role] = {role.key: role for role in (
-    Role("tapewarden", "Tapewarden", "mog", "Settles disputes the old way: by measuring them.",
-         "Tale of the Tape", "Measure a foe. Your next MOG roll against it has advantage."),
-    Role("sophist", "Sophist", "cope", "Has never lost an argument, by their own account.",
-         "I Recognize the Distinction", "Once a scene, reroll a failed COPE roll and keep the better."),
-    Role("arbiter", "Arbiter", "cope", "Carries the cards. Just, and forgiving.",
-         "Yellow Card", "Book anyone who says a thing and its opposite. Their next roll has disadvantage."),
-    Role("liturgist", "Liturgist", "aura", "Keeper of the Antiphon, where the words matter exactly.",
+    Role("tapewarden", "Tapewarden", "Fighter", "mog", "Settles every dispute the old way: with a ruler and a witness.",
+         "Tale of the Tape", "Measure a foe. Your next attack on it has advantage."),
+    Role("brute", "Brute", "Barbarian", "mog", "Never invited, lifts anyway. Fuelled by every party they weren't told about.",
+         "Rage of the Overlooked", "While nobody is paying you any attention, your MOG rolls have advantage."),
+    Role("lurker", "Lurker", "Rogue", "mog", "Was in the channel the whole time. Never typed a word.",
+         "Read Receipts", "Once a scene, act first and unseen: you were here all along."),
+    Role("sophist", "Sophist", "Bard", "cope", "Has never lost an argument, by their own account.",
+         "Cope Harder", "Once a scene, reroll a failed COPE check and keep the better."),
+    Role("liturgist", "Liturgist", "Cleric", "aura", "Keeper of the Antiphon, where the words must be repeated exactly.",
          "Antiphony", "Once a scene, an ally who repeats your words exactly heals 1d6. A faithful typo heals 2d6."),
-    Role("clankwright", "Clankwright", "lore", "Builds, befriends and impeaches machines.",
+    Role("sigma", "Sigma", "Paladin", "aura", "Sworn to a code only they understand. The grindset is the oath.",
+         "Lone Wolf", "When you act entirely alone, add +2 to the roll."),
+    Role("clankwright", "Clankwright", "Wizard", "lore", "Studies the machines. Some of the machines study back.",
          "Machine Witness", "Once a session, ask the oracle twice and keep the answer you prefer."),
-    Role("grinder", "Grinder", "mog", "An ascetic of the long grind. Level 60 Agility is a vow.",
+    Role("promptlock", "Promptlock", "Warlock", "lore", "Signed a pact with a nameless machine god. Never read the terms.",
+         "Pact of the Context Window", "Once a session your patron answers anything. It always collects, later."),
+    Role("spawnpilled", "Spawnpilled", "Sorcerer", "aura", "Born with it. Insufferable about it.",
+         "Genetic Lottery", "Once a session, reroll any die. Fate was always on your side, or never was."),
+    Role("grinder", "Grinder", "Monk", "mog", "An ascetic of the long grind. Level 60 Agility is a vow.",
          "Ironman", "Once a scene, doing something slow and tedious on purpose earns a Chuckle."),
+    Role("grasstoucher", "Grasstoucher", "Ranger", "lore", "The only one who has been outside. Will not stop mentioning it.",
+         "Touched Grass", "Advantage on checks made outdoors, far from any screen."),
 )}
+
+LEGACY_ROLES = {"arbiter": "sigma"}  # retired classes and factions, mapped to their nearest successor
+LEGACY_FACTIONS = {"card": "jannie"}
+
+# Classic checks, each read from one of the four scores, so "roll perception" works like it does at any table.
+SKILLS = {
+    "athletics": "mog", "acrobatics": "mog", "stealth": "mog", "sleight": "mog", "initiative": "mog", "intimidation": "mog",
+    "deception": "cope", "performance": "cope", "willpower": "cope", "concentration": "cope",
+    "persuasion": "aura", "insight": "aura", "animal": "aura", "charm": "aura",
+    "perception": "lore", "investigation": "lore", "arcana": "lore", "history": "lore", "religion": "lore",
+    "medicine": "lore", "nature": "lore", "survival": "lore",
+}
+SKILL_NAMES = {"sleight": "Sleight of Hand", "animal": "Animal Handling"}
 
 
 @dataclass(frozen=True)
@@ -70,8 +94,8 @@ FACTIONS: dict[str, Faction] = {faction.key: faction for faction in (
             "Old nobility that only ever marries up, and keeps a ledger of who answers whom."),
     Faction("iron", "The Iron Brotherhood", "the Blackpill Brothers",
             "Ascetic lifters who hold that fate is fixed at spawn, and train anyway."),
-    Faction("card", "The Order of the Yellow Card", "the Referees",
-            "Magistrates who rule in six words or fewer, sealed with a frog that says nuh uh."),
+    Faction("jannie", "The Unpaid Watch", "the Jannies",
+            "Undying janitors who keep the roads clean and the wicked banned. They are not paid. They never were."),
     Faction("clank", "The Clankworks", "the Clankers",
             "Machine folk and their keepers: Omnius, Bernard the record-keeper, Mini Me the seer."),
     Faction("exchange", "The Exchange", "the Metric",
@@ -89,7 +113,7 @@ KEEPSAKES = (
     "a poster of a famous knife fight",
     "a block list with one name you can't remember adding",
     "an unread PDF you carry everywhere",
-    "a yellow card, already used once",
+    "a ban hammer, slightly chipped, origin unclear",
     "a frog-shaped seal that says nuh uh",
     "a bowl, for eating hotdogs out of on fight day",
 )
@@ -100,7 +124,12 @@ BANDS = (  # (lowest total, key, label)
     (-99, "miss", "It goes wrong."),
 )
 
-_STAT_ROLL = re.compile(r"^\s*(mog|cope|aura|lore)\b\s*(adv|advantage|dis|disadvantage)?\s*(?:(?:for|#)\s*(.+))?$", re.IGNORECASE)
+_CHECK_WORDS = "|".join(sorted([*STATS, *SKILLS], key=len, reverse=True))
+_STAT_ROLL = re.compile(
+    r"^\s*(?P<pre>(?:save|saving throw)\s+)?(?P<word>" + _CHECK_WORDS + r")\b(?P<post>\s+(?:save|saving throw))?\s*"
+    r"(?P<lean>adv|advantage|dis|disadvantage)?\s*(?:(?:for|#)\s*(?P<reason>.+))?$",
+    re.IGNORECASE,
+)
 
 
 def modifier(score: int) -> int:
@@ -125,6 +154,7 @@ class Character:
     keks: int = STARTING_KEKS
     chuckles: int = 1
     portrait: str = ""            # an image URL (the member's avatar unless they choose one)
+    location: str = "kekwick"     # where they are on the world map (world.py)
     notes: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -137,11 +167,11 @@ class Character:
 
     @property
     def role_info(self) -> Role:
-        return CLASSES.get(self.role, CLASSES["sophist"])
+        return CLASSES.get(LEGACY_ROLES.get(self.role, self.role), CLASSES["sophist"])
 
     @property
     def faction_info(self) -> Faction:
-        return FACTIONS.get(self.faction, FACTIONS["none"])
+        return FACTIONS.get(LEGACY_FACTIONS.get(self.faction, self.faction), FACTIONS["none"])
 
     def mod(self, stat: str) -> int:
         return modifier(self.scores.get(stat, 10))
@@ -161,13 +191,19 @@ def spawnpill(rng: random.Random | None = None) -> list[int]:
     return sorted(result.totals, reverse=True)
 
 
-def stat_request(text: str) -> tuple[str, str, str] | None:
-    """("mog", "adv"|"dis"|"", reason) for "mog", "cope adv for the door", "lore # history"; else None."""
+def stat_request(text: str) -> tuple[str, str, str, str] | None:
+    """(stat, "adv"|"dis"|"", reason, label) for "mog", "perception adv for traps", "save cope", "initiative"; else None."""
     match = _STAT_ROLL.match(text)
     if match is None:
         return None
-    lean = (match.group(2) or "").lower()[:3]
-    return match.group(1).lower(), lean, (match.group(3) or "").strip()
+    word = match["word"].lower()
+    stat = word if word in STATS else SKILLS[word]
+    if word in STATS:
+        label = f"{STAT_NAMES[stat]} save" if match["pre"] or match["post"] else STAT_NAMES[stat]
+    else:
+        label = f"{SKILL_NAMES.get(word, word.title())} ({STAT_NAMES[stat]})"
+    lean = (match["lean"] or "").lower()[:3]
+    return stat, lean, (match["reason"] or "").strip(), label
 
 
 @dataclass
@@ -177,6 +213,7 @@ class Check:
     kept: int
     bonus: int
     reason: str
+    label: str = ""
 
     @property
     def total(self) -> int:
@@ -195,11 +232,12 @@ class Check:
         return next((key, label) for lowest, key, label in BANDS if self.total >= lowest)
 
 
-def check(character: Character, stat: str, lean: str = "", reason: str = "", rng: random.Random | None = None) -> Check:
+def check(character: Character, stat: str, lean: str = "", reason: str = "", label: str = "",
+          rng: random.Random | None = None) -> Check:
     rng = rng or random.SystemRandom()
     faces = [rng.randint(1, 20) for _ in range(2 if lean in ("adv", "dis") else 1)]
     kept = max(faces) if lean == "adv" else min(faces) if lean == "dis" else faces[0]
-    return Check(stat, faces, kept, character.mod(stat), reason)
+    return Check(stat, faces, kept, character.mod(stat), reason, label or STAT_NAMES[stat])
 
 
 def render_check(result: Check, character: Character, who: str) -> str:
@@ -212,5 +250,5 @@ def render_check(result: Check, character: Character, who: str) -> str:
         for index, face in enumerate(faces)) + "]"
     return (
         f"**{result.total}** · {label}\n"
-        f"-# {character.name} ({who}) rolled {STAT_NAMES[result.stat]}{reason} · {shown} {signed(result.bonus)}"
+        f"-# {character.name} ({who}) rolled {result.label}{reason} · {shown} {signed(result.bonus)}"
     )

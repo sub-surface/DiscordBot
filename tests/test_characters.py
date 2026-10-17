@@ -24,7 +24,7 @@ class FixedRandom(random.Random):
 
 
 def hero(**changes) -> rules.Character:
-    base = dict(name="Theophant the Unshirted", role="arbiter", faction="iron",
+    base = dict(name="Theophant the Unshirted", role="sigma", faction="iron",
                 scores={"mog": 14, "cope": 17, "aura": 9, "lore": 12}, keepsake=rules.KEEPSAKES[11])
     return rules.Character(**{**base, **changes})
 
@@ -48,9 +48,14 @@ class RulesTests(unittest.TestCase):
         self.assertEqual((advantage.kept, disadvantage.kept), (16, 4))
 
     def test_stat_requests(self) -> None:
-        self.assertEqual(rules.stat_request("cope for the door"), ("cope", "", "the door"))
-        self.assertEqual(rules.stat_request("MOG adv"), ("mog", "adv", ""))
-        self.assertEqual(rules.stat_request("lore # history"), ("lore", "", "history"))
+        self.assertEqual(rules.stat_request("cope for the door"), ("cope", "", "the door", "COPE"))
+        self.assertEqual(rules.stat_request("MOG adv"), ("mog", "adv", "", "MOG"))
+        self.assertEqual(rules.stat_request("lore # history"), ("lore", "", "history", "LORE"))
+        self.assertEqual(rules.stat_request("perception adv for traps"), ("lore", "adv", "traps", "Perception (LORE)"))
+        self.assertEqual(rules.stat_request("initiative"), ("mog", "", "", "Initiative (MOG)"))
+        self.assertEqual(rules.stat_request("save cope"), ("cope", "", "", "COPE save"))
+        self.assertEqual(rules.stat_request("aura save dis"), ("aura", "dis", "", "AURA save"))
+        self.assertEqual(dice.request("roll stealth for the guards", strict=True), "stealth for the guards")
         self.assertIsNone(rules.stat_request("2d6+3"))
         self.assertEqual(dice.request("roll cope for the door", strict=True), "cope for the door")
         self.assertIsNone(dice.request("roll copes", strict=True))
@@ -87,7 +92,8 @@ class StatRollTests(unittest.TestCase):
 
     def test_a_stat_roll_uses_the_character_and_names_the_band(self) -> None:
         random_check = rules.check
-        rules.check = lambda character, stat, lean="", reason="", rng=None: random_check(character, stat, lean, reason, FixedRandom(12))
+        rules.check = lambda character, stat, lean="", reason="", label="", rng=None: random_check(
+            character, stat, lean, reason, label, FixedRandom(12))
         try:
             text, picture = roll_reply(self.bot, "cope for the door", "Hugh Chungus", hero())
         finally:
@@ -104,3 +110,36 @@ class StatRollTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorldTests(unittest.TestCase):
+    def test_places_roads_and_the_crier(self) -> None:
+        from psychograph import world
+
+        self.assertEqual(world.find_place("the cringe tavern").key, "cringe")
+        self.assertEqual(world.find_place("Dead Chat").key, "deadchat")
+        self.assertIsNone(world.find_place("narnia"))
+        self.assertEqual(world.place("nowhere").key, "kekwick")
+        self.assertTrue(all(a in world.PLACES and b in world.PLACES for a, b in world.ROADS))
+        line = world.crier_line(random.Random(3))
+        self.assertTrue(line.startswith("**The Crier** · "))
+
+    def test_map_draws_people_at_their_places(self) -> None:
+        from psychograph import world
+
+        png = world.map_png([("Foidslayer3000", "cringe", None), ("A Wanderer", "deadchat", b"not an image"), ("Lost", "atlantis", None)])
+        with Image.open(io.BytesIO(png)) as image:
+            self.assertEqual(image.size, (world.W, world.H))
+
+    def test_classic_classes_and_a_retired_one(self) -> None:
+        self.assertEqual({role.classic for role in rules.CLASSES.values()} >= {"Fighter", "Rogue", "Wizard", "Cleric", "Bard", "Ranger"}, True)
+        self.assertEqual(hero(role="arbiter").role_info.key, "sigma")  # the Yellow Card class, retired
+
+    def test_contest_text_names_the_winner_or_a_stalemate(self) -> None:
+        from psychograph.cogs.party import contest_text
+
+        a, b = hero(), hero(name="Stackhouse", role="liturgist")
+        win = contest_text(a, b, "COPE", rules.Check("cope", [15], 15, 3, ""), rules.Check("cope", [4], 4, 0, ""), "Hugh", "Stack")
+        tie = contest_text(a, b, "COPE", rules.Check("cope", [10], 10, 0, ""), rules.Check("cope", [10], 10, 0, ""), "Hugh", "Stack")
+        self.assertIn("**Theophant the Unshirted** wins", win)
+        self.assertIn("stalemate", tie)

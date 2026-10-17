@@ -94,7 +94,7 @@ def render(character: Character, player: str, portrait: bytes | None = None):
         name_font = _font("Marcellus-Regular.ttf", name_font.size // S - 4)
     draw.text((nx, 58 * S), name, font=name_font, fill=BONE)
     role, faction = character.role_info, character.faction_info
-    standing = f"LEVEL {character.level} {role.name.upper()}  ·  {faction.name.upper()}"
+    standing = f"LEVEL {character.level} {role.name.upper()} ({role.classic.upper()})  ·  {faction.name.upper()}"
     _spaced(draw, (nx, 140 * S), standing, _font("BarlowSemiCondensed-SemiBold.ttf", 20), BRASS, 0.14)
     sub = f"{faction.nickname} · played by {player}" if faction.key != "none" else f"played by {player}"
     draw.text((nx, 170 * S), sub, font=_font("BarlowSemiCondensed-Italic.ttf", 22), fill=MUTED)

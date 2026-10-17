@@ -60,6 +60,7 @@ class Settings:
     heartbeat_hours: str = "13-1"
     slop_channel: str = "sim-city"           # where /santi-slop looks for shared posts
     digest_channel: str = "newsroom"
+    game_channel: str = "games"              # the Scrollands: where the Crier posts and the game lives
     # Ambient reactions: the channel's persona reacting with a fitting server emote (emotes.json) to a message it
     # wasn't sent, at most once per channel per cooldown. /status turns it off per channel.
     ambient_reactions: bool = True
