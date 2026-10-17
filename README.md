@@ -1,6 +1,6 @@
 # Psychograph
 
-A multi-persona Discord bot. Each channel picks a persona; the bot answers when mentioned, when someone replies to one of its messages or when someone talks to a persona by name, and each reply chain keeps its own memory (on MiMo it also sees the recent channel messages that matter to the reply). Inference runs on a local LM Studio server or an on-demand Modal GPU worker that scales to zero, tuned per model.
+A multi-persona Discord bot. Each channel picks a persona; the bot answers when mentioned, when someone replies to one of its messages or when someone talks to a persona by name, and each reply chain keeps its own memory (on the full-context models it also sees the recent channel messages that matter to the reply, and MiniCPM-V also sees posted images). Inference runs on a local LM Studio server or an on-demand Modal GPU worker that scales to zero, tuned per model.
 
 It only responds in `#sim-city`, `#little-st-james`, `#shitpost`, `#games`, `#zack’s-padded-room`, `#zack’s-waiting-room` and `#leg-day` (and their threads) — set `allowed_channels` in `config.yaml`.
 
@@ -69,11 +69,11 @@ For a chat reply, the model gets the persona, the reply chain (up to 100 message
 - Answers by other personas in the reply chain (a tool's, say) are quoted as `[bot as judge, quoted for context]` rather than passed off as the current persona's own words.
 - The footer shows how many channel messages it saw (*saw 9 channel msgs*).
 
-The channel is fetched once per request (one Discord page of 100 messages) and shared by triage, tools and chat context. Images aren't seen: an attachment shows as `[attachment: name]`.
+The channel is fetched once per request (one Discord page of 100 messages) and shared by triage, tools and chat context. In transcripts an attachment shows as `[attachment: name]`. On a vision model (`"vision": true`, MiniCPM-V) the request's own pictures, those in the message it replies to, and the photos of linked X/Twitter posts (from Discord's preview, or the public fxtwitter record when the preview hasn't unfurled yet) are shown to the model: up to 3, downloaded by the bot only from Discord's media hosts and `pbs.twimg.com` (https, no redirects), fitted to 1024 px and sent as JPEG data URLs (`psychograph/vision.py`); the stored turn notes that an image was shared, not the image. An image with only a mention is enough to get a reply.
 
 ### Tools
 
-Tool personas have a job rather than a personality. They only run on models whose `models.json` profile sets `"tools": true` (MiMo); on MechaEpstein they say so instead of derailing on a long transcript.
+Tool personas have a job rather than a personality. They only run on models whose `models.json` profile sets `"tools": true` (MiniCPM-V, MiMo); on MechaEpstein they say so instead of derailing on a long transcript.
 
 **Calling one.** Switch a channel to a tool with `/persona`, or call one from any channel:
 - **By name:** start a mention with the tool's name or a trigger (`@bot judge: …`, `@bot minutes`, `@bot tldr`, `@bot steelman …`, `@bot review the argument`).
@@ -126,6 +126,10 @@ python tools/build_soundbank.py          # converts new or changed clips; --forc
 
 Clips are trimmed of leading silence, capped at 7 seconds, EQ'd (40 Hz high-pass, 13 kHz low-pass, a gentle 3 kHz dip), compressed, levelled to -24 dB RMS in two passes (so even sub-second blips match), peak-limited to about -4 dBFS and encoded as Ogg Opus, with the duration and waveform written to `sounds/sounds.json`. The audio files are git-ignored because they come from a local sample library; restart the bot after building.
 
+### Party
+
+Tabletop tools that never touch the model, the GPU or Jev. `/roll` takes dice notation (`d20`, `2d6+3`, `1d8+1d6+2`, `4d6kh3` / `kl` / `dh` / `dl`, exploding `d6!`, `d%`, `adv+5` / `dis`, `6x 4d6kh3` for a stat block, then `for stealth` or `# sneak` as the reason); so does mentioning the bot ("@bot roll for initiative" is a d20) or a message that is *only* a roll ("roll d20 for stealth"), matched strictly so chat about rolling never sets it off. The reply is plain text: the total first, the faces in `-#` subtext with dropped dice struck through, and *natural 20* / *natural 1* on a lone d20. The die icons are drawn by the bot (`psychograph/icons.py`) and uploaded once as application emojis, falling back to 🎲 until they are (`psychograph/dice.py`, `cogs/party.py`).
+
 ### Chess
 
 `/chess new` starts a game in the channel and switches its persona to `chess`; then mention the bot with moves (`e4`, `Nf3`, `e2e4`) or use `/chess move`. Black is played by local Stockfish — never the language model. `/chess commentary on` adds a one-line note from local LM Studio only. If Stockfish fails, your move isn't saved.
@@ -135,16 +139,16 @@ Clips are trimmed of leading silence, capped at 7 seconds, EQ'd (40 Hz high-pass
 `models.json` is the single list of models. Each entry drives three things:
 
 - **Dashboard presets** (`dash.mjs` → *Choose model*), including storage estimates.
-- **Deploy settings** (`modal_app.py`): server context size and whether the model has a thinking mode. Choosing a preset writes them to `.env`; explicit `.env` values still win. Whether a reply actually thinks is decided per request by `/bot thinking` (off by default).
+- **Deploy settings** (`modal_app.py`): server context size, whether the model has a thinking mode, its GPU (`gpu`) and its vision projector (`mmproj`, a second GGUF from the same repo). Choosing a preset writes them to `.env`; explicit `.env` values still win. Whether a reply actually thinks is decided per request by `/bot thinking` (off by default).
 - **Chat tuning** (the bot): context mode, history depth, prompt budget, output length, temperature, top-p, and whether tool personas may run (`"tools": true`). When the configured model matches a profile, these override `.env`'s generic `LLM_TEMPERATURE` / `*_MAX_OUTPUT_TOKENS`.
 
-| | MiMo V2.6 Distill Qwen 9B | MechaEpstein 8000 |
-|---|---|---|
-| Context mode | **full** — whole persona with facts, 100-message reply chains plus the last 60 channel messages (`channel_messages`), linked posts as JSON | **compact** — short persona voice, last 6 messages clipped to ~400 chars, plain-language rules |
-| Tools | on | off |
-| Prompt budget | the server's 32k | ≤3,072 tokens |
-| Output / sampling | 2,048 tokens · temp 1.0 · top-p 0.95 | 400 tokens · temp 0.8 · top-p 0.9 |
-| Server | 32k context (the model is trained to 262k; ~5x the largest prompt seen), thinking per request | 40,960 context (its training length), thinking off |
+| | MiniCPM-V 4.7 35B-A3B (default) | MiMo V2.6 Distill Qwen 9B | MechaEpstein 8000 |
+|---|---|---|---|
+| Context mode | **full**, as MiMo, plus posted images | **full** — whole persona with facts, 100-message reply chains plus the last 60 channel messages (`channel_messages`), linked posts as JSON | **compact** — short persona voice, last 6 messages clipped to ~400 chars, plain-language rules |
+| Tools | on | on | off |
+| Prompt budget | the server's 32k | the server's 32k | ≤3,072 tokens |
+| Output / sampling | 2,048 tokens · temp 0.8 · top-p 0.95 | 2,048 tokens · temp 1.0 · top-p 0.95 | 400 tokens · temp 0.8 · top-p 0.9 |
+| Server | A10, Q4_K_S + vision projector, 32k context, thinking per request; ~120 tok/s, ~2,500 tok/s prefill, 13–30 s model load | 32k context (the model is trained to 262k; ~5x the largest prompt seen), thinking per request | 40,960 context (its training length), thinking off |
 
 Every reply is also cleaned before posting: reasoning (`<think>…</think>`) and leaked chat-template tokens are removed, as is the model labelling its own name, and anything after it starts writing someone else's lines (`Leon: …`) — common with smaller models. Each user turn is stored as `Name: message`, so personas know who's talking in busy channels.
 
@@ -168,7 +172,7 @@ Add a model by adding an entry with a `match` substring of its repository/file n
    - **4 Choose model** — LM Studio models, or a `models.json` preset for Modal (redeploy after).
    - **5 Check Modal budget**, **8 Config** (backend and context), **9 Bot stats**, **t Run tests**.
 
-Local LM Studio runs on port 1234 with a 4k context by default (2k/4k in *Config*). Modal runs `llama.cpp` on one GPU (`MODAL_GPU`, default L4; *Config* offers T4/L4/A10G), scales to zero after 60 idle seconds (`MODAL_SCALEDOWN_SECONDS`; Modal adds roughly 45 s of teardown, and the idle tail is most of the bot's GPU bill) and caches model weights in a Modal Volume, found on boot without asking the Hub. Each reply carries the worker's own state (cold or warm, boot time, GPU, idle window), so `/bot stats` shows real cold starts, and the ☁️ guess follows the deployed idle window. The dashboard shows the deployed settings drifting from `.env` in its header, and *b* benchmarks the configured GPU on a fixed workload (`modal run modal_app.py::bench`, one cold boot, about 1–2 GPU-minutes). `/bot cost` and the dashboard budget are displays against a $30 planning budget, not hard caps.
+Local LM Studio runs on port 1234 with a 4k context by default (2k/4k in *Config*). Modal runs `llama.cpp` on one GPU (`MODAL_GPU`, else the preset's `gpu`, else L4; *Config* offers T4/L4/A10), with the preset's vision projector when it has one (`MODAL_MMPROJ_FILE`; empty means none), scales to zero after 60 idle seconds (`MODAL_SCALEDOWN_SECONDS`; Modal adds roughly 45 s of teardown, and the idle tail is most of the bot's GPU bill) and caches model weights in a Modal Volume, found on boot without asking the Hub. Each reply carries the worker's own state (cold or warm, boot time, GPU, idle window), so `/bot stats` shows real cold starts, and the ☁️ guess follows the deployed idle window. The dashboard shows the deployed settings drifting from `.env` in its header, and *b* benchmarks the configured GPU on a fixed workload (`modal run modal_app.py::bench`, one cold boot, about 1–2 GPU-minutes). `/bot cost` and the dashboard budget are displays against a $30 planning budget, not hard caps.
 
 On Windows, Modal 1.6 prints a harmless deprecation warning under Python 3.14; the documented Python 3.12 avoids it.
 
@@ -190,6 +194,9 @@ psychograph/
   chess_game.py     ChessService (one load/save per turn, per-channel lock) and a persistent UCI Stockfish
   jev.py            System 1: Jev client, every question and threshold (triage, debate screening, verdicts, sounds)
   quick.py          /quick features: Jev-only answers rendered as cards
+  dice.py           tabletop dice notation, rolled and rendered locally
+  icons.py          the bot's drawn icons, uploaded as application emojis
+  vision.py         posted and linked images, fetched, shrunk and inlined for a vision model
   repeats.py        spotting a chat request answered in the last 30 minutes
   duel.py           persona duels: turn prompts and Jev's verdict
   heartbeat.py      unprompted drops: daily slots, drop-ins on live chat, loose ends picked up once quiet

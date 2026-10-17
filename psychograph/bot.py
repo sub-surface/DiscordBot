@@ -88,6 +88,7 @@ class PsychographBot(commands.Bot):
         self.jev = Jev(settings.jev_api_key, settings.jev_model)
         self.responder = Responder(self)
         self.ambient = Ambient(self)
+        self.icons: dict[str, str] = {}  # application emoji per icon name, once icons.sync has run
         self._legacy_guild_commands_cleared = False
 
     def model_warmed(self) -> None:
@@ -96,9 +97,9 @@ class PsychographBot(commands.Bot):
             self.dispatch("model_warm")
 
     async def load_cogs(self) -> None:
-        from .cogs import chat, chess, fun, help, ops, personas, quick, settings, slop, soundboard, tools
+        from .cogs import chat, chess, fun, help, ops, party, personas, quick, settings, slop, soundboard, tools
 
-        for module in (chat, chess, fun, help, ops, personas, quick, settings, slop, soundboard, tools):
+        for module in (chat, chess, fun, help, ops, party, personas, quick, settings, slop, soundboard, tools):
             await module.setup(self)
 
     def ignoring(self, guild_id: int | None, user_id: int) -> float | None:

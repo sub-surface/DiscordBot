@@ -21,13 +21,14 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from .. import conversation, quick, render
+from .. import conversation, dice, quick, render, vision
 from ..actions import act
 from ..bot import PsychographBot, is_allowed_channel
 from ..jev import DIRECT
 from ..personas import Persona
 from ..quick import QUICKS, Quick, QuickRequest
 from ..render import persona_choices
+from .party import reply_roll
 from ..repeats import RepeatGuard
 from ..responder import Ask, react, unreact
 from .chess import board_file
@@ -86,6 +87,8 @@ class ChatCog(commands.Cog):
             return
         if await self._addressed(message):
             await self.handle(message)
+        elif (notation := dice.request(message.content, strict=True)) is not None:
+            await reply_roll(self.bot, message, notation)  # a message that is only a roll: no Jev, no model
         elif (persona := await self.bot.ambient.called(message)) is not None:
             await self.handle(message, called=persona)
         else:
@@ -94,6 +97,11 @@ class ChatCog(commands.Cog):
     async def handle(self, message: discord.Message, regenerating: bool = False, called: Persona | None = None) -> None:
         """Answer a message sent to the bot; `called` is the persona it named instead of mentioning the bot."""
         prompt = conversation.strip_mention(message.content, self.bot.user.id)
+        # Pictures in the message, and in the one it replies to ("@bot what's this?" under an image).
+        replied = getattr(message.reference, "resolved", None)
+        images = vision.image_urls(message, replied if isinstance(replied, discord.Message) else None)
+        if not prompt and images and self.bot.backend.vision:
+            prompt = "(no text, just the image)"
         if not prompt:
             await message.reply("Send me a message along with the mention.", mention_author=False)
             return
@@ -114,6 +122,7 @@ class ChatCog(commands.Cog):
             embeds=message.embeds,
             mentions=message.mentions,
             shown_status=status,
+            images=images,
         )
         route, target = await self._route(message, ask, prompt, called)
         if route != "chat":
@@ -122,6 +131,8 @@ class ChatCog(commands.Cog):
                 await self._answer_quick(message, ask, *target)
             elif route == "direct":
                 await self._answer_directly(message, target, guild_id)
+            elif route == "dice":
+                await reply_roll(self.bot, message, target)
             else:
                 await self._play_chess(message, prompt)
             return
@@ -143,9 +154,11 @@ class ChatCog(commands.Cog):
     ) -> tuple[str, object]:
         """Where a message goes, first match wins: a quick feature or tool called by name, the persona it names
         or replies to, chess moves, then System 1's triage of a fresh message (a quick feature, a question
-        about the bot, a tool), else the channel's persona. Returns ("quick", (feature, text)), ("direct",
-        key), ("chess", None) or ("chat", persona, None meaning the channel's)."""
+        about the bot, a tool), else the channel's persona. Returns ("dice", notation), ("quick", (feature, text)),
+        ("direct", key), ("chess", None) or ("chat", persona, None meaning the channel's)."""
         registry, guild_id = self.bot.personas, ask.guild_id
+        if not called and (notation := dice.request(prompt)) is not None:
+            return "dice", notation
         quick_call = None if called else quick.quick_for(prompt)
         if quick_call is not None:
             return "quick", quick_call
@@ -338,6 +351,9 @@ class ChatCog(commands.Cog):
             await interaction.response.send_message("That's a bot message — reply to it to keep talking.", ephemeral=True)
             return
         text = message.content.strip() or " ".join(filter(None, (embed.description for embed in message.embeds)))
+        images = vision.image_urls(message)
+        if not text and images and self.bot.backend.vision:
+            text = "(no text, just the image)"
         persona = self.bot.personas.for_channel(interaction.channel_id, interaction.guild_id)
         if not text or persona.mode != "chat":
             reason = "That message has no text to respond to." if not text else "Switch to a chat persona first."
@@ -357,6 +373,7 @@ class ChatCog(commands.Cog):
                 embeds=message.embeds,
                 # No pings: these are someone else's words, so a "tell @x" in them mustn't ping x.
                 mentions=(),
+                images=images,
             )
         )
 

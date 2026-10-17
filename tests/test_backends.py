@@ -45,6 +45,19 @@ class ModalBackendTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(backend.scaledown_seconds, 60)
         self.assertEqual(remote.calls[0][5], {"thinking": True, "top_k": Settings().top_k})
 
+    async def test_a_worker_deployed_without_its_projector_turns_vision_off(self) -> None:
+        from psychograph.profiles import ModelProfile
+
+        backend = ModalBackend(Settings(), ModelProfile(vision=True))
+        self.assertTrue(backend.vision)
+        backend._worker = SimpleNamespace(complete=SimpleNamespace(remote=FakeRemote(WORKER_REPLY)))
+        await backend.complete([])
+        self.assertTrue(backend.vision)  # an older worker that doesn't say keeps the profile's word
+        reply = {**WORKER_REPLY, "worker": {**WORKER_REPLY["worker"], "vision": False}}
+        backend._worker = SimpleNamespace(complete=SimpleNamespace(remote=FakeRemote(reply)))
+        await backend.complete([])
+        self.assertFalse(backend.vision)
+
     async def test_old_worker_without_options_still_answers(self) -> None:
         remote = FakeRemote({"text": "hi"}, legacy=True)
         backend = modal_backend(remote)

@@ -14,6 +14,7 @@ import re
 import time
 from io import BytesIO
 
+import aiohttp
 import discord
 
 from .personas import Persona
@@ -52,8 +53,9 @@ def square_png(data: bytes, size: int = AVATAR_SIZE) -> bytes:
     return output.getvalue()
 
 
-async def member_named(guild: discord.Guild, name: str) -> bool:
-    """Whether a member's username, global name, nickname or display name is exactly `name` (any case)."""
+async def member_named(guild: discord.Guild, name: str) -> bool | None:
+    """Whether a member's username, global name, nickname or display name is exactly `name` (any case);
+    None when the gateway search failed (a reconnect, a timeout), so the caller can't mistake it for "no"."""
     wanted = name.strip().casefold()
     if not wanted:
         return False
@@ -64,8 +66,10 @@ async def member_named(guild: discord.Guild, name: str) -> bool:
     try:
         # A prefix search over the gateway; works without the privileged members intent.
         members.extend(await guild.query_members(query=name.strip()[:100], limit=25, cache=False))
-    except (discord.HTTPException, discord.ClientException, asyncio.TimeoutError):
+    except (discord.HTTPException, discord.ClientException, asyncio.TimeoutError, aiohttp.ClientError, OSError):
         log.info("Couldn't search members of guild %s", guild.id)
+        if not members:
+            return None
     return any(
         wanted in {value.casefold() for value in (member.name, member.global_name, member.nick, member.display_name) if value}
         for member in members
@@ -90,7 +94,10 @@ class PersonaWebhooks:
         key = (guild.id, name.casefold())
         taken, checked = self._member_names.get(key, (False, 0.0))
         if time.monotonic() - checked > MEMBER_CHECK_SECONDS:
-            taken = await member_named(guild, name)
+            found = await member_named(guild, name)
+            if found is None:
+                return True  # couldn't check: mark it "(persona)" this once, and look again next time
+            taken = found
             self._member_names[key] = (taken, time.monotonic())
         return taken
 

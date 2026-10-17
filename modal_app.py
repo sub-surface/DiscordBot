@@ -11,12 +11,8 @@ import modal
 CONTAINER_STARTED = time.time()  # module import ≈ container start, for the boot timing the worker reports
 
 APP_NAME = "psychograph"
-MODEL_REPO = os.getenv(
-    "MODAL_MODEL_ID", "wepiqx/MiMo-V2.6-Distill-Qwen-9B-GGUF-MERNIK"
-)
-MODEL_FILE = os.getenv(
-    "MODAL_MODEL_FILE", "MiMo-V2.6-Distill-Qwen-9B-MERNIK-5100.gguf"
-)
+MODEL_REPO = os.getenv("MODAL_MODEL_ID", "openbmb/MiniCPM-V-4.7-35B-A3B-gguf")
+MODEL_FILE = os.getenv("MODAL_MODEL_FILE", "MiniCPM-V-4_7-35B-A3B-Q4_K_S.gguf")
 
 
 def _model_preset() -> dict:
@@ -39,7 +35,10 @@ def _flag(name: str, default: object) -> bool:
 
 PRESET = _model_preset()
 MODEL_ALIAS = "psychograph-model"
-GPU = os.getenv("MODAL_GPU", "L4")
+GPU = os.getenv("MODAL_GPU") or PRESET.get("gpu", "L4")
+# The vision projector, from the same repo; an empty value (a text-only model) means none. Set but empty
+# in the env is deliberate, so only an unset variable falls back to the preset.
+MMPROJ_FILE = os.environ["MODAL_MMPROJ_FILE"] if "MODAL_MMPROJ_FILE" in os.environ else PRESET.get("mmproj", "")
 # 32k is ~5x the largest prompt the bot has sent; the bot trims to whatever this is, and a smaller KV cache
 # leaves VRAM headroom (it's what lets the model fit a 16 GB T4).
 MAX_MODEL_LEN = int(os.getenv("MODAL_MAX_MODEL_LEN") or PRESET.get("context", 32768))
@@ -55,7 +54,8 @@ SERVER_PORT = 8080
 SERVER_URL = f"http://127.0.0.1:{SERVER_PORT}"
 API_KEY = "local-worker"
 # Pinned by digest so the llama.cpp build only changes on purpose (the floating tag is cached by Modal anyway).
-LLAMA_IMAGE = "ghcr.io/ggml-org/llama.cpp:server-cuda@sha256:fff6185edd2fbc4093aa5970bf6db53ed11c283e3a1c52a3e244cf27047264f4"
+# 2026-10-13 build: the first we've run with MiniCPM-V 4.7's qwen35moe + vision projector.
+LLAMA_IMAGE = "ghcr.io/ggml-org/llama.cpp:server-cuda@sha256:c4348afb91499b10fad12f92626c7a8ca8b69d6475d10c793b810cb61237ce00"
 
 app = modal.App(APP_NAME)
 model_cache = modal.Volume.from_name("psychograph-model-cache", create_if_missing=True)
@@ -84,6 +84,7 @@ def _post(path: str, body: dict, timeout: float) -> dict:
     env={
         "MODAL_MODEL_ID": MODEL_REPO,
         "MODAL_MODEL_FILE": MODEL_FILE,
+        "MODAL_MMPROJ_FILE": MMPROJ_FILE,
         "MODAL_GPU": GPU,
         "MODAL_MAX_MODEL_LEN": str(MAX_MODEL_LEN),
         "MODAL_SCALEDOWN_SECONDS": str(SCALEDOWN_SECONDS),
@@ -107,17 +108,26 @@ class MimoWorker:
         began = time.monotonic()
         # The weights live on the Volume after the first boot: find them without asking the Hub, and only
         # download (and commit the Volume) when they're missing.
-        cached = try_to_load_from_cache(MODEL_REPO, MODEL_FILE, cache_dir=MODEL_CACHE_DIR)
-        if isinstance(cached, str):
-            self.model_path = cached
-        else:
-            self.model_path = hf_hub_download(repo_id=MODEL_REPO, filename=MODEL_FILE, cache_dir=MODEL_CACHE_DIR)
+        downloaded = False
+
+        def locate(filename: str) -> str:
+            nonlocal downloaded
+            cached = try_to_load_from_cache(MODEL_REPO, filename, cache_dir=MODEL_CACHE_DIR)
+            if isinstance(cached, str):
+                return cached
+            downloaded = True
+            return hf_hub_download(repo_id=MODEL_REPO, filename=filename, cache_dir=MODEL_CACHE_DIR)
+
+        self.model_path = locate(MODEL_FILE)
+        vision = ["--mmproj", locate(MMPROJ_FILE)] if MMPROJ_FILE else []
+        if downloaded:
             model_cache.commit()
         located = time.monotonic()
         self.server = subprocess.Popen(
             [
                 "/app/llama-server",
                 "--model", self.model_path,
+                *vision,
                 "--host", "127.0.0.1",
                 "--port", str(SERVER_PORT),
                 "--alias", MODEL_ALIAS,
@@ -209,7 +219,10 @@ class MimoWorker:
             "tokens_per_second": timings.get("predicted_per_second"),
             "cold": cold,
             "boot": self.boot if cold else None,
-            "worker": {"gpu": GPU, "context": MAX_MODEL_LEN, "scaledown": SCALEDOWN_SECONDS, "thinking": body["chat_template_kwargs"]["enable_thinking"]},
+            "worker": {
+                "gpu": GPU, "context": MAX_MODEL_LEN, "scaledown": SCALEDOWN_SECONDS,
+                "thinking": body["chat_template_kwargs"]["enable_thinking"], "vision": bool(MMPROJ_FILE),
+            },
         }
 
     @modal.exit()

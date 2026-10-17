@@ -23,8 +23,10 @@ const modal = existsSync(join(root, "venv", "Scripts", "modal.exe"))
 const monthlyBudget = Number(readEnv("MODAL_MONTHLY_BUDGET", "30")) || 30
 const deployedPath = join(root, ".modal-deployed.json")
 // What a deploy bakes into the worker; a difference from .env means the running worker is out of date.
-const deployKeys = ["MODAL_MODEL_ID", "MODAL_MODEL_FILE", "MODAL_GPU", "MODAL_MAX_MODEL_LEN", "MODAL_SCALEDOWN_SECONDS", "MODAL_ENABLE_THINKING", "MODAL_GPU_SNAPSHOT"]
-const gpus = { T4: "16 GB, cheapest", L4: "24 GB", A10G: "24 GB, faster prefill" }
+const deployKeys = ["MODAL_MODEL_ID", "MODAL_MODEL_FILE", "MODAL_MMPROJ_FILE", "MODAL_GPU", "MODAL_MAX_MODEL_LEN", "MODAL_SCALEDOWN_SECONDS", "MODAL_ENABLE_THINKING", "MODAL_GPU_SNAPSHOT"]
+const gpus = { T4: "16 GB, cheapest", L4: "24 GB", A10: "24 GB, ~1.5x L4 speed" }
+// Modal's billing rates still name the A10 by its old A10G id.
+const rateKey = (gpu) => `gpu_hour_cost_${gpu === "A10" ? "a10g" : gpu.toLowerCase()}`
 const modelStorageGiB = 5
 // Presets live in models.json, shared with the bot (chat tuning) and modal_app.py (deploy settings).
 const modalModelPresets = JSON.parse(readFileSync(join(root, "models.json"), "utf8")).models
@@ -33,6 +35,8 @@ const modalModelPresets = JSON.parse(readFileSync(join(root, "models.json"), "ut
     name: model.name,
     id: model.modal.id,
     file: model.modal.file,
+    mmproj: model.modal.mmproj ?? "",
+    gpu: model.modal.gpu,
     enableThinking: String(Boolean(model.modal.thinking)),
     context: String(model.modal.context ?? 32768),
     storageGiB: model.modal.storage_gib ?? modelStorageGiB,
@@ -70,7 +74,10 @@ process.env.LLM_BACKEND ||= readEnv("LLM_BACKEND", "local")
 process.env.MODAL_MODEL_ID ||= readEnv("MODAL_MODEL_ID", modalModelPresets[0].id)
 process.env.MODAL_MODEL_FILE ||= readEnv("MODAL_MODEL_FILE", modalModelPresets[0].file)
 process.env.MODAL_ENABLE_THINKING ||= readEnv("MODAL_ENABLE_THINKING", "true")
-process.env.MODAL_GPU ||= readEnv("MODAL_GPU", "L4")
+// Unset falls back to the chosen model's preset; an empty value (a text-only model) stays empty.
+const envPreset = modalModelPresets.find((entry) => entry.id === process.env.MODAL_MODEL_ID && entry.file === process.env.MODAL_MODEL_FILE)
+process.env.MODAL_MMPROJ_FILE ??= readEnv("MODAL_MMPROJ_FILE", envPreset?.mmproj ?? "")
+process.env.MODAL_GPU ||= readEnv("MODAL_GPU", envPreset?.gpu ?? "L4")
 process.env.LOCAL_CONTEXT_TOKENS ||= readEnv("LOCAL_CONTEXT_TOKENS", "4096")
 process.env.MODAL_MAX_MODEL_LEN ||= readEnv("MODAL_MAX_MODEL_LEN", "32768")
 process.env.MODAL_SCALEDOWN_SECONDS ||= readEnv("MODAL_SCALEDOWN_SECONDS", "60")
@@ -97,7 +104,8 @@ function statusLine() {
   const preset = modalModelPresets.find((entry) => entry.id === process.env.MODAL_MODEL_ID && entry.file === process.env.MODAL_MODEL_FILE)
   if (process.env.LLM_BACKEND === "local") return `LM Studio · ${process.env.LLM_MODEL || "no model"}`
   const name = preset ? preset.name.split(" (")[0] : process.env.MODAL_MODEL_FILE
-  return `Modal · ${name} · ${process.env.MODAL_GPU} · ${Number(process.env.MODAL_MAX_MODEL_LEN) / 1024}k ctx · ${process.env.MODAL_SCALEDOWN_SECONDS}s idle`
+  const vision = process.env.MODAL_MMPROJ_FILE ? " + vision" : ""
+  return `Modal · ${name}${vision} · ${process.env.MODAL_GPU} · ${Number(process.env.MODAL_MAX_MODEL_LEN) / 1024}k ctx · ${process.env.MODAL_SCALEDOWN_SECONDS}s idle`
 }
 
 async function ask(question) {
@@ -166,10 +174,12 @@ async function chooseModel() {
     let nextModel
     let nextFile
     let enableThinking
+    let nextMmproj = ""
 
     if (preset) {
       nextModel = preset.id
       nextFile = preset.file
+      nextMmproj = preset.mmproj
       enableThinking = preset.enableThinking
     } else if (selection === customSelection || selection === "c" || selection === "custom") {
       const model = await ask("Hugging Face GGUF repository: ")
@@ -178,6 +188,11 @@ async function chooseModel() {
       nextFile = filename || process.env.MODAL_MODEL_FILE
       if (!/^[\w.-]+\/[\w.-]+$/.test(nextModel) || !/^[\w.-]+\.gguf$/i.test(nextFile)) {
         console.log("Enter a repository ID and a single .gguf filename.")
+        return
+      }
+      nextMmproj = (await ask("Vision projector (mmproj) filename in the same repo, or blank for none: ")).trim()
+      if (nextMmproj && !/^[\w.-]+\.gguf$/i.test(nextMmproj)) {
+        console.log("Enter a single .gguf filename, or leave it blank.")
         return
       }
       const thinking = await ask("Enable the Qwen thinking-template option? (y/N): ")
@@ -189,10 +204,12 @@ async function chooseModel() {
 
     saveEnv("MODAL_MODEL_ID", nextModel)
     saveEnv("MODAL_MODEL_FILE", nextFile)
+    saveEnv("MODAL_MMPROJ_FILE", nextMmproj)
     saveEnv("MODAL_ENABLE_THINKING", enableThinking)
     if (preset) saveEnv("MODAL_MAX_MODEL_LEN", preset.context)
+    if (preset?.gpu) saveEnv("MODAL_GPU", preset.gpu)
     console.log(`\nModal GGUF saved: ${nextModel}/${nextFile}.`)
-    if (preset) console.log(`Deploy settings: ${Number(preset.context) / 1024}k context, thinking ${enableThinking}; the bot uses ${preset.contextMode} context.`)
+    if (preset) console.log(`Deploy settings: ${process.env.MODAL_GPU}, ${Number(preset.context) / 1024}k context, thinking ${enableThinking}${nextMmproj ? ", vision on" : ""}; the bot uses ${preset.contextMode} context.`)
     console.log("Redeploy the worker, then restart the bot, to apply it.")
   } else {
     console.log("Choose 1 or 2.")
@@ -233,9 +250,9 @@ function showModalBudget() {
       .forEach(([name, cost]) => console.log(`  ${name === "psychograph" ? mint : ""}${name.padEnd(32)} $${cost.toFixed(2)}${reset}`))
     const rates = readModalRates()
     const storage = storageGiB * Number(rates.volume_storage_gib_month_cost)
-    const hourly = Object.keys(gpus).map((gpu) => `${gpu} $${Number(rates[`gpu_hour_cost_${gpu.toLowerCase()}`]).toFixed(2)}`)
-    console.log(`\n${process.env.MODAL_MODEL_FILE}: about $${storage.toFixed(2)}/month at a ${storageGiB} GiB estimate.`)
-    console.log("The shared volume may retain previously downloaded models as well.")
+    const hourly = Object.keys(gpus).map((gpu) => `${gpu} $${Number(rates[rateKey(gpu)]).toFixed(2)}`)
+    console.log(`\n${process.env.MODAL_MODEL_FILE}: ${storageGiB} GiB on the Volume, $${storage.toFixed(2)}/month at list price.`)
+    console.log("Modal includes 1 TiB of Volume storage a month free, so stored models cost nothing below that.")
     console.log(`On-demand GPU per hour: ${hourly.join(" · ")} (this worker: ${process.env.MODAL_GPU}).`)
     console.log(`The worker scales to zero after ${process.env.MODAL_SCALEDOWN_SECONDS} seconds idle; cold starts and this idle tail are also billed.`)
   } catch (error) {

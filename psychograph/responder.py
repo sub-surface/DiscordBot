@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from . import conversation, render, sounds
+from . import conversation, render, sounds, vision
 from .actions import act
 from .backends import Completion
 from .conversation import Said
@@ -68,6 +68,7 @@ class Ask:
     chain: list[dict] | None = None   # the stored reply chain this continues, read once and shared
     window: list[Said] | None = None  # context candidates for a chat persona: recent, minus its reply chain
     keep: tuple[int, ...] = ()        # the window messages System 1 judged relevant to this request
+    images: Sequence[str] = ()        # image URLs posted with (or replied to by) this request
 
 
 @dataclass
@@ -137,7 +138,16 @@ class Responder:
         me_id = bot.user.id if bot.user else 0
         recipient = conversation.addressed_member(ask.text, ask.mentions, me_id)
         speaker = getattr(ask.author, "display_name", None) or ask.author.name
+        images: list[str] = []
+        if backend.vision:
+            linked = await conversation.tweet_photos(ask.text, ask.embeds) if tweets else []
+            images = await vision.inline([*ask.images, *linked][: vision.MAX_IMAGES])
         turn = conversation.user_turn(ask.text, tweets, recipient, speaker, compact=compact)
+        if images:
+            # Stored with the turn, so a follow-up knows a picture was shown (the picture itself isn't kept).
+            plural = "s" if len(images) > 1 else ""
+            source = " (from the linked post)" if linked and not ask.images else ""
+            turn = f"{turn}\n\n({len(images)} image{plural}{source} shown with this message.)"
 
         history = conversation.quote_other_personas(self.chain(ask), persona.key, lambda key: self._name_of(ask.guild_id, key))
         if compact:
@@ -180,8 +190,10 @@ class Responder:
         if sounds_on:
             system = f"{system}\n\n{bot.soundbank.menu(compact)}"
         messages, notice = conversation.fit_context(
-            system, history, prompt, backend.context_limit, backend.output_limit
+            system, history, prompt, backend.context_limit - vision.IMAGE_TOKENS * len(images), backend.output_limit
         )
+        if images:
+            vision.attach(messages[-1], images)
         # Tools write reports that name people ("**Leon:** strong opening"), which the invented-turn cut
         # would mistake for a new speaker; it's only there for chat models that run on as someone else.
         speakers = {speaker, *channel_speakers}

@@ -19,6 +19,7 @@ class FakeBackend:
     output_limit = 512
     temperature = 1.0
     top_p = 0.95
+    vision = False
 
     def __init__(self, text: str = "A reply.", profile: ModelProfile = DEFAULT_PROFILE) -> None:
         self.text = text

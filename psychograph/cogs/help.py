@@ -50,7 +50,7 @@ def help_embed(bot: PsychographBot, channel_id: int, guild_id: int | None) -> di
             f"{me} steelman both sides: the best case for each",
             "Right-click a message → Apps → **Review this debate** or **Judge this**",
         )
-        + "\nReplying to a tool's answer goes back to this channel's persona. Tools need the MiMo model.",
+        + "\nReplying to a tool's answer goes back to this channel's persona. Tools need a strong model (MiniCPM-V, MiMo).",
         inline=False,
     )
     embed.add_field(
@@ -61,6 +61,14 @@ def help_embed(bot: PsychographBot, channel_id: int, guild_id: int | None) -> di
             f"Or {me} decide: *…*, odds: *…*, vibe check, or reply to a message with tone check",
             "Right-click a message → Apps → **Tone check**",
             "Ask me what I can do, which persona this is, or what model I'm on",
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Party (instant, no model)",
+        value=_lines(
+            f"`/roll` *2d6+3* · or just say **roll d20 for stealth** · or {me} roll for initiative",
+            "`4d6kh3` keep highest · `2d20kl1` keep lowest · `adv+5` / `dis` · `d6!` exploding · `d%` · `6x 4d6kh3` stat block",
         ),
         inline=False,
     )

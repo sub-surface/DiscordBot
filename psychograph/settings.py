@@ -42,8 +42,8 @@ class Settings:
 
     modal_app: str = "psychograph"
     modal_class: str = "MimoWorker"
-    modal_model_id: str = "wepiqx/MiMo-V2.6-Distill-Qwen-9B-GGUF-MERNIK"
-    modal_model_file: str = "MiMo-V2.6-Distill-Qwen-9B-MERNIK-5100.gguf"
+    modal_model_id: str = "openbmb/MiniCPM-V-4.7-35B-A3B-gguf"
+    modal_model_file: str = "MiniCPM-V-4_7-35B-A3B-Q4_K_S.gguf"
     modal_context_tokens: int = 131072
     modal_max_output_tokens: int = 2048
     modal_scaledown_seconds: int = 300

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -113,9 +114,21 @@ def clip(text: str, limit: int) -> str:
 
 # ── Context budget ──────────────────────────────────────────────────
 
+IMAGE_PART_TOKENS = 1000  # an inlined image (see vision.py), counted as this rather than as its base64
+
+
 def estimate_tokens(messages: Sequence[dict]) -> int:
     """A UTF-8 byte heuristic, not the model's tokenizer."""
-    return sum((len(str(message.get("content", "")).encode("utf-8")) + 2) // 3 + 4 for message in messages)
+
+    def text_tokens(content: object) -> int:
+        if isinstance(content, list):  # text + image parts
+            return sum(
+                IMAGE_PART_TOKENS if part.get("type") == "image_url" else text_tokens(part.get("text", ""))
+                for part in content
+            )
+        return (len(str(content).encode("utf-8")) + 2) // 3
+
+    return sum(text_tokens(message.get("content", "")) + 4 for message in messages)
 
 
 def fit_context(
@@ -204,7 +217,15 @@ def embedded_tweet_text(embeds: Sequence[discord.Embed], status_id: str, single_
     return None
 
 
-def fetch_public_tweet(status_id: str) -> str | None:
+_STATUS_CACHE: dict[str, tuple[float, dict]] = {}
+_STATUS_TTL = 600.0  # seconds: one request reads a post's text and then its photos
+
+
+def _public_status(status_id: str) -> dict | None:
+    """A post's public fxtwitter record, briefly cached (only successes)."""
+    cached = _STATUS_CACHE.get(status_id)
+    if cached and time.monotonic() - cached[0] < _STATUS_TTL:
+        return cached[1]
     request = Request(
         f"https://api.fxtwitter.com/2/status/{status_id}",
         headers={"Accept": "application/json", "User-Agent": "Psychograph/1.0"},
@@ -214,14 +235,21 @@ def fetch_public_tweet(status_id: str) -> str | None:
             payload = json.loads(response.read(131072))
     except (OSError, TimeoutError, ValueError):
         return None
-
-    if not isinstance(payload, dict):
+    if not isinstance(payload, dict) or payload.get("code", 200) != 200:
         return None
-    status = payload.get("status", {})
+    status = payload.get("status")
     if not isinstance(status, dict):
         return None
-    text = status.get("text")
-    if payload.get("code", 200) != 200 or not isinstance(text, str) or not text.strip():
+    if len(_STATUS_CACHE) > 64:
+        _STATUS_CACHE.clear()
+    _STATUS_CACHE[status_id] = (time.monotonic(), status)
+    return status
+
+
+def fetch_public_tweet(status_id: str) -> str | None:
+    status = _public_status(status_id)
+    text = status.get("text") if status else None
+    if not isinstance(text, str) or not text.strip():
         return None
     author = status.get("author", {})
     if isinstance(author, dict):
@@ -231,6 +259,15 @@ def fetch_public_tweet(status_id: str) -> str | None:
             attribution = " · ".join(part for part in (name, f"@{handle}" if handle else None) if part)
             text = f"{attribution}: {text}"
     return text[:4000]
+
+
+def public_tweet_photos(status_id: str) -> list[str]:
+    """A post's photos, and its videos' thumbnails, from the public record."""
+    status = _public_status(status_id) or {}
+    media = status.get("media") if isinstance(status.get("media"), dict) else {}
+    photos = [item.get("url") for item in media.get("photos") or [] if isinstance(item, dict)]
+    photos += [item.get("thumbnail_url") for item in media.get("videos") or [] if isinstance(item, dict)]
+    return [url for url in photos if isinstance(url, str)]
 
 
 async def tweet_context(prompt: str, embeds: Sequence[discord.Embed]) -> list[tuple[str, str]]:
@@ -247,6 +284,17 @@ async def tweet_context(prompt: str, embeds: Sequence[discord.Embed]) -> list[tu
 
     return list(await asyncio.gather(*(resolve(status_id, url) for status_id, url in links)))
 
+
+
+async def tweet_photos(prompt: str, embeds: Sequence[discord.Embed]) -> list[str]:
+    """Photos of linked posts whose Discord preview didn't bring them (it often hasn't unfurled yet)."""
+
+    def previewed(status_id: str) -> bool:
+        return any(status_id in (embed.url or "") and embed.image.proxy_url for embed in embeds)
+
+    pending = [status_id for status_id, _url in tweet_links(prompt) if not previewed(status_id)]
+    found = await asyncio.gather(*(asyncio.to_thread(public_tweet_photos, status_id) for status_id in pending))
+    return [url for photos in found for url in photos]
 
 # ── Channel transcript ──────────────────────────────────────────────
 #

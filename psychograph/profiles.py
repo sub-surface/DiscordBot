@@ -27,6 +27,7 @@ class ModelProfile:
     temperature: float | None = None
     top_p: float | None = None
     tools: bool = False                     # strong enough for tool personas (debate review, judge…)
+    vision: bool = False                    # served with a vision projector: posted images are shown to it
     modal: dict = field(default_factory=dict, compare=False)
 
     @property
@@ -41,7 +42,8 @@ class ModelProfile:
         budget = f", ≤{self.prompt_budget:,} prompt tokens" if self.prompt_budget else ""
         tools = " · tools on" if self.tools else " · tools off"
         channel = f" + {self.channel_messages} channel" if self.channel_messages else ""
-        return f"{self.name} · {self.context_mode} context ({self.history_messages} msgs{channel}{budget}){tools}"
+        vision = " · sees images" if self.vision else ""
+        return f"{self.name} · {self.context_mode} context ({self.history_messages} msgs{channel}{budget}){tools}{vision}"
 
 
 DEFAULT_PROFILE = ModelProfile()
@@ -66,6 +68,7 @@ def load_profiles(path: Path) -> list[ModelProfile]:
                 temperature=chat.get("temperature"),
                 top_p=chat.get("top_p"),
                 tools=bool(chat.get("tools", False)),
+                vision=bool(chat.get("vision", False)),
                 modal=entry.get("modal", {}),
             )
         )

@@ -56,6 +56,20 @@ class ImpersonationTests(unittest.TestCase):
 
         self.assertTrue(asyncio.run(member_named(guild, "vostok")))
 
+    def test_a_dropped_gateway_marks_the_persona_and_is_not_cached(self) -> None:
+        import aiohttp
+
+        guild = guild_with()
+        guild.query_members.side_effect = aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+        webhooks = PersonaWebhooks(SimpleNamespace(user=None))
+        channel = SimpleNamespace(guild=guild)
+
+        self.assertIsNone(asyncio.run(member_named(guild, "mochi")))
+        self.assertEqual(asyncio.run(webhooks.username(channel, Persona("mochi", "mochi", "x"))), "mochi (persona)")
+        guild.query_members.side_effect = None
+        guild.query_members.return_value = []
+        self.assertEqual(asyncio.run(webhooks.username(channel, Persona("mochi", "mochi", "x"))), "mochi")
+
     def test_persona_posting_under_a_members_name_is_marked(self) -> None:
         guild = guild_with(member("charlie"))
         webhooks = PersonaWebhooks(SimpleNamespace(user=None))

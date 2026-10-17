@@ -2,6 +2,30 @@
   "_comment": "Model presets shared by dash.mjs (menus), modal_app.py (deploy settings) and the bot (chat tuning). A model matches a profile when its id/file/name contains any 'match' string.",
   "models": [
     {
+      "key": "minicpm",
+      "name": "MiniCPM-V 4.7 35B-A3B (Q4_K_S + vision, 21 GB)",
+      "match": ["minicpm"],
+      "modal": {
+        "id": "openbmb/MiniCPM-V-4.7-35B-A3B-gguf",
+        "file": "MiniCPM-V-4_7-35B-A3B-Q4_K_S.gguf",
+        "mmproj": "mmproj-model-f16.gguf",
+        "gpu": "A10",
+        "thinking": true,
+        "context": 32768,
+        "storage_gib": 19.6
+      },
+      "chat": {
+        "context_mode": "full",
+        "tools": true,
+        "vision": true,
+        "history_messages": 100,
+        "channel_messages": 60,
+        "max_output_tokens": 2048,
+        "temperature": 0.8,
+        "top_p": 0.95
+      }
+    },
+    {
       "key": "mimo",
       "name": "MiMo V2.6 Distill Qwen 9B (MERNIK, 5.1 GB)",
       "match": ["mimo"],

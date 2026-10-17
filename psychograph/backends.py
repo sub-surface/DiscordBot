@@ -37,6 +37,7 @@ class Backend(Protocol):
     top_p: float
     in_flight: int
     thinking: bool       # use the model's thinking mode, where it has one (/bot thinking)
+    vision: bool         # posted images go to the model
 
     @property
     def likely_cold(self) -> bool: ...
@@ -61,6 +62,7 @@ class _Backend:
         self.top_p = profile.top_p if profile.top_p is not None else settings.top_p
         self.in_flight = 0
         self.thinking = False
+        self.vision = profile.vision
         self._last_finished: float | None = None
 
     @property
@@ -168,6 +170,8 @@ class ModalBackend(_Backend):
         worker, boot = result.get("worker"), result.get("boot")
         if isinstance(worker, dict) and isinstance(worker.get("scaledown"), int):
             self.scaledown_seconds = worker["scaledown"]
+        if isinstance(worker, dict) and worker.get("vision") is False:
+            self.vision = False  # deployed without its vision projector: stop sending images
         boot_seconds = boot.get("container_seconds") if isinstance(boot, dict) else None
         cold = result.get("cold")
         return Completion(
