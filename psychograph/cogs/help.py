@@ -16,6 +16,41 @@ def _lines(*lines: str) -> str:
     return "\n".join(f"- {line}" for line in lines)
 
 
+def dice_embed(bot: PsychographBot) -> discord.Embed:
+    """The dice cheat sheet: notation in plain words, then the rolls people actually make."""
+    me = getattr(bot.user, "mention", None) or f"@{BOT_NAME}"
+    embed = discord.Embed(
+        title="Dice cheat sheet",
+        description=(
+            "`XdY` means *roll X dice with Y sides and add them up*. So `d20` is one twenty-sided die, "
+            "`3d6` is three six-sided dice added together, and `+2` or `-1` adds or takes away a flat number."
+        ),
+        color=EMBED_COLOR,
+    )
+    embed.add_field(name="Everything you can type", value=_lines(
+        "`d20` · `2d6+3` · `1d8+1d6+2`: dice and modifiers, mixed freely",
+        "`adv` / `dis`: advantage or disadvantage, a d20 rolled twice keeping the higher / lower (`adv+5` works)",
+        "`4d6kh3`: roll 4d6, **k**eep the **h**ighest 3 · `kl` keeps the lowest · `dl1` / `dh1` **d**rop the lowest / highest",
+        "`d6!`: exploding, a die that rolls its max rolls again and adds",
+        "`d%`: percentile, 1 to 100",
+        "`6x 4d6kh3`: the same roll six times (a full set of stats)",
+        "`… for stealth` or `# stealth`: the reason, shown with the result",
+    ), inline=False)
+    embed.add_field(name="Rolls you'll actually make", value=_lines(
+        "A check or an attack: `d20+5` (your bonus after the +)",
+        "Damage: `2d6+3` · a fireball: `8d6`",
+        "Rolling a character: `6x 4d6kh3`",
+        "Initiative: `d20+2` · a coin flip: `d2`",
+    ), inline=False)
+    embed.add_field(name="Where", value=_lines(
+        "`/roll` (pick from the suggestions as you type)",
+        "a message that's only a roll: **roll d20 for stealth**",
+        f"{me} roll for initiative (no dice means a d20)",
+    ) + "\nA lone d20 that lands on 20 or 1 is a *natural 20* or *natural 1*, and you'll see it.", inline=False)
+    embed.set_footer(text="Instant · rolled locally · no model call")
+    return embed
+
+
 def help_embed(bot: PsychographBot, channel_id: int, guild_id: int | None) -> discord.Embed:
     """The /help card: what to type, grouped by what answers it (the model, tools, or instantly)."""
     persona = bot.personas.for_channel(channel_id, guild_id)
@@ -68,7 +103,7 @@ def help_embed(bot: PsychographBot, channel_id: int, guild_id: int | None) -> di
         name="Party (instant, no model)",
         value=_lines(
             f"`/roll` *2d6+3* · or just say **roll d20 for stealth** · or {me} roll for initiative",
-            "`4d6kh3` keep highest · `2d20kl1` keep lowest · `adv+5` / `dis` · `d6!` exploding · `d%` · `6x 4d6kh3` stat block",
+            "`adv+5` / `dis` · `4d6kh3` keep highest · `d6!` exploding · `6x 4d6kh3` stats · **`/help dice`** explains it all",
         ),
         inline=False,
     )
@@ -135,10 +170,11 @@ class HelpCommands(commands.Cog):
         self.bot = bot
 
     @app_commands.command(name="help", description="What I can do and how to use it")
-    async def help(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(
-            embed=help_embed(self.bot, interaction.channel_id, interaction.guild_id), ephemeral=True
-        )
+    @app_commands.describe(topic="A cheat sheet for one feature")
+    @app_commands.choices(topic=[app_commands.Choice(name="dice", value="dice")])
+    async def help(self, interaction: discord.Interaction, topic: str = "") -> None:
+        embed = dice_embed(self.bot) if topic == "dice" else help_embed(self.bot, interaction.channel_id, interaction.guild_id)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def setup(bot: PsychographBot) -> None:

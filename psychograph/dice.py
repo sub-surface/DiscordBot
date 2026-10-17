@@ -198,14 +198,18 @@ def die_icon_name(sides: int) -> str:
     return "die_d20"
 
 
-def render(result: Roll, who: str, icon: str = "🎲") -> str:
-    """Plain text: the total up front, the faces in subtext. Nat 20 / nat 1 get a word of their own."""
-    reason = f" for **{result.reason}**" if result.reason else ""
-    totals = result.totals
-    headline = " · ".join(f"**{total}**" for total in totals)
+def tone(result: Roll) -> str:
     natural = result.natural()
-    flair = " — *natural 20!*" if natural == 20 else " — *natural 1…*" if natural == 1 else ""
-    lines = [f"{icon} {headline}{flair}", f"-# {who} rolled `{result.notation}`{reason}"]
+    return "crit" if natural == 20 else "fumble" if natural == 1 else "normal"
+
+
+def render(result: Roll, who: str, icon: str = "") -> str:
+    """Plain text: the total up front, the faces in subtext. Nat 20 / nat 1 get a word of their own.
+    `icon` leads the line when there's no result image to show the die."""
+    reason = f" for **{result.reason}**" if result.reason else ""
+    headline = " · ".join(f"**{total}**" for total in result.totals)
+    flair = {"crit": " — *natural 20!*", "fumble": " — *natural 1…*"}.get(tone(result), "")
+    lines = [f"{icon + ' ' if icon else ''}{headline}{flair}", f"-# {who} rolled `{result.notation}`{reason}"]
     for parts in result.sets:
         shown = " ".join(
             ("" if index == 0 and part.term.sign > 0 else ("- " if part.term.sign < 0 else "+ ")) + part.shown()

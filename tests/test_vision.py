@@ -81,6 +81,13 @@ class ImageUrlTests(unittest.TestCase):
         for start in range(0, len(data), size):
             yield data[start:start + size]
 
+    def test_a_decompression_bomb_is_refused_before_decoding(self) -> None:
+        buffer = io.BytesIO()
+        Image.new("1", (10_000, 10_000)).save(buffer, format="PNG")  # ~12 KB on disk, 100 MP canvas
+        self.assertLess(len(buffer.getvalue()), 100_000)
+        with self.assertRaises(ValueError):
+            vision._shrink(buffer.getvalue())
+
     def test_attach_and_token_estimate_count_images_not_base64(self) -> None:
         message = {"role": "user", "content": "Leon: what is this"}
         vision.attach(message, ["data:image/jpeg;base64," + "A" * 50_000])

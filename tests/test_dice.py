@@ -70,6 +70,15 @@ class NotationTests(unittest.TestCase):
         self.assertEqual(dice.request("roll"), "d20")  # addressed to the bot, a bare "roll" is a d20
         self.assertEqual(dice.request("roll me a sandwich"), "me a sandwich")  # and gets told why it can't
 
+    def test_result_pictures_show_each_set_and_mark_naturals(self) -> None:
+        self.assertEqual(dice.tone(dice.roll("d20", FixedRandom(20))), "crit")
+        self.assertEqual(dice.tone(dice.roll("adv", FixedRandom(1, 1))), "fumble")
+        self.assertEqual(dice.tone(dice.roll("2d6", FixedRandom(6, 6))), "normal")
+        one = icons.roll_image([(20, "17", "normal")])
+        stats = icons.roll_image([(6, str(total), "normal") for total in (15, 12, 9, 14, 8, 11, 13)])
+        self.assertEqual(one.size, (160, 160))
+        self.assertEqual(stats.size, (6 * 120 - 8, 2 * 120 - 8))  # six to a row
+
     def test_die_icons_are_drawn_for_every_die(self) -> None:
         for name, (draw, _fallback) in icons.ICONS.items():
             with Image.open(io.BytesIO(draw())) as image:
@@ -111,9 +120,10 @@ class RollRoutingTests(unittest.TestCase):
         self.bot.icons["die_d20"] = "<:die_d20:7>"
         message = self.say("<@999> roll for initiative", mentioned=True)
 
-        reply = message.reply.await_args.args[0]
-        self.assertTrue(reply.startswith("<:die_d20:7> **"))
+        reply, picture = message.reply.await_args.args[0], message.reply.await_args.kwargs["file"]
+        self.assertTrue(reply.startswith("**"))
         self.assertIn("for **initiative**", reply)
+        self.assertEqual(picture.filename, "roll.png")  # the result die, drawn
         self.assertEqual(self.backend.calls, [])
 
     def test_ordinary_chat_about_rolling_is_left_alone(self) -> None:

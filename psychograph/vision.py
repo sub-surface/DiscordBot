@@ -24,6 +24,7 @@ log = logging.getLogger("psychograph.vision")
 MAX_IMAGES = 3
 MAX_SIDE = 1024
 MAX_BYTES = 12 * 1024 * 1024
+MAX_PIXELS = 40_000_000  # a 40 MP canvas is far past any real photo or screenshot
 # Prompt tokens held back per image when fitting the context: MiniCPM-V's default 16x mode measured ~200
 # for a 640x400 picture, and larger images slice into more tiles.
 IMAGE_TOKENS = IMAGE_PART_TOKENS
@@ -64,9 +65,14 @@ def _shrink(data: bytes) -> str:
     from PIL import Image
 
     with Image.open(io.BytesIO(data)) as image:
+        # Opening only reads the header: refuse a "decompression bomb" (a small file declaring a huge
+        # canvas) before any pixels are decoded, and let JPEGs decode straight at a reduced scale.
+        if image.width * image.height > MAX_PIXELS:
+            raise ValueError(f"image too large: {image.width}x{image.height}")
         image.seek(0)  # first frame of a GIF
+        image.draft("RGB", (MAX_SIDE, MAX_SIDE))
+        image.thumbnail((MAX_SIDE, MAX_SIDE))
         frame = image.convert("RGB")
-    frame.thumbnail((MAX_SIDE, MAX_SIDE))
     buffer = io.BytesIO()
     frame.save(buffer, format="JPEG", quality=85)
     return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode()
