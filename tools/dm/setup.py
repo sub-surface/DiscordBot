@@ -3,6 +3,7 @@ application emojis (their CDN links never expire), and save it all to data/dm.js
 
     python tools/dm/setup.py            # idempotent: reuses what already exists
     python tools/dm/setup.py --npc "Omnius, the God Machine" O 96cdff   # add or redraw one NPC voice
+    python tools/dm/setup.py --owner=132301139667451904   # whose `-#` whispers may steer the game
 """
 
 from __future__ import annotations
@@ -82,7 +83,8 @@ def main() -> None:
     hooks = call("GET", f"/channels/{channel_id}/webhooks")
     hook = next((h for h in hooks if h.get("name") == "The Narrator"), None) or call(
         "POST", f"/channels/{channel_id}/webhooks", {"name": "The Narrator", "avatar": data_uri(monogram("N", "c8a15a"))})
-    cfg = {"guild_id": guild_id, "channel_id": channel_id, "webhook": f"https://discord.com/api/v10/webhooks/{hook['id']}/{hook['token']}",
+    owner = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--owner=")), cfg.get("owner_id", ""))
+    cfg = {"guild_id": guild_id, "channel_id": channel_id, "owner_id": owner, "webhook": f"https://discord.com/api/v10/webhooks/{hook['id']}/{hook['token']}",
            "npcs": {k: list(v) for k, v in npcs.items()}, "avatars": avatars}
     CONFIG.parent.mkdir(parents=True, exist_ok=True)
     CONFIG.write_text(json.dumps(cfg, indent=1), encoding="utf-8")
