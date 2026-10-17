@@ -79,6 +79,18 @@ class NotationTests(unittest.TestCase):
         self.assertEqual(one.size, (160, 160))
         self.assertEqual(stats.size, (6 * 120 - 8, 2 * 120 - 8))  # six to a row
 
+    def test_a_roll_written_into_roleplay_is_found(self) -> None:
+        cases = {
+            "This door, we have them in the courts. Doors that won't admit chuds. Roll lore": "lore",
+            "I take a run at it." + chr(10) + "roll mog for the door": "mog for the door",
+            "Roll 2d6+3! Take that.": "2d6+3",
+            "I'll roll with it. We should roll out later.": None,
+            "rolling stones are overrated": None,
+        }
+        for text, expected in cases.items():
+            with self.subTest(text):
+                self.assertEqual(dice.embedded_request(text), expected)
+
     def test_die_icons_are_drawn_for_every_die(self) -> None:
         for name, (draw, _fallback) in icons.ICONS.items():
             with Image.open(io.BytesIO(draw())) as image:

@@ -10,7 +10,7 @@ import io
 from .characters import STAT_NAMES, STATS, Character, MAX_CHUCKLES, signed
 from .icons import BONE, BRASS, CHARCOAL, EMBER, FONTS
 
-W, H = 1200, 640
+W, H = 1200, 700
 S = 2  # supersampling
 MUTED = (150, 146, 140, 255)
 # Solid mixes over charcoal (Pillow replaces alpha rather than blending it on an opaque canvas).
@@ -56,7 +56,10 @@ def _portrait(image_bytes: bytes | None, side: int, initials: str):
     if image_bytes:
         try:
             with Image.open(io.BytesIO(image_bytes)) as source:
-                return ImageOps.fit(source.convert("RGB"), (side, side), Image.LANCZOS)
+                art = ImageOps.fit(source.convert("RGBA"), (side, side), Image.LANCZOS)
+            tile = Image.new("RGBA", (side, side), (32, 34, 41, 255))  # transparent avatars sit on the dark tile
+            tile.alpha_composite(art)
+            return tile.convert("RGB")
         except Exception:  # a broken avatar falls back to initials
             pass
     tile = Image.new("RGB", (side, side), (32, 34, 41))
@@ -149,6 +152,14 @@ def render(character: Character, player: str, portrait: bytes | None = None):
         italic = _font("BarlowSemiCondensed-Italic.ttf", 25)
         y += 32 * S
         for line in _wrap(draw, character.keepsake[:1].upper() + character.keepsake[1:], italic, text_w)[:2]:
+            draw.text((nx, y), line, font=italic, fill=BONE)
+            y += 33 * S
+    if character.look:
+        y += 16 * S
+        _spaced(draw, (nx, y), "LOOK", _font("BarlowSemiCondensed-SemiBold.ttf", 20), MUTED, 0.12)
+        italic = _font("BarlowSemiCondensed-Italic.ttf", 25)
+        y += 32 * S
+        for line in _wrap(draw, character.look, italic, text_w)[:2]:
             draw.text((nx, y), line, font=italic, fill=BONE)
             y += 33 * S
     if character.hp <= 0:

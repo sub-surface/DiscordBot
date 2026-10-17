@@ -174,7 +174,8 @@ class ScoresView(discord.ui.View):
         self.stop()
         await interaction.response.edit_message(content=f"**{character.name}** is ready.", view=None)
         role, faction = character.role_info, character.faction_info
-        text = f"**{character.name}** enters the Scrollands: a {role.name} of {faction.name}."
+        article = "an" if role.name[0] in "AEIOU" else "a"
+        text = f"**{character.name}** enters the Scrollands: {article} {role.name} of {faction.name}."
         await interaction.followup.send(text, file=await sheet_file(character, interaction.user), allowed_mentions=NO_PINGS)
         act("^", interaction.channel, interaction.user, f"created character {character.name[:30]}")
 

@@ -87,7 +87,7 @@ class ChatCog(commands.Cog):
             return
         if await self._addressed(message):
             await self.handle(message)
-        elif (notation := dice.request(message.content, strict=True)) is not None:
+        elif (notation := dice.embedded_request(message.content)) is not None:
             await reply_roll(self.bot, message, notation)  # a message that is only a roll: no Jev, no model
         elif (persona := await self.bot.ambient.called(message)) is not None:
             await self.handle(message, called=persona)

@@ -193,6 +193,19 @@ def request(prompt: str, strict: bool = False) -> str | None:
     return None if strict else rest
 
 
+_SENTENCE_END = re.compile(r"(?<=[.!?…])\s+|\n+")
+
+
+def embedded_request(text: str) -> str | None:
+    """A roll written into a roleplay message ("I pick the lock. Roll lore"): the first line or sentence that is
+    on its own a strict roll. Anything that merely mentions rolling ("I'll roll with it") doesn't count."""
+    for piece in _SENTENCE_END.split(text.strip()):
+        notation = request(piece.strip().rstrip(".!"), strict=True)
+        if notation is not None:
+            return notation
+    return None
+
+
 def die_icon_name(sides: int) -> str:
     """Which die icon fits: the standard die at or above the biggest one rolled."""
     for standard in (4, 6, 8, 10, 12, 20):
