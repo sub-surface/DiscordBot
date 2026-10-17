@@ -40,7 +40,7 @@ class BotTests(unittest.TestCase):
         self.assertEqual(
             names,
             {"ask", "quick", "persona", "persona-manage", "status", "verbosity", "reset", "timeout", "bot", "scores",
-             "sound", "chess", "help", "duel", "santi-slop", "roll"},
+             "sound", "chess", "help", "duel", "santi-slop", "roll", "character"},
         )
         self.assertEqual(
             {c.name for c in self.bot.tree.get_commands(type=discord.AppCommandType.message)},

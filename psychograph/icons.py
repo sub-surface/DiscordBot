@@ -7,6 +7,7 @@ restart costs one list call. `icon()` falls back to a unicode emoji until the up
 
 from __future__ import annotations
 
+import hashlib
 import io
 import logging
 import math
@@ -23,13 +24,19 @@ log = logging.getLogger("psychograph.icons")
 
 SIZE = 128
 SCALE = 4  # drawn this many times larger, then scaled down: Pillow's polygons have no anti-aliasing
-FONT = Path(__file__).resolve().parent.parent / "assets" / "fonts" / "Fredoka.ttf"
-_OUTLINE = (58, 44, 74, 255)
-_INK = (255, 255, 255, 255)
-_DIE_COLOURS = {  # pastel, one per die, so a glance tells them apart
-    4: (255, 168, 178), 6: (255, 214, 120), 8: (150, 232, 170), 10: (150, 205, 255), 12: (196, 168, 255), 20: (255, 170, 225),
+FONTS = Path(__file__).resolve().parent.parent / "assets" / "fonts"
+NUMERAL_FONT = FONTS / "BarlowSemiCondensed-SemiBold.ttf"
+# Charcoal and bone, with brass for a natural 20 and red for a natural 1: a solid face reads on light and dark Discord.
+CHARCOAL = (20, 22, 27, 255)
+BONE = (236, 230, 218, 255)
+FACET = (236, 230, 218, 110)
+BRASS = (200, 161, 90, 255)
+EMBER = (180, 69, 58, 255)
+_TONES = {  # tone → (face, edge, facet lines, numeral)
+    "normal": (CHARCOAL, BONE, FACET, BONE),
+    "crit": (BRASS, CHARCOAL, (20, 22, 27, 120), CHARCOAL),
+    "fumble": (CHARCOAL, EMBER, (180, 69, 58, 130), EMBER),
 }
-_TONES = {"crit": (255, 208, 70), "fumble": (168, 168, 184)}  # nat 20 gold, nat 1 ash
 
 
 def _polygon(sides: int, radius: float, centre: tuple[float, float], rotation: float = -90) -> list[tuple[float, float]]:
@@ -44,70 +51,81 @@ def _font(size: int):
     from PIL import ImageFont
 
     try:
-        font = ImageFont.truetype(str(FONT), size)
-        font.set_variation_by_name("Bold")
-        return font
-    except (OSError, ValueError):
+        return ImageFont.truetype(str(NUMERAL_FONT), size)
+    except OSError:
         return ImageFont.load_default(size=size)
 
 
+def _shape(sides: int, big: float, margin: float):
+    """(outline, facet lines, centre of the face the numeral sits on, room for it as (width, height) fractions)."""
+    c = big / 2
+    r = big / 2 - margin
+    if sides == 4:
+        outline = _polygon(3, r * 1.1, (c, big * 0.6))
+        middle = (c, big * 0.6)
+        return outline, [(middle, point) for point in outline], (c, big * 0.66), (0.34, 0.28)
+    if sides == 6:
+        k = margin
+        return [(k, k), (big - k, k), (big - k, big - k), (k, big - k)], [], (c, c), (0.62, 0.5)
+    if sides == 8:
+        outline = _polygon(4, r, (c, c))
+        return outline, [(outline[1], outline[3])], (c, big * 0.58), (0.42, 0.3)
+    if sides == 10:
+        top, bottom = (c, margin), (c, big - margin)
+        left, right = (margin, big * 0.56), (big - margin, big * 0.56)
+        inner = (c, big * 0.72)
+        return [top, right, bottom, left], [(top, inner), (left, inner), (right, inner), (inner, bottom)], (c, big * 0.5), (0.36, 0.26)
+    if sides == 12:
+        outline = _polygon(5, r, (c, big * 0.53))
+        inner = _polygon(5, r * 0.52, (c, big * 0.53))
+        return outline, [*zip(inner, inner[1:] + inner[:1]), *zip(inner, outline)], (c, big * 0.53), (0.5, 0.36)
+    outline = _polygon(6, r, (c, c))  # d20: a hexagon around a front triangle, joined vertex to vertex
+    inner = _polygon(3, r * 0.74, (c, big * 0.52))
+    lines = [*zip(inner, inner[1:] + inner[:1])]
+    lines += [(inner[0], outline[0]), (inner[1], outline[2]), (inner[2], outline[4])]
+    lines += [(inner[0], outline[1]), (inner[0], outline[5]), (inner[1], outline[1]), (inner[1], outline[3]),
+              (inner[2], outline[3]), (inner[2], outline[5])]
+    return outline, lines, (c, big * 0.6), (0.4, 0.3)
+
+
 def draw_die(sides: int, label: str | None = None, size: int = SIZE, tone: str = "normal"):
-    """A die face as an RGBA image: its shape and colour by `sides`, with `label` (default: the side count)
-    as large as the face allows. tone "crit" is gold with sparkles, "fumble" ash grey with a crack."""
+    """A die face as an RGBA image: a solid polyhedron in line art (its real facet lines), with `label` (default: the
+    side count) set as large as the front face allows. tone "crit" is brass, "fumble" ember-edged and cracked."""
     from PIL import Image, ImageDraw
 
-    sides = sides if sides in _DIE_COLOURS else 20
+    sides = sides if sides in (4, 6, 8, 10, 12, 20) else 20
+    face, edge, facet, numeral = _TONES.get(tone, _TONES["normal"])
     big = size * SCALE
     image = Image.new("RGBA", (big, big), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    fill = (*_TONES.get(tone, _DIE_COLOURS[sides]), 255)
-    line = max(2, round(big * 0.05))
-    margin = line / 2 + big * 0.01
-    centre, radius = (big / 2, big / 2), big / 2 - margin
-    if sides == 4:
-        shape = _polygon(3, radius * 1.12, (big / 2, big * 0.6))
-    elif sides == 6:
-        draw.rounded_rectangle((margin, margin, big - margin, big - margin), radius=big * 0.2, fill=fill, outline=_OUTLINE, width=line)
-        shape = None
-    elif sides == 8:
-        shape = _polygon(4, radius, centre)
-    elif sides == 10:
-        shape = [(big / 2, margin), (big - margin, big * 0.58), (big / 2, big - margin), (margin, big * 0.58)]
-    elif sides == 12:
-        shape = _polygon(5, radius, (big / 2, big * 0.53))
-    else:
-        shape = _polygon(6, radius, centre)
-    if shape:
-        draw.polygon(shape, fill=fill, outline=_OUTLINE, width=line)
-    if sides == 20:  # the inner facet that makes a hexagon read as a d20
-        inner = _polygon(3, radius * 0.9, (big / 2, big * 0.55))
-        draw.polygon(inner, outline=tuple(int(channel * 0.8) for channel in fill[:3]), width=max(1, line // 2))
-    if tone == "fumble":
-        crack = [(big * 0.62, big * 0.08), (big * 0.52, big * 0.3), (big * 0.62, big * 0.42), (big * 0.48, big * 0.62)]
-        draw.line(crack, fill=_OUTLINE, width=max(1, line // 2), joint="curve")
+    line = max(2, round(big * 0.028))
+    margin = line + big * 0.02
+    outline, facets, centre, (room_w, room_h) = _shape(sides, big, margin)
+    draw.polygon(outline, fill=face)
+    for a, b in facets:
+        draw.line([a, b], fill=facet, width=max(1, round(line * 0.55)))
+    if tone == "fumble":  # a crack from the top edge into the face
+        crack = [(big * 0.6, big * 0.06), (big * 0.53, big * 0.24), (big * 0.6, big * 0.34), (big * 0.5, big * 0.47)]
+        draw.line(crack, fill=EMBER, width=max(1, round(line * 0.8)), joint="curve")
     label = str(sides) if label is None else label
-    # Fit the label to the face: d4's triangle has the least room, low and narrow.
-    room_w, room_h, centre_y = {4: (0.5, 0.36, 0.66), 20: (0.6, 0.4, 0.56), 10: (0.56, 0.4, 0.56)}.get(sides, (0.66, 0.5, 0.52))
-    stroke = max(1, round(big * 0.035))
-    font_size = round(big * room_h)
+    if len(label) >= 3:
+        room_w *= 1.25
+    font_size = round(big * room_h * 1.35)
     while font_size > 8:
         font = _font(font_size)
-        box = draw.textbbox((0, 0), label, font=font, stroke_width=stroke)
+        box = draw.textbbox((0, 0), label, font=font)
         if box[2] - box[0] <= big * room_w and box[3] - box[1] <= big * room_h:
             break
-        font_size = round(font_size * 0.92)
-    position = (big / 2 - (box[0] + box[2]) / 2, big * centre_y - (box[1] + box[3]) / 2)
-    draw.text(position, label, font=font, fill=_INK, stroke_width=stroke, stroke_fill=_OUTLINE)
-    if tone == "crit":
-        for x, y, r in ((0.13, 0.15, 0.1), (0.88, 0.22, 0.075), (0.86, 0.85, 0.085)):
-            _sparkle(draw, big * x, big * y, big * r)
+        font_size = round(font_size * 0.93)
+    # Knock the facet lines out behind the numeral so it stays crisp at emoji size.
+    pad = big * 0.025
+    knock = (centre[0] - (box[2] - box[0]) / 2 - pad, centre[1] - (box[3] - box[1]) / 2 - pad,
+             centre[0] + (box[2] - box[0]) / 2 + pad, centre[1] + (box[3] - box[1]) / 2 + pad)
+    if facets:
+        draw.rectangle(knock, fill=face)
+    draw.polygon(outline, outline=edge, width=line)
+    draw.text((centre[0] - (box[0] + box[2]) / 2, centre[1] - (box[1] + box[3]) / 2), label, font=font, fill=numeral)
     return image.resize((size, size), Image.LANCZOS)
-
-
-def _sparkle(draw, x: float, y: float, r: float) -> None:
-    points = [(x, y - r), (x + r * 0.28, y - r * 0.28), (x + r, y), (x + r * 0.28, y + r * 0.28),
-              (x, y + r), (x - r * 0.28, y + r * 0.28), (x - r, y), (x - r * 0.28, y - r * 0.28)]
-    draw.polygon(points, fill=(255, 255, 255, 255), outline=_OUTLINE, width=max(1, round(r * 0.18)))
 
 
 def png(image) -> bytes:
@@ -131,13 +149,20 @@ def icon(bot: PsychographBot, name: str) -> str:
 
 
 async def sync(bot: PsychographBot) -> None:
-    """Upload any icon that isn't an application emoji yet; remember all of them for `icon()`."""
+    """Upload any icon that isn't an application emoji yet, or whose drawing has changed since it was uploaded
+    (a fingerprint per icon is kept in the store); remember all of them for `icon()`."""
     try:
         existing = {emoji.name: emoji for emoji in await bot.fetch_application_emojis()}
         for name, (draw, _fallback) in ICONS.items():
+            art = draw()
+            fingerprint = hashlib.sha256(art).hexdigest()[:16]
             emoji = existing.get(name)
+            if emoji is not None and bot.store.state(f"icon:{name}") != fingerprint:
+                await emoji.delete()
+                emoji = None
             if emoji is None:
-                emoji = await bot.create_application_emoji(name=name, image=draw())
+                emoji = await bot.create_application_emoji(name=name, image=art)
+                bot.store.set_state(f"icon:{name}", fingerprint)
                 log.info("Uploaded icon %s", name)
             bot.icons[name] = str(emoji)
     except (discord.HTTPException, OSError) as error:

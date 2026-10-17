@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
+import time
 from dataclasses import dataclass, fields
 from pathlib import Path
 
@@ -216,6 +218,16 @@ class Store:
             )
             self._conn.execute(
                 "CREATE TABLE IF NOT EXISTS tweet_stats (status_id TEXT PRIMARY KEY, data TEXT NOT NULL, fetched_at REAL NOT NULL)"
+            )
+            # Game characters as JSON, so the rules can grow without a migration per field (see characters.py).
+            self._conn.execute(
+                """CREATE TABLE IF NOT EXISTS characters (
+                    guild_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    data TEXT NOT NULL,
+                    updated_at REAL NOT NULL,
+                    PRIMARY KEY (guild_id, user_id)
+                )"""
             )
 
     def _ensure_columns(self, table: str, columns: dict[str, str]) -> None:
@@ -671,6 +683,27 @@ class Store:
             "SELECT * FROM slop_shares WHERE channel_id = ? AND shared_at >= ? ORDER BY shared_at", (channel_id, since)
         ).fetchall()
         return [dict(row) for row in rows]
+
+    # ── Game characters ─────────────────────────────────────────────
+
+    def character(self, guild_id: int | None, user_id: int) -> dict | None:
+        row = self._conn.execute(
+            "SELECT data FROM characters WHERE guild_id = ? AND user_id = ?", (guild_id or 0, user_id)
+        ).fetchone()
+        return json.loads(row["data"]) if row else None
+
+    def save_character(self, guild_id: int | None, user_id: int, data: dict) -> None:
+        with self._conn:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO characters (guild_id, user_id, data, updated_at) VALUES (?, ?, ?, ?)",
+                (guild_id or 0, user_id, json.dumps(data, ensure_ascii=False), time.time()),
+            )
+
+    def characters(self, guild_id: int | None) -> list[tuple[int, dict]]:
+        rows = self._conn.execute(
+            "SELECT user_id, data FROM characters WHERE guild_id = ? ORDER BY updated_at DESC", (guild_id or 0,)
+        ).fetchall()
+        return [(row["user_id"], json.loads(row["data"])) for row in rows]
 
     def tweet_stats(self, status_id: str, max_age: float, now: float) -> str | None:
         row = self._conn.execute(

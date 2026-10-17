@@ -28,6 +28,7 @@ _SETS = re.compile(r"^\s*(\d+)\s*x\s+|\s+x\s*(\d+)\s*$", re.IGNORECASE)
 _REASON = re.compile(r"\s+(?:for|#)\s*(.+)$|\s*#\s*(.+)$", re.IGNORECASE)
 _SHORTHAND = {"adv": "2d20kh1", "advantage": "2d20kh1", "dis": "2d20kl1", "disadvantage": "2d20kl1"}
 _ROLL_WORD = re.compile(r"^\s*(?:roll|r)\b\s*", re.IGNORECASE)
+_STAT_WORD = re.compile(r"^(?:mog|cope|aura|lore)\b", re.IGNORECASE)
 
 
 class DiceError(ValueError):
@@ -180,6 +181,8 @@ def request(prompt: str, strict: bool = False) -> str | None:
     if match is None:
         return None
     rest = prompt[match.end():].strip()
+    if _STAT_WORD.match(rest):
+        return rest  # a check with a character's score ("roll cope for the door"): see characters.py
     try:
         parse(rest)
         return rest
