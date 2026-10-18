@@ -19,7 +19,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from .. import characters as rules
-from .. import dice, icons, ledger, sheet, world
+from .. import combat, dice, icons, ledger, sheet, tarot, world
 from ..actions import act
 from ..bot import PsychographBot
 from .help import dice_embed
@@ -37,31 +37,91 @@ def load_character(bot: PsychographBot, guild_id: int | None, user_id: int) -> r
     return rules.Character.from_dict(data) if data else None
 
 
-def roll_reply(bot: PsychographBot, notation: str, who: str, roller: rules.Character | None = None) -> tuple[str, discord.File | None]:
-    """The reply to a roll: its text and a picture of the result, or what was wrong. A stat word ("cope for …")
-    is a check with the roller's character."""
-    stat = rules.stat_request(notation)
+def _picture(dice_list: list[tuple[int, str, str]], name: str = "roll.png") -> discord.File:
+    return discord.File(io.BytesIO(icons.png(icons.roll_image(dice_list))), filename=name)
+
+
+def _tone(natural: int) -> str:
+    return "crit" if natural == 20 else "fumble" if natural == 1 else "normal"
+
+
+def roll_reply(bot: PsychographBot, notation: str, who: str, roller: rules.Character | None = None) -> tuple[str, discord.File | None, bool]:
+    """The reply to a roll: its text, a picture of the result (or None if something was wrong), and whether it
+    went badly enough to be worth a Chuckle reroll. A score or skill ("cope for …") is a check with the roller's
+    character; "attack [vs 13]" and "damage" use their class weapon (combat.py)."""
+    fight = combat.request(notation)
+    stat = None if fight else rules.stat_request(notation)
+    if (fight or stat) and roller is None:
+        word = fight[0] if fight else stat[0]
+        return f"{icons.icon(bot, 'die_d20')} Make a character first with `/character create`, then roll `{word}`.", None, False
+    if fight and fight[0] == "damage":
+        faces, flat, total = combat.roll_damage(combat.damage_notation(roller))
+        sides = combat.die_sides(combat.weapon(roller).dice)
+        return combat.render_damage(roller, faces, flat, total, who), _picture([(sides, str(total), "normal")]), False
+    if fight:
+        _what, lean, ac, reason = fight
+        result = combat.character_strike(roller, "", ac, lean, reason=reason)
+        dice_list = [(20, str(result.total), _tone(result.kept))]
+        if result.damage:
+            dice_list.append((combat.die_sides(result.damage_dice), str(result.damage), "crit" if result.crit else "normal"))
+        return combat.render(result, who), _picture(dice_list), result.hit is False and roller.chuckles > 0
     if stat is not None:
-        if roller is None:
-            return f"{icons.icon(bot, 'die_d20')} Make a character first with `/character create`, then roll `{stat[0]}`.", None
         result = rules.check(roller, *stat)
-        tone = {"crit": "crit", "fumble": "fumble"}.get(result.band[0], "normal")
-        picture = icons.roll_image([(20, str(result.total), tone)])
-        return rules.render_check(result, roller, who), discord.File(io.BytesIO(icons.png(picture)), filename="roll.png")
+        retry = result.band[0] in ("miss", "but", "fumble") and roller.chuckles > 0
+        return rules.render_check(result, roller, who), _picture([(20, str(result.total), _tone(result.natural))]), retry
     try:
         result = dice.roll(notation)
     except dice.DiceError as error:
-        return f"{icons.icon(bot, 'die_d20')} {error}", None
+        return f"{icons.icon(bot, 'die_d20')} {error}", None, False
     sides = int(dice.die_icon_name(result.biggest_die).removeprefix("die_d"))
-    tone = dice.tone(result)
-    picture = icons.roll_image([(sides, str(total), tone) for total in result.totals])
-    return dice.render(result, who), discord.File(io.BytesIO(icons.png(picture)), filename="roll.png")
+    return dice.render(result, who), _picture([(sides, str(total), dice.tone(result)) for total in result.totals]), False
+
+
+class RerollView(discord.ui.View):
+    """Under a roll that went badly: the roller may spend a Chuckle to roll it again (the new roll stands)."""
+
+    def __init__(self, bot: PsychographBot, guild_id: int | None, roller_id: int, redo) -> None:
+        super().__init__(timeout=600)
+        self.bot, self.guild_id, self.roller_id, self.redo = bot, guild_id, roller_id, redo
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.roller_id:
+            await interaction.response.send_message("Only the one who rolled can spend their Chuckle on it.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Spend a Chuckle · reroll", style=discord.ButtonStyle.secondary)
+    async def reroll(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        character = load_character(self.bot, self.guild_id, self.roller_id)
+        if character is None or character.chuckles < 1:
+            await interaction.response.send_message("No Chuckles left. Earn one: be funny, or suffer well.", ephemeral=True)
+            return
+        ledger.commit(self.bot.store, self.guild_id, [ledger.chuckles(self.roller_id, -1, "spent on a reroll")], "player")
+        text, picture, _retry = await self.redo()
+        self.stop()
+        left = character.chuckles - 1
+        text += f"\n-# Rerolled with a Chuckle · {left} left"
+        await interaction.response.edit_message(content=text, attachments=[picture] if picture else [], view=None)
+        act("^", interaction.channel, interaction.user, "spent a Chuckle on a reroll")
+
+
+async def send_roll(bot: PsychographBot, send, guild_id: int | None, roller_id: int, notation: str, who: str) -> None:
+    """Roll and post through `send` (a reply or an interaction response), with the reroll button when it's earned."""
+    roller = load_character(bot, guild_id, roller_id)
+    text, picture, retry = roll_reply(bot, notation, who, roller)
+
+    async def redo():
+        return roll_reply(bot, notation, who, load_character(bot, guild_id, roller_id))
+
+    view = RerollView(bot, guild_id, roller_id, redo) if retry else discord.utils.MISSING
+    await send(text, file=picture or discord.utils.MISSING, view=view, allowed_mentions=NO_PINGS)
 
 
 async def reply_roll(bot: PsychographBot, message: discord.Message, notation: str) -> None:
-    roller = load_character(bot, message.guild.id if message.guild else None, message.author.id)
-    text, picture = roll_reply(bot, notation, _who(message.author), roller)
-    await message.reply(text, file=picture or discord.utils.MISSING, mention_author=False, allowed_mentions=NO_PINGS)
+    async def send(text, **kwargs):
+        await message.reply(text, mention_author=False, **kwargs)
+
+    await send_roll(bot, send, message.guild.id if message.guild else None, message.author.id, notation, _who(message.author))
     act("@", message.channel, message.author, f"rolled {notation[:40]}")
 
 
@@ -303,6 +363,7 @@ class PartyCog(commands.Cog):
             app_commands.ContextMenu(name="Challenge to a contest", callback=self.challenge),
             app_commands.ContextMenu(name="Pay keks", callback=self.pay),
             app_commands.ContextMenu(name="Hand over an item", callback=self.give_item),
+            app_commands.ContextMenu(name="Attack", callback=self.attack),
             app_commands.ContextMenu(name="Give a Chuckle", callback=self.give_chuckle),
         ]
         for menu in self.menus:
@@ -343,6 +404,12 @@ class PartyCog(commands.Cog):
         if not any(not message.author.bot and message.created_at > since for message in recent):
             return  # nobody has been around: a crier shouting into an empty square is just noise
         self.bot.store.set_state("crier:last", str(time.time()))
+        today = datetime.now().date().isoformat()
+        if self.bot.store.state("tarot:day") != today and random.random() < 0.4:
+            self.bot.store.set_state("tarot:day", today)
+            await channel.send(view=tarot.reading("today", channel.guild.id, ""))
+            act(".", channel, "-", "the day's card")
+            return
         await channel.send(world.crier_line(), allowed_mentions=NO_PINGS)
         act(".", channel, "-", "the Crier spoke")
 
@@ -377,6 +444,38 @@ class PartyCog(commands.Cog):
             await interaction.response.send_message(f"{pair[0].name} isn't carrying anything to hand over.", ephemeral=True)
             return
         await interaction.response.send_modal(GiveForm(self.bot, member, pair[0]))
+
+    async def attack(self, interaction: discord.Interaction, member: discord.Member) -> None:
+        """Right-click a member → Apps → Attack: your class weapon against their defence, damage taken off their HP.
+        Only between characters in the same place on the map."""
+        if (pair := await self._both(interaction, member)) is None:
+            return
+        mine, theirs = pair
+        if mine.location != theirs.location:
+            here, there = world.place(mine.location).name, world.place(theirs.location).name
+            await interaction.response.send_message(f"{theirs.name} is at {there}; you're at {here}. Travel first.", ephemeral=True)
+            return
+        if mine.hp <= 0:
+            await interaction.response.send_message(f"{mine.name} is down. Lie there and think about what you did.", ephemeral=True)
+            return
+        guild, attacker_id, who = interaction.guild_id, interaction.user.id, _who(interaction.user)
+
+        async def resolve():
+            me, them = load_character(self.bot, guild, attacker_id), load_character(self.bot, guild, member.id)
+            result = combat.character_strike(me, them.name, combat.defence(them))
+            dice_list = [(20, str(result.total), _tone(result.kept))]
+            text = combat.render(result, who)
+            if result.hit:
+                dice_list.append((combat.die_sides(result.damage_dice), str(result.damage), "crit" if result.crit else "normal"))
+                ledger.commit(self.bot.store, guild, [ledger.hp(member.id, -result.damage, f"{me.name}, {combat.weapon(me).name}")], "player")
+                them = load_character(self.bot, guild, member.id)
+                text += f"\n-# {them.name} · HP {them.hp}/{them.max_hp}" + (" · **down**" if them.hp <= 0 else "")
+            return f"{member.mention} " + text, _picture(dice_list, "attack.png"), result.hit is False and me.chuckles > 0
+
+        text, picture, retry = await resolve()
+        view = RerollView(self.bot, guild, attacker_id, resolve) if retry else discord.utils.MISSING
+        await interaction.response.send_message(text, file=picture, view=view, allowed_mentions=discord.AllowedMentions(users=[member]))
+        act("^", interaction.channel, interaction.user, f"attacked {_who(member)[:20]}")
 
     async def give_chuckle(self, interaction: discord.Interaction, message: discord.Message) -> None:
         """Right-click a message → Apps → Give a Chuckle: its author's character earns one (up to three)."""
@@ -449,9 +548,7 @@ class PartyCog(commands.Cog):
             await interaction.response.send_message(embed=dice_embed(self.bot), ephemeral=True)
             return
         notation = f"{dice} for {reason}" if reason.strip() else dice
-        roller = load_character(self.bot, interaction.guild_id, interaction.user.id)
-        text, picture = roll_reply(self.bot, notation, _who(interaction.user), roller)
-        await interaction.response.send_message(text, file=picture or discord.utils.MISSING, allowed_mentions=NO_PINGS)
+        await send_roll(self.bot, interaction.response.send_message, interaction.guild_id, interaction.user.id, notation, _who(interaction.user))
 
     @roll.autocomplete("dice")
     async def roll_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
@@ -462,6 +559,31 @@ class PartyCog(commands.Cog):
     @character.command(name="create", description="Make your adventurer: name, class, faction, keepsake, then scores")
     async def create(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_modal(CreateForm(self))
+
+    @app_commands.command(name="tarot", description="Mini Me reads the Rider–Waite–Smith deck: the day's card, one for you, or three")
+    @app_commands.describe(reading="Which reading", question="What you're asking (optional)")
+    @app_commands.choices(reading=[
+        app_commands.Choice(name="The day's card (the same for everyone today)", value="today"),
+        app_commands.Choice(name="One card for me", value="one"),
+        app_commands.Choice(name="Three cards: what was, what is, what's coming", value="three"),
+    ])
+    async def tarot_command(self, interaction: discord.Interaction, reading: str = "today", question: str = "") -> None:
+        await interaction.response.send_message(view=tarot.reading(reading, interaction.guild_id, _who(interaction.user), question))
+        act("^", interaction.channel, interaction.user, f"tarot {reading}")
+
+    @character.command(name="pack", description="Everything your character is carrying")
+    async def pack(self, interaction: discord.Interaction) -> None:
+        character = load_character(self.bot, interaction.guild_id, interaction.user.id)
+        if character is None:
+            await interaction.response.send_message("You don't have a character yet: `/character create`.", ephemeral=True)
+            return
+        lines = [f"-# *{character.keepsake}* (keepsake)"] if character.keepsake else []
+        for item in sorted(character.inventory, key=lambda item: (item["kind"] != "quest", item["name"].casefold())):
+            qty = f" ×{item['qty']}" if item["qty"] != 1 else ""
+            note = f" · {item['note']}" if item.get("note") else ""
+            lines.append(f"**{item['name']}**{qty} · {item['kind']}{note}")
+        await interaction.response.send_message(f"**{character.name}** carries\n" + "\n".join(lines or ["Nothing at all."]),
+                                                ephemeral=True, allowed_mentions=NO_PINGS)
 
     @character.command(name="log", description="What has happened to your character: keks, items, wounds, travel")
     async def log(self, interaction: discord.Interaction) -> None:

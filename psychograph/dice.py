@@ -181,9 +181,10 @@ def request(prompt: str, strict: bool = False) -> str | None:
         return None
     rest = prompt[match.end():].strip()
     from .characters import stat_request  # imported here: characters imports dice
+    from .combat import request as combat_request
 
-    if stat_request(rest) is not None:
-        return rest  # a check with a character's score or skill ("roll perception"): characters.py
+    if stat_request(rest) is not None or combat_request(rest) is not None:
+        return rest  # a check ("roll perception"): characters.py; or "roll attack vs 13", "roll damage": combat.py
     try:
         parse(rest)
         return rest

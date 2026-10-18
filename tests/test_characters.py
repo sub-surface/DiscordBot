@@ -95,7 +95,7 @@ class StatRollTests(unittest.TestCase):
         rules.check = lambda character, stat, lean="", reason="", label="", rng=None: random_check(
             character, stat, lean, reason, label, FixedRandom(12))
         try:
-            text, picture = roll_reply(self.bot, "cope for the door", "Hugh Chungus", hero())
+            text, picture, _retry = roll_reply(self.bot, "cope for the door", "Hugh Chungus", hero())
         finally:
             rules.check = random_check
         self.assertTrue(text.startswith("**15** · Yes."))
@@ -103,7 +103,7 @@ class StatRollTests(unittest.TestCase):
         self.assertEqual(picture.filename, "roll.png")
 
     def test_without_a_character_a_stat_roll_points_to_creation(self) -> None:
-        text, picture = roll_reply(self.bot, "mog", "Hugh Chungus", None)
+        text, picture, _retry = roll_reply(self.bot, "mog", "Hugh Chungus", None)
         self.assertIn("/character create", text)
         self.assertIsNone(picture)
 

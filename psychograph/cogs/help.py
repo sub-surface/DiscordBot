@@ -68,11 +68,18 @@ def game_embed(bot: PsychographBot) -> discord.Embed:
         "`roll perception`, `roll stealth for the guards`, `roll cope adv`, `save mog`, `roll initiative`",
         "1–9 it goes wrong · 10–14 yes, but · 15+ yes · natural 20 mogged · natural 1 spawnpilled",
         "A roll at the end of a roleplay message counts too: *…I pick the lock. Roll sleight*",
+        "A bad roll offers **Spend a Chuckle · reroll**: one click, the new roll stands",
+    ), inline=False)
+    embed.add_field(name="Fighting", value=_lines(
+        "`roll attack` (or `roll attack vs 13`): your class weapon, d20 + bonus against a defence",
+        "A hit rolls damage; a natural 20 doubles the dice · `roll damage` for damage alone",
+        "Right-click a member in the same place → **Attack**: it comes off their HP",
     ), inline=False)
     embed.add_field(name="The world", value=_lines(
         "`/world map`: the realm and where everyone is · `/world travel`: set out somewhere",
         "Right-click a member → **Challenge to a contest** · **Pay keks** · **Hand over an item**",
-        "`/character log`: what has happened to you lately (keks, loot, wounds, travel)",
+        "`/character pack`: everything you carry · `/character log`: what has happened to you lately",
+        "`/tarot`: Mini Me reads the deck: the day's card (the same for everyone), one card, or three",
         "Right-click a great post → **Give a Chuckle** (spend Chuckles for advantage or a reroll)",
     ), inline=False)
     embed.set_footer(text="Dice and sheets are instant · /help dice for the notation")

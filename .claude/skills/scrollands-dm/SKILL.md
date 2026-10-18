@@ -60,6 +60,20 @@ The bands are 1–9 a miss (the world makes a move), 10–14 yes-but (a success 
 (something extra), nat 1 spawnpilled (memorable). For contested things, tell players to right-click → Apps →
 Challenge to a contest.
 
+**Combat** (`psychograph/combat.py`, Baldur's Gate rules): attack = d20 + weapon score mod + proficiency vs
+defence (10 + armour + MOG mod, on the sheet). A hit rolls the weapon dice + mod, and a natural 20 doubles the dice.
+- Players: `roll attack vs 13` (or plain `roll attack`, and you rule), `roll damage`, or right-click → Attack on another
+  player in the same place. Give monsters a defence and say it when asked: "its defence is 13".
+- `game.py attack foid --ac 13 [adv] [--bonus 1d6] [reason]`: roll a player's attack for them, with context dice
+  (a Lurker striking unseen +1d6, a Brute nobody invited +1d4, a Sigma alone with advantage).
+- `game.py strike "Lurker Spawn" stack --atk 4 --dmg 1d8+2 [adv]`: a monster attacks. A hit comes off their HP.
+  Typical monsters: rabble +3/1d6, a real threat +5/1d10+2, a boss +7/2d8+3. Track monster HP yourself (or as a clock).
+- Down at 0 HP: they're out of the fight, not dead. A Liturgist's Antiphony or a rest brings them back
+  (`game.py hurt <who> -5`). Death only when the table wants it.
+- **Keks and Chuckles are spent in the fiction**: a bribe, a toll, a round at the Cringe Tavern, a Chuckle to
+  survive something stupid. Debit them with `reward <who> --keks -20 --note "bribed the Jannie"`. A bad roll
+  shows a reroll button that spends a Chuckle on its own.
+
 **State is a ledger** (`psychograph/ledger.py`): every change is checked, atomic, undoable and remembered.
 Targets are a user id, part of a character's name, or `all`. Each command prints the entry ids it wrote.
 - `game.py reward stack --keks 50 --chuckles 1 --note "kept the oath"` · `game.py hurt foid 3 a chair to the face`

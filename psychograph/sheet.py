@@ -136,20 +136,27 @@ def render(character: Character, player: str, portrait: bytes | None = None):
         held = MAX_CHUCKLES - index <= character.chuckles
         draw.polygon(points, fill=BRASS if held else None, outline=BRASS if held else HAIR, width=S)
 
-    # The pack: what they carry (from the ledger), quest items first, under the vitals.
-    if character.inventory:
+    # The pack: the keepsake (in italics, wrapped), then what they carry from the ledger, quest items first.
+    if character.inventory or character.keepsake:
         y = vy + 168 * S
         draw.line((px, y - 14 * S, px + side, y - 14 * S), fill=HAIR, width=S)
         _spaced(draw, (px, y), "PACK", small, MUTED)
         item_font, qty_font = _font("BarlowSemiCondensed-Medium.ttf", 22), _font("BarlowSemiCondensed-SemiBold.ttf", 20)
-        items = sorted(character.inventory, key=lambda item: item.get("kind") != "quest")
-        shown = items[:5] if len(items) <= 5 else items[:4]
+        keep_font = _font("BarlowSemiCondensed-Italic.ttf", 21)
         y += 30 * S
+        if character.keepsake:
+            for line in _wrap(draw, character.keepsake[:1].upper() + character.keepsake[1:], keep_font, side)[:3]:
+                draw.text((px, y), line, font=keep_font, fill=MUTED)
+                y += 26 * S
+            y += 4 * S
+        items = sorted(character.inventory, key=lambda item: item.get("kind") != "quest")
+        room = max(0, int(((H - 28) * S - y) // (29 * S)))
+        shown = items[:room] if len(items) <= room else items[:max(0, room - 1)]
         for item in shown:
             qty = f"×{item['qty']}" if item["qty"] != 1 else ""
-            room = side - (draw.textlength(qty, font=qty_font) + 10 * S if qty else 0)
+            width = side - (draw.textlength(qty, font=qty_font) + 10 * S if qty else 0)
             name = item["name"]
-            while draw.textlength(name, font=item_font) > room and len(name) > 4:
+            while draw.textlength(name, font=item_font) > width and len(name) > 4:
                 name = name[:-2].rstrip() + "…"
             draw.text((px, y), name, font=item_font, fill=BRASS if item.get("kind") == "quest" else BONE)
             if qty:
@@ -158,32 +165,41 @@ def render(character: Character, player: str, portrait: bytes | None = None):
         if len(items) > len(shown):
             draw.text((px, y), f"and {len(items) - len(shown)} more", font=_font("BarlowSemiCondensed-Italic.ttf", 20), fill=MUTED)
 
-    # The class move and the keepsake, under the scores.
+    # The class move, the attack and the look, under the scores.
     text_w = (W - 64) * S - nx
     my = 374 * S
     draw.line((nx, my - 18 * S, nx + text_w, my - 18 * S), fill=HAIR, width=S)
     _spaced(draw, (nx, my), role.move.upper(), _font("BarlowSemiCondensed-SemiBold.ttf", 20), BRASS, 0.12)
     body = _font("BarlowSemiCondensed-Medium.ttf", 25)
     y = my + 34 * S
+    line_h, bottom = 31 * S, (H - 28) * S
     for line in _wrap(draw, role.move_text, body, text_w)[:3]:
         draw.text((nx, y), line, font=body, fill=BONE)
-        y += 33 * S
-    if character.keepsake:
-        y += 16 * S
-        _spaced(draw, (nx, y), "KEEPSAKE", _font("BarlowSemiCondensed-SemiBold.ttf", 20), MUTED, 0.12)
-        italic = _font("BarlowSemiCondensed-Italic.ttf", 25)
-        y += 32 * S
-        for line in _wrap(draw, character.keepsake[:1].upper() + character.keepsake[1:], italic, text_w)[:2]:
-            draw.text((nx, y), line, font=italic, fill=BONE)
-            y += 33 * S
+        y += line_h
+    label_font, italic = _font("BarlowSemiCondensed-SemiBold.ttf", 20), _font("BarlowSemiCondensed-Italic.ttf", 25)
+
+    def section(label: str, lines: list[str], font, y: float, right: str = "") -> float:
+        """A small-caps label and its lines, as many as fit above the frame. Returns the next y."""
+        room = int((bottom - (y + 10 * S + 28 * S)) // line_h)
+        if room < 1:
+            return y
+        y += 10 * S
+        _spaced(draw, (nx, y), label, label_font, MUTED, 0.12)
+        if right:
+            draw.text((nx + text_w, y - 2 * S), right, font=_font("BarlowSemiCondensed-SemiBold.ttf", 21), fill=MUTED, anchor="ra")
+        y += 28 * S
+        for line in lines[:room]:
+            draw.text((nx, y), line, font=font, fill=BONE)
+            y += line_h
+        return y
+
+    from .combat import attack_bonus, damage_notation, defence, weapon  # combat imports characters, as we do
+
+    arms = weapon(character).name
+    numbers = f"{signed(attack_bonus(character))} to hit  ·  {damage_notation(character)}  ·  defence {defence(character)}"
+    y = section("ATTACK", [arms[:1].upper() + arms[1:]], body, y, numbers)
     if character.look:
-        y += 16 * S
-        _spaced(draw, (nx, y), "LOOK", _font("BarlowSemiCondensed-SemiBold.ttf", 20), MUTED, 0.12)
-        italic = _font("BarlowSemiCondensed-Italic.ttf", 25)
-        y += 32 * S
-        for line in _wrap(draw, character.look, italic, text_w)[:2]:
-            draw.text((nx, y), line, font=italic, fill=BONE)
-            y += 33 * S
+        y = section("LOOK", _wrap(draw, character.look, italic, text_w)[:2], italic, y)
     if character.hp <= 0:
         _spaced(draw, (W * S - 70 * S, 58 * S), "DOWN", _font("BarlowSemiCondensed-Bold.ttf", 22), EMBER, 0.2, anchor_right=True)
     return image.resize((W, H), Image.LANCZOS)

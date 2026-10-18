@@ -40,13 +40,13 @@ class BotTests(unittest.TestCase):
         self.assertEqual(
             names,
             {"ask", "quick", "persona", "persona-manage", "status", "verbosity", "reset", "timeout", "bot", "scores",
-             "sound", "chess", "help", "duel", "santi-slop", "roll", "character", "world"},
+             "sound", "chess", "help", "duel", "santi-slop", "roll", "character", "world", "tarot"},
         )
         self.assertEqual(
             {c.name for c in self.bot.tree.get_commands(type=discord.AppCommandType.message)},
             {"Ask persona", "Review this debate", "Judge this", "Tone check", "Give a Chuckle"},
         )
-        self.assertTrue({"Character sheet", "Challenge to a contest", "Pay keks", "Hand over an item"}
+        self.assertTrue({"Character sheet", "Challenge to a contest", "Pay keks", "Hand over an item", "Attack"}
                         <= {c.name for c in self.bot.tree.get_commands(type=discord.AppCommandType.user)})
         groups = {name: {c.name for c in self.bot.tree.get_command(name).commands} for name in ("quick", "bot", "scores")}
         self.assertEqual(groups, {
