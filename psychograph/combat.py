@@ -46,9 +46,12 @@ ARMOUR = {  # heavy for the oath-bound and the duellists, nothing for those who 
 DEFAULT_WEAPON = Weapon("a sharpened opinion", "1d6", "mog")
 
 _TERM = re.compile(r"([+-]?)\s*(?:(\d*)d(\d+)|(\d+))", re.IGNORECASE)
+_LEAN = r"(?:adv|advantage|dis|disadvantage)\b"
+# Matched against whitespace-collapsed text, and every optional part starts with one space and its own keyword,
+# so there is only one way to match: no backtracking blow-up on a message full of spaces.
 _REQUEST = re.compile(
-    r"^\s*(?P<what>attack|damage|dmg)\b\s*(?P<lean>adv|advantage|dis|disadvantage)?\s*"
-    r"(?:(?:vs\.?|against|ac)\s*(?P<ac>\d{1,2}))?\s*(?P<lean2>adv|advantage|dis|disadvantage)?\s*(?:(?:for|#)\s*(?P<reason>.+))?$",
+    rf"^(?P<what>attack|damage|dmg)\b(?: (?P<lean>{_LEAN}))?(?: (?:vs\.?|against|ac) ?(?P<ac>\d{{1,2}})\b)?"
+    rf"(?: (?P<lean2>{_LEAN}))?(?: (?:for|#) ?(?P<reason>.+))?$",
     re.IGNORECASE,
 )
 
@@ -80,7 +83,7 @@ def damage_notation(character: Character) -> str:
 
 def request(text: str) -> tuple[str, str, int | None, str] | None:
     """("attack"|"damage", "adv"|"dis"|"", target defence or None, reason) for "attack vs 13 adv for the goblin"."""
-    match = _REQUEST.match(text)
+    match = _REQUEST.match(" ".join(text.split())[:300])
     if match is None:
         return None
     what = "damage" if match["what"].lower() in ("damage", "dmg") else "attack"

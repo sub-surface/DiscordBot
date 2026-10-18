@@ -83,6 +83,7 @@ class RerollView(discord.ui.View):
     def __init__(self, bot: PsychographBot, guild_id: int | None, roller_id: int, redo) -> None:
         super().__init__(timeout=600)
         self.bot, self.guild_id, self.roller_id, self.redo = bot, guild_id, roller_id, redo
+        self.used = False
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.roller_id:
@@ -92,13 +93,18 @@ class RerollView(discord.ui.View):
 
     @discord.ui.button(label="Spend a Chuckle · reroll", style=discord.ButtonStyle.secondary)
     async def reroll(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        if self.used:  # a double click lands while the first is still editing the message
+            await interaction.response.defer()
+            return
+        self.used = True  # set before any await, so only one click ever spends
+        self.stop()
         character = load_character(self.bot, self.guild_id, self.roller_id)
-        if character is None or character.chuckles < 1:
+        spent = character is not None and character.chuckles >= 1 and ledger.commit(
+            self.bot.store, self.guild_id, [ledger.chuckles(self.roller_id, -1, "spent on a reroll")], "player")[0].data["n"] == -1
+        if not spent:
             await interaction.response.send_message("No Chuckles left. Earn one: be funny, or suffer well.", ephemeral=True)
             return
-        ledger.commit(self.bot.store, self.guild_id, [ledger.chuckles(self.roller_id, -1, "spent on a reroll")], "player")
         text, picture, _retry = await self.redo()
-        self.stop()
         left = character.chuckles - 1
         text += f"\n-# Rerolled with a Chuckle · {left} left"
         await interaction.response.edit_message(content=text, attachments=[picture] if picture else [], view=None)
@@ -407,7 +413,7 @@ class PartyCog(commands.Cog):
         today = datetime.now().date().isoformat()
         if self.bot.store.state("tarot:day") != today and random.random() < 0.4:
             self.bot.store.set_state("tarot:day", today)
-            await channel.send(view=tarot.reading("today", channel.guild.id, ""))
+            await channel.send(view=tarot.reading("today", channel.guild.id, ""), allowed_mentions=NO_PINGS)
             act(".", channel, "-", "the day's card")
             return
         await channel.send(world.crier_line(), allowed_mentions=NO_PINGS)
@@ -568,7 +574,8 @@ class PartyCog(commands.Cog):
         app_commands.Choice(name="Three cards: what was, what is, what's coming", value="three"),
     ])
     async def tarot_command(self, interaction: discord.Interaction, reading: str = "today", question: str = "") -> None:
-        await interaction.response.send_message(view=tarot.reading(reading, interaction.guild_id, _who(interaction.user), question))
+        await interaction.response.send_message(view=tarot.reading(reading, interaction.guild_id, _who(interaction.user), question),
+                                                allowed_mentions=NO_PINGS)
         act("^", interaction.channel, interaction.user, f"tarot {reading}")
 
     @character.command(name="pack", description="Everything your character is carrying")

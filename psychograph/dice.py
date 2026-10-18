@@ -96,7 +96,9 @@ class Roll:
 
 def parse(text: str) -> tuple[list[Term], int, str]:
     """(terms, how many sets, reason). Raises DiceError on anything it can't roll."""
-    text = text.strip()
+    text = " ".join(text.split())  # one space between words: the patterns below stay linear on any message
+    if len(text) > 300:
+        raise DiceError("That's a lot of dice. Keep it under 300 characters.")
     reason = ""
     if match := _REASON.search(text):
         reason = (match.group(1) or match.group(2) or "").strip()
@@ -177,7 +179,7 @@ def request(prompt: str, strict: bool = False) -> str | None:
     Otherwise (a mention): it starts with "roll", and with no dice given it's a d20 ("roll for initiative").
     """
     match = _ROLL_WORD.match(prompt)
-    if match is None:
+    if match is None or len(prompt) > 400:  # nobody asks for a roll in a wall of text
         return None
     rest = prompt[match.end():].strip()
     from .characters import stat_request  # imported here: characters imports dice

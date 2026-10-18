@@ -79,7 +79,9 @@ def layout(heading: str, cards: list[tuple[dict, bool]], labels: tuple[str, ...]
 def reading(kind: str, guild_id: int | None, who: str, question: str = "", rng: random.Random | None = None) -> discord.ui.LayoutView:
     """"today" (the server's card of the day), "one" (a card for you) or "three" (what was, is, and is coming)."""
     rng = rng or random.SystemRandom()
-    asked = f"\n-# {who} asks: *{question.strip()[:200]}*" if question.strip() else ""
+    who = discord.utils.escape_mentions(discord.utils.escape_markdown(who))
+    question = discord.utils.escape_mentions(discord.utils.escape_markdown(" ".join(question.split())[:200]))
+    asked = f"\n-# {who} asks: *{question}*" if question else ""  # escaped too, in case pings are ever allowed
     if kind == "today":
         return layout(f"### The day's card\n{rng.choice(TODAY_OPENERS)}", [card_of_the_day(guild_id)],
                       footer=f"{date.today():%A %d %B} · the same card for everyone until midnight")

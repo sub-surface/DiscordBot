@@ -194,7 +194,7 @@ def spawnpill(rng: random.Random | None = None) -> list[int]:
 
 def stat_request(text: str) -> tuple[str, str, str, str] | None:
     """(stat, "adv"|"dis"|"", reason, label) for "mog", "perception adv for traps", "save cope", "initiative"; else None."""
-    match = _STAT_ROLL.match(text)
+    match = _STAT_ROLL.match(" ".join(text.split())[:300])  # collapsed and capped, so its whitespace runs stay tiny
     if match is None:
         return None
     word = match["word"].lower()

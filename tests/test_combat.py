@@ -59,6 +59,17 @@ class CombatTests(unittest.TestCase):
         self.assertEqual(dice.request("roll attack vs 12", strict=True), "attack vs 12")
         self.assertIsNone(combat.request("attackers are coming"))
 
+    def test_hostile_messages_parse_in_linear_time(self) -> None:
+        import time
+
+        start = time.perf_counter()
+        for word in ("attack", "roll attack", "roll perception", "roll d20"):
+            for tail in (" " * 5000 + "x", " vs" + " " * 3000 + "13 " + "adv " * 400 + "x", "\t \n" * 2000):
+                combat.request(word + tail)
+                rules.stat_request(word + tail)
+                dice.embedded_request(word + tail)
+        self.assertLess(time.perf_counter() - start, 0.5)
+
 
 class TarotTests(unittest.TestCase):
     def test_the_days_card_is_the_same_all_day_and_differs_by_server(self) -> None:
@@ -79,6 +90,48 @@ class TarotTests(unittest.TestCase):
         self.assertEqual(len(gallery.items), 3)
         self.assertTrue(all(item.media.url.startswith("https://upload.wikimedia.org/") for item in gallery.items))
         self.assertEqual(len(tarot.deck()), 78)
+
+    def test_a_question_cannot_ping_anyone(self) -> None:
+        async def build():
+            return tarot.reading("one", 1, "Hugh", "@everyone <@&1475646287507361902> will it work", random.Random(1))
+
+        import asyncio
+        [container] = asyncio.run(build()).children
+        heading = container.children[0].content
+        self.assertNotIn("@everyone", heading.replace("@​everyone", ""))
+        self.assertNotIn("<@&1475646287507361902>", heading)
+
+
+class RerollTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_double_click_spends_one_chuckle(self) -> None:
+        from unittest import mock
+
+        from psychograph import ledger
+        from psychograph.cogs.party import RerollView
+        from tests.helpers import make_bot
+
+        bot = make_bot()
+        ledger.commit(bot.store, 1, [ledger.baseline(7, sigma(chuckles=2).to_dict())])
+        rolls = []
+
+        async def redo():
+            rolls.append(1)
+            return "**12** · Yes, but…", None, False
+
+        view = RerollView(bot, 1, 7, redo)
+        clicks = []
+        for _ in range(2):
+            click = mock.MagicMock()
+            click.response.edit_message = mock.AsyncMock()
+            click.response.defer = mock.AsyncMock()
+            click.response.send_message = mock.AsyncMock()
+            clicks.append(click)
+        with mock.patch("psychograph.cogs.party.act"):
+            for click in clicks:
+                await view.reroll.callback(click)
+        self.assertEqual((len(rolls), bot.store.character(1, 7)["chuckles"]), (1, 1))
+        clicks[1].response.defer.assert_awaited()
+        bot.store.close()
 
 
 if __name__ == "__main__":
