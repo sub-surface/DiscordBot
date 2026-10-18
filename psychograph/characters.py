@@ -150,15 +150,16 @@ class Character:
     look: str = ""
     pronouns: str = ""
     level: int = 1
-    hp: int = 0
+    hp: int | None = None        # None means full, for a fresh character; 0 is down
     keks: int = STARTING_KEKS
     chuckles: int = 1
     portrait: str = ""            # an image URL (the member's avatar unless they choose one)
     location: str = "kekwick"     # where they are on the world map (world.py)
+    inventory: list = field(default_factory=list)  # {"name", "qty", "kind", "note"}; changed only through ledger.py
     notes: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not self.hp:
+        if self.hp is None:
             self.hp = self.max_hp
 
     @property

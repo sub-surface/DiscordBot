@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, fields
 from pathlib import Path
 
@@ -59,6 +60,7 @@ class Store:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self._held = False  # inside game_transaction: writes join it instead of committing on their own
         self._migrate()
 
     def close(self) -> None:
@@ -187,6 +189,22 @@ class Store:
                     PRIMARY KEY (guild_id, user_id)
                 )"""
             )
+            # The game ledger: every change to game state, append-only (see ledger.py). Characters are its running total.
+            self._conn.execute(
+                """CREATE TABLE IF NOT EXISTS game_ledger (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guild_id INTEGER NOT NULL,
+                    subject INTEGER NOT NULL,
+                    kind TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    note TEXT NOT NULL DEFAULT '',
+                    actor TEXT NOT NULL DEFAULT '',
+                    tx TEXT NOT NULL,
+                    undoes INTEGER,
+                    ts REAL NOT NULL
+                )"""
+            )
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_ledger_subject ON game_ledger(guild_id, subject, id)")
             self._conn.execute(
                 """CREATE TABLE IF NOT EXISTS predictions (
                     message_id INTEGER PRIMARY KEY,
@@ -528,8 +546,7 @@ class Store:
         return row["value"] if row else None
 
     def set_state(self, key: str, value: str) -> None:
-        with self._conn:
-            self._conn.execute("INSERT OR REPLACE INTO bot_state (key, value) VALUES (?, ?)", (key, value))
+        self._write("INSERT OR REPLACE INTO bot_state (key, value) VALUES (?, ?)", (key, value))
 
     def week_counts(self, guild_id: int) -> dict:
         """What the scoreboards gained in the last seven days, for the Monday digest."""
@@ -693,17 +710,71 @@ class Store:
         return json.loads(row["data"]) if row else None
 
     def save_character(self, guild_id: int | None, user_id: int, data: dict) -> None:
-        with self._conn:
-            self._conn.execute(
-                "INSERT OR REPLACE INTO characters (guild_id, user_id, data, updated_at) VALUES (?, ?, ?, ?)",
-                (guild_id or 0, user_id, json.dumps(data, ensure_ascii=False), time.time()),
-            )
+        self._write("INSERT OR REPLACE INTO characters (guild_id, user_id, data, updated_at) VALUES (?, ?, ?, ?)",
+                    (guild_id or 0, user_id, json.dumps(data, ensure_ascii=False), time.time()))
 
     def characters(self, guild_id: int | None) -> list[tuple[int, dict]]:
         rows = self._conn.execute(
             "SELECT user_id, data FROM characters WHERE guild_id = ? ORDER BY updated_at DESC", (guild_id or 0,)
         ).fetchall()
         return [(row["user_id"], json.loads(row["data"])) for row in rows]
+
+    # ── The game ledger ─────────────────────────────────────────────
+
+    def _write(self, sql: str, params: tuple) -> None:
+        if self._held:
+            self._conn.execute(sql, params)
+        else:
+            with self._conn:
+                self._conn.execute(sql, params)
+
+    @contextmanager
+    def game_transaction(self):
+        """One atomic change to game state. BEGIN IMMEDIATE takes the write lock before anything is read, so the bot
+        and the DM's tools (another process) can't both read a balance and both spend it."""
+        self._conn.execute("BEGIN IMMEDIATE")
+        self._held = True
+        try:
+            yield
+            self._conn.commit()
+        except BaseException:
+            self._conn.rollback()
+            raise
+        finally:
+            self._held = False
+
+    def add_ledger(self, guild_id: int | None, subject: int, kind: str, data: dict, note: str, actor: str, tx: str,
+                   undoes: int | None = None) -> int:
+        cursor = self._conn.execute(
+            "INSERT INTO game_ledger (guild_id, subject, kind, data, note, actor, tx, undoes, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (guild_id or 0, subject, kind, json.dumps(data, ensure_ascii=False), note, actor, tx, undoes, time.time()),
+        )
+        if not self._held:
+            self._conn.commit()
+        return cursor.lastrowid
+
+    def ledger(self, guild_id: int | None, subject: int | None = None, after: int = 0, tx: str | None = None,
+               limit: int | None = None) -> list[dict]:
+        """Ledger rows, oldest first; with a limit, the newest that many (still oldest first)."""
+        where, params = ["guild_id = ?", "id > ?"], [guild_id or 0, after]
+        if subject is not None:
+            where.append("subject = ?")
+            params.append(subject)
+        if tx is not None:
+            where.append("tx = ?")
+            params.append(tx)
+        sql = f"SELECT * FROM game_ledger WHERE {' AND '.join(where)} ORDER BY id DESC"
+        if limit:
+            sql += f" LIMIT {int(limit)}"
+        rows = [{**dict(row), "data": json.loads(row["data"])} for row in self._conn.execute(sql, params)]
+        return rows[::-1]
+
+    def ledger_entry(self, guild_id: int | None, entry_id: int) -> dict | None:
+        row = self._conn.execute("SELECT * FROM game_ledger WHERE guild_id = ? AND id = ?", (guild_id or 0, entry_id)).fetchone()
+        return {**dict(row), "data": json.loads(row["data"])} if row else None
+
+    def ledger_undone(self, guild_id: int | None, entry_id: int) -> bool:
+        return self._conn.execute("SELECT 1 FROM game_ledger WHERE guild_id = ? AND undoes = ?", (guild_id or 0, entry_id)).fetchone() is not None
 
     def tweet_stats(self, status_id: str, max_age: float, now: float) -> str | None:
         row = self._conn.execute(

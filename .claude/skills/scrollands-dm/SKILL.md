@@ -15,8 +15,9 @@ local backend and you are the narrator.
 1. **Read the canon once**: `assets/world/scrollands.md` (tone, places, factions, campaign, canon so far).
    Skim `psychograph/characters.py` for classes and skills only if a rules question comes up. Don't re-read
    files every turn; it burns tokens.
-2. **Party state**: `python tools/dm/game.py party`. That gives each player's user id (for @-mentions), class,
-   scores, keks, Chuckles, place, look, keepsake and notes. Weave looks and keepsakes into the story.
+2. **Party state**: `python tools/dm/game.py party` and `game.py world` (clocks, flags), then mark the session:
+   `game.py session "III: <title>"`. `party` gives each player's user id (for @-mentions), class,
+   scores, keks, Chuckles, place, pack, look, keepsake and notes. Weave looks and keepsakes into the story.
 3. **The bot**: if the normal bot isn't running, start the game bot in the background:
    `python tools/dm/run_bot.py` (game channel only, local backend, no heartbeat). Ask the user first if the
    normal bot might be running; two bots at once double every roll. If `data/dm.json` is missing, run
@@ -59,14 +60,24 @@ The bands are 1–9 a miss (the world makes a move), 10–14 yes-but (a success 
 (something extra), nat 1 spawnpilled (memorable). For contested things, tell players to right-click → Apps →
 Challenge to a contest.
 
-**State.** Use `game.py reward <id> --keks 50 --chuckles 1 --note "…"`, `game.py hurt <id> 3`,
-`game.py move all deadchat` (then suggest `/world map`) and `game.py note <id> "owes Omnius a favour"`.
-Rewards are 25 to 100 keks for a job, and a Chuckle for a great line or a costly choice.
+**State is a ledger** (`psychograph/ledger.py`): every change is checked, atomic, undoable and remembered.
+Targets are a user id, part of a character's name, or `all`. Each command prints the entry ids it wrote.
+- `game.py reward stack --keks 50 --chuckles 1 --note "kept the oath"` · `game.py hurt foid 3 a chair to the face`
+  (negative heals) · `game.py level all --note "…"`
+- Loot: `game.py give foid "Rope of Hanging" --qty 2 --kind gear|loot|consumable|quest|curio --note "from the Dead Chat"`,
+  `game.py take foid "Rope of Hanging"`. Quest items show in brass on the sheet. Players trade with right-click →
+  Hand over an item, and pay with Pay keks.
+- `game.py move all deadchat` (then suggest `/world map`) · `game.py note stack "owes Omnius a favour"`
+- The world: `game.py clock lurker +1 --size 6 --label "The Lurker King stirs"` (a looming threat, filled
+  segment by segment; shown under `/world map`), `game.py flag bridge_burned yes`, `game.py world` to read both.
+- Mistakes: `game.py undo <id>` reverses that entry and the rest of its transaction (a reward to `all` is one).
+- Rewards are 25 to 100 keks for a job, and a Chuckle for a great line or a costly choice. If a rule refuses
+  (not enough keks, no such item), nothing changed; narrate around it.
 
 ## Ending a session
 
 - Post an epilogue and the rewards, then a `-#` line asking for feedback.
-- Add what became canon to the "Canon so far" section of `assets/world/scrollands.md`: what happened, new NPCs
+- Run `game.py recap` (everything since the session mark) and add what became canon to the "Canon so far" section of `assets/world/scrollands.md`: what happened, new NPCs
   and places, and promises made. That file is the campaign's memory between sessions.
 - Stop the game bot and the watch, and tell the user the normal bot can be restarted.
 - Commit the canon change if the user wants it.

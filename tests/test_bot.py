@@ -46,6 +46,8 @@ class BotTests(unittest.TestCase):
             {c.name for c in self.bot.tree.get_commands(type=discord.AppCommandType.message)},
             {"Ask persona", "Review this debate", "Judge this", "Tone check", "Give a Chuckle"},
         )
+        self.assertTrue({"Character sheet", "Challenge to a contest", "Pay keks", "Hand over an item"}
+                        <= {c.name for c in self.bot.tree.get_commands(type=discord.AppCommandType.user)})
         groups = {name: {c.name for c in self.bot.tree.get_command(name).commands} for name in ("quick", "bot", "scores")}
         self.assertEqual(groups, {
             "quick": {"decide", "odds", "tier", "rate", "tone", "vibe", "chatter"},

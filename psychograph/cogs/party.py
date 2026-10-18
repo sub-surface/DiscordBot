@@ -19,7 +19,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from .. import characters as rules
-from .. import dice, icons, sheet, world
+from .. import dice, icons, ledger, sheet, world
 from ..actions import act
 from ..bot import PsychographBot
 from .help import dice_embed
@@ -173,7 +173,7 @@ class ScoresView(discord.ui.View):
             return
         scores = {stat: int(slot.split(":")[1]) for stat, slot in self.placed.items()}
         character = rules.Character(**self.draft, scores=scores, portrait=str(interaction.user.display_avatar.url))
-        self.cog.bot.store.save_character(interaction.guild_id, interaction.user.id, character.to_dict())
+        ledger.commit(self.cog.bot.store, interaction.guild_id, [ledger.baseline(interaction.user.id, character.to_dict())], "player")
         self.stop()
         await interaction.response.edit_message(content=f"**{character.name}** is ready.", view=None)
         role, faction = character.role_info, character.faction_info
@@ -242,18 +242,53 @@ class PayForm(discord.ui.Modal, title="Pay keks"):
             amount = int(self.amount.value.strip().replace(",", ""))
         except ValueError:
             amount = 0
-        if payer is None or payee is None or amount <= 0 or amount > payer.keks:
-            reason = ("Both of you need a character." if payer is None or payee is None
-                      else f"You have {payer.keks} keks." if amount > 0 else "Enter a whole number of keks.")
+        reason = "Both of you need a character." if payer is None or payee is None else "" if amount > 0 else "Enter a whole number of keks."
+        note = self.note.value.strip()
+        if not reason:
+            try:
+                ledger.commit(self.bot.store, guild, [ledger.keks(interaction.user.id, -amount, note), ledger.keks(self.target.id, amount, note)], "player")
+            except ledger.LedgerError as error:
+                reason = f"Not enough: {error}"
+        if reason:
             await interaction.response.send_message(reason, ephemeral=True)
             return
-        payer.keks -= amount
-        payee.keks += amount
-        self.bot.store.save_character(guild, interaction.user.id, payer.to_dict())
-        self.bot.store.save_character(guild, self.target.id, payee.to_dict())
-        note = f" {self.note.value.strip()}" if self.note.value.strip() else ""
+        note = f" {note}" if note else ""
         await interaction.response.send_message(f"-# {payer.name} paid {payee.name} **{amount} keks**{note}.", allowed_mentions=NO_PINGS)
         act("^", interaction.channel, interaction.user, f"paid {amount} keks to {_who(self.target)[:20]}")
+
+
+class GiveForm(discord.ui.Modal, title="Hand over an item"):
+    """Pick one of your items and how many: it leaves your pack and lands in theirs, both or neither."""
+
+    count = discord.ui.TextInput(label="How many", default="1", max_length=4)
+
+    def __init__(self, bot: PsychographBot, target: discord.abc.User, mine: rules.Character) -> None:
+        super().__init__(timeout=300)
+        self.bot, self.target = bot, target
+        self.names = [item["name"] for item in mine.inventory[:25]]
+        self.item = discord.ui.Label(text="Item", component=discord.ui.Select(options=[
+            discord.SelectOption(label=item["name"][:100], value=str(index), description=f"×{item['qty']} · {item['kind']}"[:100])
+            for index, item in enumerate(mine.inventory[:25])
+        ]))
+        self.add_item(self.item)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        name = self.names[int(self.item.component.values[0])]
+        try:
+            count = int(self.count.value.strip())
+            entries = ledger.commit(self.bot.store, interaction.guild_id, [
+                ledger.lose(interaction.user.id, name, count, f"to {_who(self.target)}"),
+                ledger.gain(self.target.id, name, count, note=f"from {_who(interaction.user)}"),
+            ], "player")
+        except ValueError as error:  # LedgerError is a ValueError too
+            await interaction.response.send_message(str(error) if isinstance(error, ledger.LedgerError) else "Enter a whole number.", ephemeral=True)
+            return
+        giver = load_character(self.bot, interaction.guild_id, interaction.user.id)
+        taker = load_character(self.bot, interaction.guild_id, self.target.id)
+        amount = f" ×{count}" if count != 1 else ""
+        await interaction.response.send_message(f"-# {giver.name} handed {taker.name} **{entries[1].data['item']}**{amount}.",
+                                                allowed_mentions=NO_PINGS)
+        act("^", interaction.channel, interaction.user, f"gave {name[:30]} to {_who(self.target)[:20]}")
 
 
 class PartyCog(commands.Cog):
@@ -267,6 +302,7 @@ class PartyCog(commands.Cog):
             app_commands.ContextMenu(name="Character sheet", callback=self.sheet_of),
             app_commands.ContextMenu(name="Challenge to a contest", callback=self.challenge),
             app_commands.ContextMenu(name="Pay keks", callback=self.pay),
+            app_commands.ContextMenu(name="Hand over an item", callback=self.give_item),
             app_commands.ContextMenu(name="Give a Chuckle", callback=self.give_chuckle),
         ]
         for menu in self.menus:
@@ -334,6 +370,14 @@ class PartyCog(commands.Cog):
         if await self._both(interaction, member) is not None:
             await interaction.response.send_modal(PayForm(self.bot, member))
 
+    async def give_item(self, interaction: discord.Interaction, member: discord.Member) -> None:
+        if (pair := await self._both(interaction, member)) is None:
+            return
+        if not pair[0].inventory:
+            await interaction.response.send_message(f"{pair[0].name} isn't carrying anything to hand over.", ephemeral=True)
+            return
+        await interaction.response.send_modal(GiveForm(self.bot, member, pair[0]))
+
     async def give_chuckle(self, interaction: discord.Interaction, message: discord.Message) -> None:
         """Right-click a message → Apps → Give a Chuckle: its author's character earns one (up to three)."""
         author = message.author
@@ -348,8 +392,7 @@ class PartyCog(commands.Cog):
         elif character.chuckles >= rules.MAX_CHUCKLES:
             reply = f"{character.name} is already holding all {rules.MAX_CHUCKLES}."
         else:
-            character.chuckles += 1
-            self.bot.store.save_character(interaction.guild_id, author.id, character.to_dict())
+            ledger.commit(self.bot.store, interaction.guild_id, [ledger.chuckles(author.id, 1, f"from {_who(interaction.user)}")], "player")
             self.bot.store.set_state(key, "1")
             await interaction.response.send_message(f"-# {_who(interaction.user)} gave **{character.name}** a Chuckle for {message.jump_url}",
                                                     allowed_mentions=NO_PINGS)
@@ -375,6 +418,9 @@ class PartyCog(commands.Cog):
         for name, key, _portrait in people:
             listing.setdefault(world.place(key).name, []).append(name)
         summary = "\n".join(f"-# **{place}** · {', '.join(names)}" for place, names in listing.items()) or "-# Nobody has set out yet."
+        clocks = ledger.world_state(self.bot.store, interaction.guild_id).get("clocks", {})
+        if clocks:
+            summary += "\n" + "\n".join(f"-# {ledger.clock_bar(clock)} {clock['label']}" for clock in clocks.values())
         await interaction.followup.send(summary, file=discord.File(io.BytesIO(world.map_png(people)), filename="scrollands.png"),
                                         allowed_mentions=NO_PINGS)
 
@@ -387,8 +433,7 @@ class PartyCog(commands.Cog):
             await interaction.response.send_message("Make a character first: `/character create`." if character is None
                                                     else "Pick a place from the list.", ephemeral=True)
             return
-        character.location = destination.key
-        self.bot.store.save_character(interaction.guild_id, interaction.user.id, character.to_dict())
+        ledger.commit(self.bot.store, interaction.guild_id, [ledger.move(interaction.user.id, destination.key)], "player")
         await interaction.response.send_message(f"**{character.name}** sets out for **{destination.name}**.\n-# {destination.blurb}",
                                                 allowed_mentions=NO_PINGS)
 
@@ -417,6 +462,17 @@ class PartyCog(commands.Cog):
     @character.command(name="create", description="Make your adventurer: name, class, faction, keepsake, then scores")
     async def create(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_modal(CreateForm(self))
+
+    @character.command(name="log", description="What has happened to your character: keks, items, wounds, travel")
+    async def log(self, interaction: discord.Interaction) -> None:
+        character = load_character(self.bot, interaction.guild_id, interaction.user.id)
+        if character is None:
+            await interaction.response.send_message("You don't have a character yet: `/character create`.", ephemeral=True)
+            return
+        rows = self.bot.store.ledger(interaction.guild_id, interaction.user.id, limit=15)
+        lines = [f"-# <t:{int(row['ts'])}:d> {ledger.describe(ledger.Entry.from_row(row), character.name)}" for row in rows]
+        await interaction.response.send_message(f"**{character.name}**, lately\n" + "\n".join(lines or ["-# Nothing yet."]), ephemeral=True,
+                                                allowed_mentions=NO_PINGS)
 
     @character.command(name="sheet", description="Show a character sheet")
     @app_commands.describe(member="Whose sheet (yours if left out)")

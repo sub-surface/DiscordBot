@@ -71,7 +71,8 @@ def game_embed(bot: PsychographBot) -> discord.Embed:
     ), inline=False)
     embed.add_field(name="The world", value=_lines(
         "`/world map`: the realm and where everyone is · `/world travel`: set out somewhere",
-        "Right-click a member → **Challenge to a contest** · **Pay keks**",
+        "Right-click a member → **Challenge to a contest** · **Pay keks** · **Hand over an item**",
+        "`/character log`: what has happened to you lately (keks, loot, wounds, travel)",
         "Right-click a great post → **Give a Chuckle** (spend Chuckles for advantage or a reroll)",
     ), inline=False)
     embed.set_footer(text="Dice and sheets are instant · /help dice for the notation")

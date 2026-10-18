@@ -136,6 +136,28 @@ def render(character: Character, player: str, portrait: bytes | None = None):
         held = MAX_CHUCKLES - index <= character.chuckles
         draw.polygon(points, fill=BRASS if held else None, outline=BRASS if held else HAIR, width=S)
 
+    # The pack: what they carry (from the ledger), quest items first, under the vitals.
+    if character.inventory:
+        y = vy + 168 * S
+        draw.line((px, y - 14 * S, px + side, y - 14 * S), fill=HAIR, width=S)
+        _spaced(draw, (px, y), "PACK", small, MUTED)
+        item_font, qty_font = _font("BarlowSemiCondensed-Medium.ttf", 22), _font("BarlowSemiCondensed-SemiBold.ttf", 20)
+        items = sorted(character.inventory, key=lambda item: item.get("kind") != "quest")
+        shown = items[:5] if len(items) <= 5 else items[:4]
+        y += 30 * S
+        for item in shown:
+            qty = f"×{item['qty']}" if item["qty"] != 1 else ""
+            room = side - (draw.textlength(qty, font=qty_font) + 10 * S if qty else 0)
+            name = item["name"]
+            while draw.textlength(name, font=item_font) > room and len(name) > 4:
+                name = name[:-2].rstrip() + "…"
+            draw.text((px, y), name, font=item_font, fill=BRASS if item.get("kind") == "quest" else BONE)
+            if qty:
+                draw.text((px + side, y + 2 * S), qty, font=qty_font, fill=MUTED, anchor="ra")
+            y += 29 * S
+        if len(items) > len(shown):
+            draw.text((px, y), f"and {len(items) - len(shown)} more", font=_font("BarlowSemiCondensed-Italic.ttf", 20), fill=MUTED)
+
     # The class move and the keepsake, under the scores.
     text_w = (W - 64) * S - nx
     my = 374 * S
