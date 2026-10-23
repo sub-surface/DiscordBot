@@ -15,19 +15,22 @@ React 🔁 on an answer to regenerate it, or 🗑️ to delete it (the asker, or
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import random
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-from .. import conversation, dice, quick, render, tarot, vision
+from .. import conversation, dice, halloween, icons, quick, render, tarot, vision
 from ..actions import act
 from ..bot import PsychographBot, is_allowed_channel
 from ..jev import DIRECT
 from ..personas import Persona
 from ..quick import QUICKS, Quick, QuickRequest
 from ..render import persona_choices
+from .halloween import trick_or_treat, vanish
 from .party import reply_roll, reply_tarot
 from ..repeats import RepeatGuard
 from ..responder import Ask, react, unreact
@@ -92,6 +95,8 @@ class ChatCog(commands.Cog):
             await reply_roll(self.bot, message, notation)  # a message that is only a roll: no Jev, no model
         elif (reading := tarot.request(message.content, strict=True)) is not None:
             await reply_tarot(self.bot, message, *reading)  # "draw a card", "tarot: will I win": no Jev, no model
+        elif halloween.season() and halloween.request(message.content):
+            await trick_or_treat(self.bot, message)
         elif (persona := await self.bot.ambient.called(message)) is not None:
             await self.handle(message, called=persona)
         else:
@@ -138,6 +143,8 @@ class ChatCog(commands.Cog):
                 await reply_roll(self.bot, message, target)
             elif route == "tarot":
                 await reply_tarot(self.bot, message, *target)
+            elif route == "trick":
+                await trick_or_treat(self.bot, message)
             else:
                 await self._play_chess(message, prompt)
             return
@@ -166,6 +173,8 @@ class ChatCog(commands.Cog):
             return "dice", notation
         if not called and (reading := tarot.request(prompt)) is not None:
             return "tarot", reading
+        if not called and halloween.season() and halloween.request(prompt):
+            return "trick", None
         quick_call = None if called else quick.quick_for(prompt)
         if quick_call is not None:
             return "quick", quick_call
@@ -181,7 +190,17 @@ class ChatCog(commands.Cog):
             return "quick", (QUICKS[kind], prompt)
         if kind in DIRECT:
             return "direct", kind
+        if not kind and persona is None and halloween.night() and random.random() < halloween.POSSESSION_CHANCE:
+            return "chat", self._possessor(message, channel, guild_id)
         return "chat", registry.get(guild_id, kind) if kind else persona
+
+    def _possessor(self, message: discord.Message, channel: Persona, guild_id: int | None) -> Persona | None:
+        """Halloween night: something else answers in the channel persona's place, and leaves a ghost on the way in."""
+        others = [p for p in self.bot.personas.available(guild_id) if p.group == "characters" and p.mode == "chat" and p.key != channel.key]
+        if not others:
+            return None
+        asyncio.get_running_loop().create_task(vanish(message, icons.icon(self.bot, "ghost"), self.bot.user))
+        return random.choice(others)
 
     def _named_or_continued(self, message: discord.Message, prompt: str, guild_id: int | None) -> tuple[Persona | None, bool]:
         """A tool called by name ("judge: …"), or the persona whose answer this replies to, and whether the

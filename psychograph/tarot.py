@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING
 
 import discord
 
+from . import halloween
+
 if TYPE_CHECKING:
     from .bot import PsychographBot
 
@@ -109,6 +111,8 @@ def draw(count: int = 1, rng: random.Random | None = None) -> list[tuple[dict, b
 def card_of_the_day(guild_id: int | None, day: date | None = None) -> tuple[dict, bool]:
     """The same card for everyone in the server all day: seeded by the guild and the date."""
     day = day or date.today()
+    if halloween.night(day):
+        return next(card for card in deck() if card["key"] == "major-13"), False  # Death, upright, for everyone
     return draw(1, random.Random(f"{guild_id or 0}:{day.isoformat()}"))[0]
 
 
@@ -122,7 +126,9 @@ def card_title(card: dict, reversed_: bool) -> str:
 
 def accent(cards: list[tuple[dict, bool]]) -> int:
     """The frame's colour: the suit's, brass for the Major Arcana or nothing turned yet. In a spread, a colour two
-    cards share wins, else the middle card's (with two turned so far, the newer one's)."""
+    cards share wins, else the middle card's (with two turned so far, the newer one's). In Halloween season, pumpkin."""
+    if halloween.season():
+        return halloween.PUMPKIN
     colours = [SUIT_ACCENTS.get(card.get("suit"), ACCENT) for card, _ in cards]
     if not colours:
         return ACCENT

@@ -6,6 +6,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from .. import halloween
 from ..bot import PsychographBot
 from ..render import EMBED_COLOR, model_summary
 
@@ -155,7 +156,8 @@ def help_embed(bot: PsychographBot, channel_id: int, guild_id: int | None) -> di
             "`/numogram summon` · `aq` · `tx`: the Ccru's demons, Anglossic Qabbala, Tic-Xenotation (and more in #nanospasm)",
         )
         + "\nOn my own I sometimes react to a message that lands, drop into a live chat or pick up a question "
-        "nobody answered, and post the week's digest on Mondays.",
+        "nobody answered, and post the week's digest on Mondays."
+        + ("\nIt's Halloween: say `trick or treat` (once a day), and mind the ghosts." if halloween.season() else ""),
         inline=False,
     )
     embed.add_field(

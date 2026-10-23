@@ -19,7 +19,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from .. import characters as rules
-from .. import combat, dice, icons, ledger, sheet, tarot, world
+from .. import combat, dice, halloween, icons, ledger, sheet, tarot, world
 from ..actions import act
 from ..bot import PsychographBot
 from .help import dice_embed
@@ -64,17 +64,20 @@ def roll_reply(bot: PsychographBot, notation: str, who: str, roller: rules.Chara
         dice_list = [(20, str(result.total), _tone(result.kept))]
         if result.damage:
             dice_list.append((combat.die_sides(result.damage_dice), str(result.damage), "crit" if result.crit else "normal"))
-        return combat.render(result, who), _picture(dice_list), result.hit is False and roller.chuckles > 0
+        text = halloween.witnessed(combat.render(result, who), [_tone(result.kept)])
+        return text, _picture(dice_list), result.hit is False and roller.chuckles > 0
     if stat is not None:
         result = rules.check(roller, *stat)
         retry = result.band[0] in ("miss", "but", "fumble") and roller.chuckles > 0
-        return rules.render_check(result, roller, who), _picture([(20, str(result.total), _tone(result.natural))]), retry
+        text = halloween.witnessed(rules.render_check(result, roller, who), [_tone(result.natural)])
+        return text, _picture([(20, str(result.total), _tone(result.natural))]), retry
     try:
         result = dice.roll(notation)
     except dice.DiceError as error:
         return f"{icons.icon(bot, 'die_d20')} {error}", None, False
     sides = int(dice.die_icon_name(result.biggest_die).removeprefix("die_d"))
-    return dice.render(result, who), _picture([(sides, str(total), dice.tone(result)) for total in result.totals]), False
+    text = halloween.witnessed(dice.render(result, who), [dice.tone(result)])
+    return text, _picture([(sides, str(total), dice.tone(result)) for total in result.totals]), False
 
 
 class RerollView(discord.ui.View):

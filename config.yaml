@@ -15,6 +15,8 @@ outside_channels:
 # Mini Me adds a line of her own under each tarot reading: one model call per reading (wakes the GPU when it's
 # cold). Admins can switch it with /bot tarot.
 tarot_mini_me: false
+# Halloween: auto (24-31 October; the 31st is the Night, and gets chaotic), on (the Night, now) or off.
+halloween: auto
 # A few unprompted persona drops a day (drop-ins on live chat, openers when quiet), in a UTC window.
 heartbeat_channels:
   - shitpost

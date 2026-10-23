@@ -177,11 +177,55 @@ def draw_noumenon(size: int = SIZE):
     return image.resize((size, size), Image.LANCZOS)
 
 
+def draw_ghost(size: int = SIZE):
+    """Halloween's haunting (halloween.py): a bone-white sheet with a wavy hem and two hollow eyes."""
+    from PIL import Image, ImageDraw
+
+    big = size * SCALE
+    image = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    left, right, top, hem = big * 0.2, big * 0.8, big * 0.08, big * 0.86
+    radius = (right - left) / 2
+    draw.ellipse((left, top, right, top + 2 * radius), fill=BONE)
+    draw.rectangle((left, top + radius, right, hem), fill=BONE)
+    waves = 4
+    for index in range(waves):  # the hem: bites taken out between scallops
+        x = left + (index + 0.5) * (right - left) / waves
+        r = (right - left) / waves / 2
+        draw.ellipse((x - r, hem - r * 0.9, x + r, hem + r * 1.1), fill=(0, 0, 0, 0) if index % 2 else BONE)
+    for x in (0.4, 0.6):
+        draw.ellipse((big * x - big * 0.055, big * 0.36, big * x + big * 0.055, big * 0.5), fill=CHARCOAL)
+    draw.ellipse((big * 0.47, big * 0.56, big * 0.53, big * 0.64), fill=CHARCOAL)
+    return image.resize((size, size), Image.LANCZOS)
+
+
+def draw_spider(size: int = SIZE):
+    """A trick's spider: charcoal body, bone outline, eight bent legs, two ember eyes."""
+    from PIL import Image, ImageDraw
+
+    big = size * SCALE
+    image = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    cx, cy, width = big / 2, big * 0.55, round(big * 0.035)
+    for side in (-1, 1):
+        for index, angle in enumerate((-50, -15, 15, 50)):
+            knee = (cx + side * big * 0.27, cy + math.sin(math.radians(angle)) * big * 0.22 - big * 0.12)
+            foot = (cx + side * big * 0.45, cy + math.sin(math.radians(angle)) * big * 0.34 + big * 0.05)
+            draw.line((cx, cy, *knee, *foot), fill=BONE, width=width, joint="curve")
+    draw.ellipse((cx - big * 0.17, cy - big * 0.12, cx + big * 0.17, cy + big * 0.24), fill=CHARCOAL, outline=BONE, width=width)
+    draw.ellipse((cx - big * 0.11, cy - big * 0.3, cx + big * 0.11, cy - big * 0.08), fill=CHARCOAL, outline=BONE, width=width)
+    for x in (-0.045, 0.045):
+        draw.ellipse((cx + big * x - big * 0.025, cy - big * 0.22, cx + big * x + big * 0.025, cy - big * 0.17), fill=EMBER)
+    return image.resize((size, size), Image.LANCZOS)
+
+
 # name → (drawing, fallback emoji)
 ICONS: dict[str, tuple[Callable[[], bytes], str]] = {
     f"die_d{sides}": ((lambda sides=sides: _die(sides)), "🎲") for sides in (4, 6, 8, 10, 12, 20)
 }
 ICONS["noumenon"] = ((lambda: png(draw_noumenon())), "👁️")
+ICONS["ghost"] = ((lambda: png(draw_ghost())), "👻")
+ICONS["spider"] = ((lambda: png(draw_spider())), "🕷️")
 
 
 def icon(bot: PsychographBot, name: str) -> str:

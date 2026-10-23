@@ -9,7 +9,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from . import actions
+from . import actions, halloween
 from .ambient import Ambient
 from .backends import Backend, LocalBackend, make_backend
 from .chess_game import ChessService, Stockfish
@@ -89,6 +89,7 @@ class PsychographBot(commands.Bot):
             allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=True, replied_user=True),
         )
         self.settings = settings
+        halloween.configure(settings.halloween)
         self.store = store or Store(settings.db_path)
         self.backend = backend or make_backend(settings)
         # Thinking mode is off unless /bot thinking turned it on: faster replies, less GPU time.
@@ -117,9 +118,9 @@ class PsychographBot(commands.Bot):
             self.dispatch("model_warm")
 
     async def load_cogs(self) -> None:
-        from .cogs import chat, chess, fun, help, ops, outside, party, personas, quick, settings, slop, soundboard, tools
+        from .cogs import chat, chess, fun, halloween as spooky, help, ops, outside, party, personas, quick, settings, slop, soundboard, tools
 
-        for module in (chat, chess, fun, help, ops, outside, party, personas, quick, settings, slop, soundboard, tools):
+        for module in (chat, chess, fun, spooky, help, ops, outside, party, personas, quick, settings, slop, soundboard, tools):
             await module.setup(self)
 
     def ignoring(self, guild_id: int | None, user_id: int) -> float | None:

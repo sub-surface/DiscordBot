@@ -39,7 +39,8 @@ class FakeBackend:
 
 
 def make_bot(backend: FakeBackend | None = None) -> PsychographBot:
-    return PsychographBot(Settings(), store=Store(":memory:"), backend=backend or FakeBackend())
+    # Halloween off: "auto" would follow the calendar, and turn tarot pumpkin every late October.
+    return PsychographBot(Settings(halloween="off"), store=Store(":memory:"), backend=backend or FakeBackend())
 
 
 class FakeDiscord:

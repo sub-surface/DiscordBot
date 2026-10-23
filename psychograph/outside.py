@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
+from . import halloween
+
 ROOT = Path(__file__).resolve().parent.parent
 MATRIX_PATH = ROOT / "assets" / "numogram" / "pandemonium.json"
 BANK_PATH = ROOT / "data" / "quotes.json"
@@ -41,7 +43,7 @@ def reduce(number: int) -> int:
 
 # ── Tic-Xenotation ──
 
-TX_LIMIT = 10**12  # factoring by trial division stays instant below this
+TX_LIMIT = 10**7  # a prime factor's index comes from one sieve this size (10 MB, built once): don't raise it lightly
 
 
 def _factors(number: int) -> list[int]:
@@ -54,23 +56,26 @@ def _factors(number: int) -> list[int]:
     return out + ([number] if number > 1 else [])
 
 
-def _prime_index(prime: int) -> int:
-    """Which prime this is (2 is the 1st), by a sieve: only called on factors of numbers below TX_LIMIT."""
-    if prime == 2:
-        return 1
-    limit = prime + 1
-    sieve = bytearray([1]) * limit
+@lru_cache(maxsize=1)
+def _sieve() -> bytearray:
+    """1 at every prime below TX_LIMIT: the only allocation TX makes, whatever it's asked."""
+    sieve = bytearray([1]) * TX_LIMIT
     sieve[0:2] = b"\x00\x00"
-    for value in range(2, int(limit ** 0.5) + 1):
+    for value in range(2, int(TX_LIMIT ** 0.5) + 1):
         if sieve[value]:
-            sieve[value * value::value] = bytearray(len(range(value * value, limit, value)))
-    return sum(sieve[:prime + 1])
+            sieve[value * value::value] = bytearray(len(range(value * value, TX_LIMIT, value)))
+    return sieve
+
+
+def _prime_index(prime: int) -> int:
+    """Which prime this is (2 is the 1st): only ever called on factors of numbers below TX_LIMIT."""
+    return 1 if prime == 2 else sum(_sieve()[:prime + 1])
 
 
 def tx(number: int) -> str:
     """`number` in Tic-Xenotation. ValueError for negatives and for numbers too big to factor at once."""
     if number < 0 or number >= TX_LIMIT:
-        raise ValueError("TX counts from 0 up to a trillion here")
+        raise ValueError("TX counts from 0 up to ten million here")
     if number == 0:
         return "((-P)):"
     if number == 1:
@@ -106,6 +111,8 @@ def summon(text: str = "", rng: random.Random | None = None) -> Demon:
     """A demon: by the AQ of what was said ("summon: Hugh Chungus" always brings the same one), else at random."""
     if text.strip():
         return demons()[aq(text) % len(demons())]
+    if halloween.night():  # Halloween: only the Outside answers an open call
+        return (rng or random.SystemRandom()).choice([demon for demon in demons() if demon.kind.endswith("Xenodemon")])
     return (rng or random.SystemRandom()).choice(demons())
 
 
@@ -119,6 +126,8 @@ KIND_ACCENTS = {"Chronodemon": 0xC8A15A, "Amphidemon": 0x9E2A2B, "Xenodemon": 0x
 
 
 def accent(demon: Demon) -> int:
+    if halloween.night():
+        return halloween.PUMPKIN  # the numogram burns orange on Halloween
     return next((colour for kind, colour in KIND_ACCENTS.items() if demon.kind.endswith(kind)), 0xC8A15A)
 
 

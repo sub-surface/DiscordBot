@@ -70,6 +70,9 @@ class Settings:
     # Mini Me's take: a line from the model under each tarot reading (one call per reading, at most one per person
     # a minute). Admins can switch it with /bot tarot, which overrides this until switched back.
     tarot_mini_me: bool = False
+    # Halloween (halloween.py): "auto" follows the calendar (season 24-31 October, the Night on the 31st), "on"
+    # forces the Night, "off" turns it off.
+    halloween: str = "auto"
 
     # Jev (TypeSafe's System One model): fast typed decisions — tool routing, debate notes, verdict reading.
     jev_api_key: str = ""
