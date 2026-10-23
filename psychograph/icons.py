@@ -159,10 +159,29 @@ def _die(sides: int) -> bytes:
     return png(draw_die(sides))
 
 
+def draw_noumenon(size: int = SIZE):
+    """The Outside's eye (#nanospasm, outside.py): an almond of bone on a transparent ground, a brass iris, a slit."""
+    from PIL import Image, ImageDraw
+
+    big = size * SCALE
+    image = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    half, rise = big * 0.46, big * 0.27
+    lid = [(big / 2 + half * math.cos(math.radians(t)), big / 2 - rise * abs(math.sin(math.radians(t))) ** 0.9 * (1 if t <= 180 else -1))
+           for t in range(0, 361, 4)]  # an ellipse pinched at the corners: an almond
+    draw.polygon(lid, fill=CHARCOAL, outline=BONE, width=round(big * 0.045))
+    iris = big * 0.2
+    draw.ellipse((big / 2 - iris, big / 2 - iris, big / 2 + iris, big / 2 + iris), fill=BRASS)
+    slit = big * 0.045
+    draw.ellipse((big / 2 - slit, big / 2 - iris * 0.92, big / 2 + slit, big / 2 + iris * 0.92), fill=CHARCOAL)
+    return image.resize((size, size), Image.LANCZOS)
+
+
 # name → (drawing, fallback emoji)
 ICONS: dict[str, tuple[Callable[[], bytes], str]] = {
     f"die_d{sides}": ((lambda sides=sides: _die(sides)), "🎲") for sides in (4, 6, 8, 10, 12, 20)
 }
+ICONS["noumenon"] = ((lambda: png(draw_noumenon())), "👁️")
 
 
 def icon(bot: PsychographBot, name: str) -> str:

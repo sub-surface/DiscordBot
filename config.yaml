@@ -9,6 +9,9 @@ allowed_channels:
 # Channels where only tarot works: /tarot, "draw a card" in chat, right-click a message → Draw a tarot card.
 tarot_channels:
   - lizzie’s-reflecting-pool
+# The Outside: AQ, Tic-Xenotation, Pandemonium and the Land/Deleuze quote bank, with nothing else of the bot.
+outside_channels:
+  - nanospasm
 # Mini Me adds a line of her own under each tarot reading: one model call per reading (wakes the GPU when it's
 # cold). Admins can switch it with /bot tarot.
 tarot_mini_me: false

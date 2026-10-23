@@ -27,6 +27,7 @@ QUOTE_SHARE = 0.5   # how often the hourly status line is a persona's line rathe
 
 
 TAROT_COMMANDS = frozenset({"tarot", "Draw a tarot card"})  # also allowed in settings.tarot_channels
+OUTSIDE_COMMANDS = frozenset({"numogram"})                 # also allowed in settings.outside_channels
 
 
 def _channel_key(name: str) -> str:
@@ -44,8 +45,11 @@ def is_allowed_channel(channel: object | None, allowed: tuple[str, ...]) -> bool
 class ChannelScopedCommandTree(app_commands.CommandTree):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         allowed = self.client.settings.allowed_channels
-        if getattr(getattr(interaction, "command", None), "qualified_name", None) in TAROT_COMMANDS:
+        command = getattr(getattr(interaction, "command", None), "qualified_name", "") or ""
+        if command in TAROT_COMMANDS:
             allowed = allowed + self.client.settings.tarot_channels
+        if command.split(" ")[0] in OUTSIDE_COMMANDS:
+            allowed = allowed + self.client.settings.outside_channels
         if is_allowed_channel(interaction.channel, allowed):
             user = getattr(interaction, "user", None)
             until = self.client.ignoring(getattr(interaction, "guild_id", None), user.id) if user else None
@@ -101,15 +105,21 @@ class PsychographBot(commands.Bot):
         self.icons: dict[str, str] = {}  # application emoji per icon name, once icons.sync has run
         self._legacy_guild_commands_cleared = False
 
+    def name_in(self, guild_id: int | None) -> str:
+        """What members see the bot called: its nickname in that server, else its own name. It gets renamed (Mechirk
+        Spookstein for Halloween), so nothing user-facing should hard-code it."""
+        guild = self.get_guild(guild_id) if guild_id else None
+        return getattr(getattr(guild, "me", None) or self.user, "display_name", "") or ""
+
     def model_warmed(self) -> None:
         """The model just answered, so a Modal GPU is up for its idle window: let waiting work use it."""
         if self.is_ready():
             self.dispatch("model_warm")
 
     async def load_cogs(self) -> None:
-        from .cogs import chat, chess, fun, help, ops, party, personas, quick, settings, slop, soundboard, tools
+        from .cogs import chat, chess, fun, help, ops, outside, party, personas, quick, settings, slop, soundboard, tools
 
-        for module in (chat, chess, fun, help, ops, party, personas, quick, settings, slop, soundboard, tools):
+        for module in (chat, chess, fun, help, ops, outside, party, personas, quick, settings, slop, soundboard, tools):
             await module.setup(self)
 
     def ignoring(self, guild_id: int | None, user_id: int) -> float | None:

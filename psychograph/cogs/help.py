@@ -9,7 +9,7 @@ from discord.ext import commands
 from ..bot import PsychographBot
 from ..render import EMBED_COLOR, model_summary
 
-BOT_NAME = "Mecha Epstein"  # what members know the bot as; "Psychograph" is only the code's name
+BOT_NAME = "Mecha Epstein"  # the fallback for bot.name_in (its live name in the server); "Psychograph" is only the code's
 
 
 def _lines(*lines: str) -> str:
@@ -90,9 +90,10 @@ def game_embed(bot: PsychographBot) -> discord.Embed:
 def help_embed(bot: PsychographBot, channel_id: int, guild_id: int | None) -> discord.Embed:
     """The /help card: what to type, grouped by what answers it (the model, tools, or instantly)."""
     persona = bot.personas.for_channel(channel_id, guild_id)
-    me = getattr(bot.user, "mention", None) or f"@{BOT_NAME}"
+    name = bot.name_in(guild_id) or BOT_NAME
+    me = getattr(bot.user, "mention", None) or f"@{name}"
     embed = discord.Embed(
-        title=BOT_NAME,
+        title=name,
         description=(
             f"A chat bot with many personas. This channel is talking to **{persona.name}**.\n"
             "Mention me or reply to one of my messages. Ask in plain words and I'll work out whether you want "
@@ -151,6 +152,7 @@ def help_embed(bot: PsychographBot, channel_id: int, guild_id: int | None) -> di
             "`/santi-slop` *day|week|month|all*: the Slop Report, the most viral posts shared in #sim-city",
             "`/scores debates`: the debate leaderboard",
             "React 🔮 on a message to log it as a prediction · `/scores predictions` to settle them",
+            "`/numogram summon` · `aq` · `tx`: the Ccru's demons, Anglossic Qabbala, Tic-Xenotation (and more in #nanospasm)",
         )
         + "\nOn my own I sometimes react to a message that lands, drop into a live chat or pick up a question "
         "nobody answered, and post the week's digest on Mondays.",

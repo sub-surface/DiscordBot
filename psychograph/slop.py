@@ -296,7 +296,7 @@ def _avatar(post: Post, size: int):
 
 
 def render(posts: list[Post], period: str, channel: str, shared: int, dealers: list[tuple[str, int]],
-           quote: str | None = None) -> bytes:
+           quote: str | None = None, signed: str = "Mecha Epstein") -> bytes:
     from PIL import Image, ImageDraw
 
     f = _fonts()
@@ -376,7 +376,7 @@ def render(posts: list[Post], period: str, channel: str, shared: int, dealers: l
 
     draw.text((PAD, height - FOOT / 2 - 4), "Ranked by reach and reactions · rated by Jev · no GPU was woken",
               font=f["foot"], fill=DIM, anchor="lm")
-    draw.text((W - PAD, height - FOOT / 2 - 4), "Mecha Epstein", font=f["foot"], fill=DIM, anchor="rm")
+    draw.text((W - PAD, height - FOOT / 2 - 4), signed, font=f["foot"], fill=DIM, anchor="rm")
     out = io.BytesIO()
     image.save(out, format="PNG", optimize=True)
     return out.getvalue()
@@ -407,7 +407,8 @@ async def report(bot: PsychographBot, channel: discord.TextChannel, period: str)
     for share in shares:
         counts[share["sharer"]] = counts.get(share["sharer"], 0) + 1
     dealers = sorted(counts.items(), key=lambda item: -item[1])
-    png = await asyncio.to_thread(render, top, period, channel.name, len(shares), dealers, quote)
+    png = await asyncio.to_thread(render, top, period, channel.name, len(shares), dealers, quote,
+                                  bot.name_in(channel.guild.id) or "Mecha Epstein")
     lines = [
         f"`{index}` [{_label(post)}](<{_safe_url(post)}>) · [shared here]({post.jump})"
         for index, post in enumerate(top, 1)

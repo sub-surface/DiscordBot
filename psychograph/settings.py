@@ -24,6 +24,7 @@ class Settings:
     default_persona: str = "mochi"
     allowed_channels: tuple[str, ...] = ("shitpost", "sim-city", "little-st-james", "games")
     tarot_channels: tuple[str, ...] = ()     # channels where only tarot works (/tarot, "draw a card", the right-click)
+    outside_channels: tuple[str, ...] = ("nanospasm",)  # the Outside (outside.py): AQ, TX, Pandemonium, Land
     db_path: Path = ROOT / "history.db"
     personas_dir: Path = ROOT / "personas"
     models_file: Path = ROOT / "models.json"
