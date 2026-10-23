@@ -12,6 +12,7 @@ foul tags as hints; afterwards Jev reads the decision back for the leaderboard.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -19,6 +20,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+import aiohttp
 import discord
 
 from . import conversation, render, sounds, vision
@@ -90,6 +92,10 @@ class Prepared:
     context_count: int = 0                           # channel messages a chat persona was shown
 
 
+# Discord said no, or couldn't be reached at all (DNS, a dropped connection): for reads that can do without.
+UNREACHABLE = (discord.HTTPException, aiohttp.ClientError, asyncio.TimeoutError)
+
+
 async def recent_messages(
     channel: discord.abc.Messageable, before: discord.Message | None = None, through: bool = False,
     limit: int = RECENT_MESSAGES,
@@ -101,7 +107,7 @@ async def recent_messages(
     through = through and before is not None
     try:
         messages = [message async for message in history(limit=limit - through, before=before)]
-    except discord.HTTPException:
+    except UNREACHABLE:
         log.info("Couldn't read recent messages in channel %s", getattr(channel, "id", "?"))
         return []
     messages.reverse()

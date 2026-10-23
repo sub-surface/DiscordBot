@@ -133,3 +133,23 @@ class AmbientTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OfflineTests(unittest.TestCase):
+    def test_a_dropped_connection_only_loses_the_quiet_time(self) -> None:
+        import aiohttp
+
+        bot = make_bot()
+
+        def history(**_kwargs):
+            raise aiohttp.ClientConnectionError("getaddrinfo failed")  # DNS gone, as on 2026-10-23
+            yield  # an async generator, like discord's
+
+        async def history_gen(**kwargs):
+            for item in history(**kwargs):
+                yield item
+
+        channel = SimpleNamespace(id=7, history=history_gen)
+        message = SimpleNamespace(channel=channel, created_at=datetime.now(timezone.utc))
+        self.assertIsNone(asyncio.run(bot.ambient.seen(message)))
+        bot.store.close()

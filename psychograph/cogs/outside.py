@@ -21,6 +21,7 @@ import re
 import time
 from collections import deque
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 
 import aiohttp
 import discord
@@ -31,6 +32,7 @@ from .. import demon_art, icons
 from .. import outside as xeno
 from ..actions import act
 from ..bot import PsychographBot, is_allowed_channel
+from ..responder import UNREACHABLE
 
 log = logging.getLogger("psychograph.outside")
 
@@ -96,11 +98,22 @@ def quote_view(quote: xeno.Quote, heading: str = "", deeper: bool = True) -> dis
     return view
 
 
-def demon_card(demon: xeno.Demon, summoned_by: str = "", aq_value: int | None = None) -> tuple[discord.ui.LayoutView, discord.File]:
-    """A summoning: who answered, where on the numogram (a picture), what it looks like (ASCII), and the arithmetic."""
+@lru_cache(maxsize=96)
+def _numogram_png(demon: xeno.Demon | None, _colour: int) -> bytes:
     buffer = io.BytesIO()
     xeno.numogram(demon).save(buffer, format="PNG")
-    file = discord.File(io.BytesIO(buffer.getvalue()), filename="numogram.png")
+    return buffer.getvalue()
+
+
+def numogram_file(demon: xeno.Demon | None) -> discord.File:
+    """The numogram as an attachment. Drawing one takes a third of a second, so each is drawn once (per colour: the
+    Night's is orange) and kept: 46 pictures at most, about 55 KB each."""
+    return discord.File(io.BytesIO(_numogram_png(demon, xeno.accent(demon) if demon else 0)), filename="numogram.png")
+
+
+def demon_card(demon: xeno.Demon, summoned_by: str = "", aq_value: int | None = None) -> tuple[discord.ui.LayoutView, discord.File]:
+    """A summoning: who answered, where on the numogram (a picture), what it looks like (ASCII), and the arithmetic."""
+    file = numogram_file(demon)
     high, low = demon.zones
     lore = [f"Zone {high}'s gate opens on {xeno.gate(high)}, zone {low}'s on {xeno.gate(low)}"]
     if demon.syzygy:
@@ -225,9 +238,7 @@ class OutsideCog(commands.Cog):
             view.add_item(discord.ui.Container(discord.ui.TextDisplay(
                 "### 10::0 · ——\n*There is no forty-sixth demon.*\n```\n\n          ::\n        .-''-.\n       ( o  o )\n        '-..-'\n          ::\n\n```\n"
                 "-# It was already here when you called. · Pandemonium Matrix, Ccru (unlisted)"), accent_colour=0x14161B))
-            buffer = io.BytesIO()
-            xeno.numogram(None).save(buffer, format="PNG")
-            return view, discord.File(io.BytesIO(buffer.getvalue()), filename="numogram.png")
+            return view, numogram_file(None)
         if named is not None:
             return demon_card(named)
         demon = xeno.summon(text)
@@ -281,7 +292,7 @@ class OutsideCog(commands.Cog):
                 async for old in message.channel.history(limit=INDEX_SIZE, before=message):
                     if not old.author.bot and old.content:
                         index.appendleft((xeno.aq(old.content), old.id, old.author.id, old.jump_url))
-            except discord.HTTPException:
+            except UNREACHABLE:
                 pass
         value = xeno.aq(message.content)
         words = len(message.content.split())

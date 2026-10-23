@@ -26,6 +26,7 @@ from .. import halloween, icons, ledger
 from .. import outside as xeno
 from ..actions import act
 from ..bot import PsychographBot, is_allowed_channel
+from ..responder import UNREACHABLE
 from .outside import demon_card
 
 log = logging.getLogger("psychograph.halloween")
@@ -44,7 +45,7 @@ async def vanish(message: discord.Message, emoji, me: discord.abc.User, after: f
         await message.add_reaction(emoji)
         await asyncio.sleep(VANISH_SECONDS if after is None else after)
         await message.remove_reaction(emoji, me)
-    except discord.HTTPException:
+    except UNREACHABLE:
         pass
 
 
@@ -107,7 +108,7 @@ class HalloweenCog(commands.Cog):
     async def _react(message: discord.Message, emoji) -> None:
         try:
             await message.add_reaction(emoji)
-        except discord.HTTPException:
+        except UNREACHABLE:
             pass
 
     async def _wander(self, message: discord.Message) -> None:
@@ -130,7 +131,7 @@ class HalloweenCog(commands.Cog):
                 text = old.content.strip()
                 if not old.author.bot and not old.webhook_id and 12 <= len(text) <= 200 and not _LINK.search(text):
                     lines.append(old)
-        except (discord.HTTPException, AttributeError):
+        except (*UNREACHABLE, AttributeError):
             return
         if not lines:
             return
@@ -141,7 +142,7 @@ class HalloweenCog(commands.Cog):
             sent = await channel.send(f"> {text}\n-# {who}, {old.created_at:%d %B %Y}", allowed_mentions=NO_PINGS)
             await asyncio.sleep(FLICKER_SECONDS)
             await sent.delete()
-        except discord.HTTPException:
+        except UNREACHABLE:
             pass
 
 
