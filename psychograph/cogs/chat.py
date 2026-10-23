@@ -21,14 +21,14 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from .. import conversation, dice, quick, render, vision
+from .. import conversation, dice, quick, render, tarot, vision
 from ..actions import act
 from ..bot import PsychographBot, is_allowed_channel
 from ..jev import DIRECT
 from ..personas import Persona
 from ..quick import QUICKS, Quick, QuickRequest
 from ..render import persona_choices
-from .party import reply_roll
+from .party import reply_roll, reply_tarot
 from ..repeats import RepeatGuard
 from ..responder import Ask, react, unreact
 from .chess import board_file
@@ -67,7 +67,6 @@ class ChatCog(commands.Cog):
         self.menus = [
             app_commands.ContextMenu(name="Ask persona", callback=self.ask_about_message),
             app_commands.ContextMenu(name="Review this debate", callback=self.review_debate),
-            app_commands.ContextMenu(name="Judge this", callback=self.judge_message),
         ]
         for menu in self.menus:
             self.bot.tree.add_command(menu)
@@ -81,6 +80,8 @@ class ChatCog(commands.Cog):
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
         if not is_allowed_channel(message.channel, self.bot.settings.allowed_channels):
+            if is_allowed_channel(message.channel, self.bot.settings.tarot_channels):
+                await self._tarot_only(message)
             return
         previous = await self.bot.ambient.seen(message)  # every message, the bot's too: how long the channel was quiet
         if not self._listening(message):
@@ -89,6 +90,8 @@ class ChatCog(commands.Cog):
             await self.handle(message)
         elif (notation := dice.embedded_request(message.content)) is not None:
             await reply_roll(self.bot, message, notation)  # a message that is only a roll: no Jev, no model
+        elif (reading := tarot.request(message.content, strict=True)) is not None:
+            await reply_tarot(self.bot, message, *reading)  # "draw a card", "tarot: will I win": no Jev, no model
         elif (persona := await self.bot.ambient.called(message)) is not None:
             await self.handle(message, called=persona)
         else:
@@ -133,6 +136,8 @@ class ChatCog(commands.Cog):
                 await self._answer_directly(message, target, guild_id)
             elif route == "dice":
                 await reply_roll(self.bot, message, target)
+            elif route == "tarot":
+                await reply_tarot(self.bot, message, *target)
             else:
                 await self._play_chess(message, prompt)
             return
@@ -154,11 +159,13 @@ class ChatCog(commands.Cog):
     ) -> tuple[str, object]:
         """Where a message goes, first match wins: a quick feature or tool called by name, the persona it names
         or replies to, chess moves, then System 1's triage of a fresh message (a quick feature, a question
-        about the bot, a tool), else the channel's persona. Returns ("dice", notation), ("quick", (feature, text)),
+        about the bot, a tool), else the channel's persona. Returns ("dice", notation), ("tarot", (kind, question)), ("quick", (feature, text)),
         ("direct", key), ("chess", None) or ("chat", persona, None meaning the channel's)."""
         registry, guild_id = self.bot.personas, ask.guild_id
         if not called and (notation := dice.request(prompt)) is not None:
             return "dice", notation
+        if not called and (reading := tarot.request(prompt)) is not None:
+            return "tarot", reading
         quick_call = None if called else quick.quick_for(prompt)
         if quick_call is not None:
             return "quick", quick_call
@@ -228,6 +235,17 @@ class ChatCog(commands.Cog):
             embed = model_embed(self.bot)
         embed.set_footer(text=quick.INSTANT_FOOTER)
         await message.reply(embed=embed, mention_author=False, allowed_mentions=discord.AllowedMentions.none())
+
+    async def _tarot_only(self, message: discord.Message) -> None:
+        """A channel where only tarot works: a reading asked for in chat, or with the bot mentioned; nothing else."""
+        if message.author.bot or message.webhook_id or self.bot.user is None:
+            return
+        if self.bot.ignoring(message.guild.id if message.guild else None, message.author.id) is not None:
+            return
+        mentioned = self.bot.user in message.mentions
+        text = conversation.strip_mention(message.content, self.bot.user.id) if mentioned else message.content
+        if (reading := tarot.request(text, strict=not mentioned)) is not None:
+            await reply_tarot(self.bot, message, *reading)
 
     def _listening(self, message: discord.Message) -> bool:
         """A member's message in an allowed channel, from someone not timed out (who is ignored silently)."""
@@ -380,15 +398,6 @@ class ChatCog(commands.Cog):
     async def review_debate(self, interaction: discord.Interaction, message: discord.Message) -> None:
         """Right-click → Apps → Review this debate: the review reads the channel up to and including this message."""
         await self._tool_on_message(interaction, message, "debate_review", "Review the debate that ends with this message.")
-
-    async def judge_message(self, interaction: discord.Interaction, message: discord.Message) -> None:
-        """Right-click → Apps → Judge this: the judge rules on this message, with what came before as context."""
-        who = getattr(message.author, "display_name", message.author.name)
-        text = message.clean_content.strip() if isinstance(message.clean_content, str) else ""
-        if not text:
-            await interaction.response.send_message("That message has no text to judge.", ephemeral=True)
-            return
-        await self._tool_on_message(interaction, message, "judge", f'Judge what {who} said: "{text}"')
 
     async def _tool_on_message(self, interaction: discord.Interaction, message: discord.Message, key: str, text: str) -> None:
         tool = self.bot.personas.get(interaction.guild_id, key)

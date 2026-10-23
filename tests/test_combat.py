@@ -1,3 +1,4 @@
+import asyncio
 import random
 import unittest
 from datetime import date
@@ -80,7 +81,7 @@ class TarotTests(unittest.TestCase):
 
     def test_readings_are_layouts_with_the_linked_art(self) -> None:
         async def build():
-            return tarot.reading("three", 1, "Hugh Chungus", "will the bot ever be finished", random.Random(3))
+            return tarot.reading("three", 1, "Hugh Chungus", "will the bot ever be finished", random.Random(3)).view()
 
         import asyncio
         view = asyncio.run(build())
@@ -91,15 +92,126 @@ class TarotTests(unittest.TestCase):
         self.assertTrue(all(item.media.url.startswith("https://upload.wikimedia.org/") for item in gallery.items))
         self.assertEqual(len(tarot.deck()), 78)
 
+    def test_quick_readings_are_asked_for_in_chat(self) -> None:
+        self.assertEqual(tarot.request("draw a card", strict=True), ("one", ""))
+        self.assertEqual(tarot.request("tarot: will I get the job", strict=True), ("one", "will I get the job"))
+        self.assertEqual(tarot.request("pull me three cards about the raid", strict=True), ("three", "the raid"))
+        self.assertEqual(tarot.request("card of the day", strict=True), ("today", ""))
+        self.assertEqual(tarot.request("draw a card will I win?"), ("one", "will I win?"))
+        for chat in ("tarot is cringe", "draw a card will I win?", "drawing a card", "I love tarot"):
+            self.assertIsNone(tarot.request(chat, strict=True), chat)
+
     def test_a_question_cannot_ping_anyone(self) -> None:
         async def build():
-            return tarot.reading("one", 1, "Hugh", "@everyone <@&1475646287507361902> will it work", random.Random(1))
+            return tarot.reading("one", 1, "Hugh", "@everyone <@&1475646287507361902> will it work", random.Random(1)).view()
 
         import asyncio
         [container] = asyncio.run(build()).children
         heading = container.children[0].content
         self.assertNotIn("@everyone", heading.replace("@​everyone", ""))
         self.assertNotIn("<@&1475646287507361902>", heading)
+
+
+class TarotDealTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        from unittest import mock
+
+        patcher = mock.patch.object(tarot, "FLIP_SECONDS", 0)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    @staticmethod
+    def urls(view) -> list[str]:
+        [container] = view.children
+        gallery = next(child for child in container.children if isinstance(child, discord.ui.MediaGallery))
+        return [item.media.url for item in gallery.items]
+
+    @staticmethod
+    def texts(view) -> str:
+        [container] = view.children
+        return "\n".join(child.content for child in container.children if isinstance(child, discord.ui.TextDisplay))
+
+    async def test_cards_are_dealt_face_down_then_turned_one_at_a_time(self) -> None:
+        reading = tarot.reading("three", 1, "Hugh", "", random.Random(3))
+        posted = []
+
+        async def send(view):
+            posted.append(view)
+
+        await tarot.deal(reading, send, send)
+        faces = [card["image"] for card, _ in reading.cards]
+        self.assertEqual([self.urls(view) for view in posted], [
+            [tarot.back()] * 3, faces[:1] + [tarot.back()] * 2, faces[:2] + [tarot.back()], faces,
+        ])
+        self.assertNotIn(reading.cards[0][0]["name"], self.texts(posted[0]))  # nothing given away face down
+        self.assertEqual(int(posted[0].children[0].accent_colour), tarot.ACCENT)
+
+    async def test_a_deleted_message_ends_the_deal_quietly(self) -> None:
+        reading = tarot.reading("three", 1, "Hugh", "", random.Random(3))
+        edits = 0
+
+        async def send(view):
+            return None
+
+        async def edit(view):
+            nonlocal edits
+            edits += 1
+            raise discord.NotFound(type("Response", (), {"status": 404, "reason": "Not Found"})(), "Unknown Message")
+
+        async def take():
+            await asyncio.sleep(10)
+            return "never"
+
+        pending = take()
+        await tarot.deal(reading, send, edit, pending)
+        self.assertEqual(edits, 1)
+
+    async def test_mini_mes_take_goes_under_the_cards_and_a_failed_one_clears_the_wait(self) -> None:
+        reading = tarot.reading("one", 1, "Hugh", "will it work", random.Random(1))
+        for line, expected in (("Ask again after the patch.", "Ask again after the patch."), ("", None)):
+            posted = []
+
+            async def send(view):
+                posted.append(view)
+
+            async def take():
+                return line
+
+            await tarot.deal(reading, send, send, take())
+            self.assertIn("squints", self.texts(posted[-2]))
+            self.assertNotIn("squints", self.texts(posted[-1]))
+            if expected:
+                self.assertIn(expected, self.texts(posted[-1]))
+
+    async def test_the_take_is_off_by_default_switchable_and_once_a_minute_each(self) -> None:
+        from tests.helpers import FakeBackend, make_bot
+
+        bot = make_bot(FakeBackend("@everyone the Tower says no."))
+        tarot._last_take.clear()
+        self.assertFalse(tarot.wants_take(bot, 1))
+        bot.store.set_state("tarot:mini_me", "on")
+        self.assertTrue(tarot.wants_take(bot, 1))
+        self.assertFalse(tarot.wants_take(bot, 1))  # the same person again within the minute
+        self.assertTrue(tarot.wants_take(bot, 2))
+        line = await tarot.take(bot, tarot.reading("one", 1, "Hugh", "will it work", random.Random(1)))
+        self.assertNotIn("@everyone", line.replace("@\u200beveryone", ""))
+        self.assertEqual(bot.backend.thinking_calls, [False])
+
+
+class TarotColourTests(unittest.TestCase):
+    def test_the_frame_takes_the_suit_colour(self) -> None:
+        cups, wands, swords = ({"suit": suit} for suit in ("Cups", "Wands", "Swords"))
+        major = {"arcana": "major"}
+        self.assertEqual(tarot.accent([]), tarot.ACCENT)
+        self.assertEqual(tarot.accent([(major, False)]), tarot.ACCENT)
+        self.assertEqual(tarot.accent([(cups, True)]), tarot.SUIT_ACCENTS["Cups"])
+        self.assertEqual(tarot.accent([(wands, False), (swords, False), (wands, False)]), tarot.SUIT_ACCENTS["Wands"])
+        self.assertEqual(tarot.accent([(wands, False), (cups, False), (swords, False)]), tarot.SUIT_ACCENTS["Cups"])
+
+    def test_every_card_has_a_known_suit_or_is_major(self) -> None:
+        for card in tarot.deck():
+            self.assertTrue(card["arcana"] == "major" or card["suit"] in tarot.SUIT_ACCENTS, card["name"])
+        self.assertTrue(tarot.back().startswith("https://upload.wikimedia.org/"))
 
 
 class RerollTests(unittest.IsolatedAsyncioTestCase):

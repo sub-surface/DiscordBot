@@ -44,14 +44,14 @@ class BotTests(unittest.TestCase):
         )
         self.assertEqual(
             {c.name for c in self.bot.tree.get_commands(type=discord.AppCommandType.message)},
-            {"Ask persona", "Review this debate", "Judge this", "Tone check", "Give a Chuckle"},
+            {"Ask persona", "Review this debate", "Draw a tarot card", "Tone check", "Give a Chuckle"},
         )
         self.assertTrue({"Character sheet", "Challenge to a contest", "Pay keks", "Hand over an item", "Attack"}
                         <= {c.name for c in self.bot.tree.get_commands(type=discord.AppCommandType.user)})
         groups = {name: {c.name for c in self.bot.tree.get_command(name).commands} for name in ("quick", "bot", "scores")}
         self.assertEqual(groups, {
             "quick": {"decide", "odds", "tier", "rate", "tone", "vibe", "chatter"},
-            "bot": {"model", "stats", "cost", "thinking", "digest"},
+            "bot": {"model", "stats", "cost", "thinking", "tarot", "digest"},
             "scores": {"debates", "predictions", "duels"},
         })
         self.assertIn("commentary", {command.name for command in self.bot.tree.get_command("chess").commands})
@@ -69,6 +69,18 @@ class BotTests(unittest.TestCase):
         self.assertFalse(asyncio.run(self.bot.tree.interaction_check(interaction)))
         self.assertTrue(interaction.response.send_message.await_args.kwargs["ephemeral"])
         self.assertIn("#sim-city", interaction.response.send_message.await_args.args[0])
+
+    def test_tarot_alone_works_in_a_tarot_channel_whichever_apostrophe(self) -> None:
+        from psychograph.store import Store
+
+        bot = PsychographBot(Settings(tarot_channels=("lizzie\u2019s-reflecting-pool",)), store=Store(":memory:"),
+                             backend=FakeBackend())
+        self.addCleanup(bot.store.close)
+        for name in ("lizzie's-reflecting-pool", "Lizzie\u2019s-Reflecting-Pool"):
+            for command, allowed in (("tarot", True), ("Draw a tarot card", True), ("ask", False)):
+                interaction = interaction_in(name, SimpleNamespace(id=1))
+                interaction.command = SimpleNamespace(qualified_name=command)
+                self.assertEqual(asyncio.run(bot.tree.interaction_check(interaction)), allowed, (name, command))
 
     def test_command_tree_hides_autocomplete_outside_allowlist(self) -> None:
         interaction = interaction_in("general", SimpleNamespace(id=1), discord.InteractionType.autocomplete)

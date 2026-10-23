@@ -25,11 +25,13 @@ class FakeBackend:
         self.text = text
         self.profile = profile
         self.calls: list[list[dict]] = []
+        self.thinking_calls: list[bool | None] = []
         self.in_flight = 0
         self.likely_cold = False
 
-    async def complete(self, messages: list[dict]) -> Completion:
+    async def complete(self, messages: list[dict], thinking: bool | None = None) -> Completion:
         self.calls.append(messages)
+        self.thinking_calls.append(thinking)
         return Completion(text=self.text)
 
     async def close(self) -> None:

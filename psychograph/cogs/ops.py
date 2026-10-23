@@ -1,4 +1,4 @@
-"""/bot model | stats | cost | thinking | digest: what the bot runs on, how it's doing, what it costs, whether the
+"""/bot model | stats | cost | thinking | tarot | digest: what the bot runs on, how it's doing, what it costs, whether the
 model thinks before answering, and the digest preview."""
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from .. import digest
+from .. import digest, tarot
 from ..actions import deny
 from ..bot import PsychographBot
 from ..render import EMBED_COLOR, model_summary
@@ -121,6 +121,19 @@ class OpsCommands(commands.Cog):
             self.bot.store.set_state("thinking", mode)
         state = "**on**: the model reasons before it replies" if backend.thinking else "**off**: the model answers straight away"
         await interaction.response.send_message(f"Thinking is {state}.", ephemeral=True)
+
+    @about.command(name="tarot", description="Show or switch Mini Me's take under tarot readings (switching: admins)")
+    @app_commands.describe(mode="On: Mini Me adds a line from the model under each reading (a model call). Off: just the cards.")
+    @app_commands.choices(mode=[app_commands.Choice(name="On", value="on"), app_commands.Choice(name="Off", value="off")])
+    async def tarot_take(self, interaction: discord.Interaction, mode: str | None = None) -> None:
+        if mode is not None:
+            if not await self._admin(interaction):
+                await deny(interaction, "Only server admins can switch Mini Me's take.", "not an admin")
+                return
+            self.bot.store.set_state("tarot:mini_me", mode)
+        state = ("**on**: Mini Me adds a line under each reading (a model call, at most one per person a minute)"
+                 if tarot.mini_me_on(self.bot) else "**off**: readings are just the cards")
+        await interaction.response.send_message(f"Mini Me's take is {state}.", ephemeral=True)
 
     @about.command(name="digest", description="Preview this week's Monday digest, just for you (Manage Server)")
     async def digest_preview(self, interaction: discord.Interaction) -> None:

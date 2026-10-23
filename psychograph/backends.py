@@ -41,7 +41,7 @@ class Backend(Protocol):
 
     @property
     def likely_cold(self) -> bool: ...
-    async def complete(self, messages: list[dict]) -> Completion: ...
+    async def complete(self, messages: list[dict], thinking: bool | None = None) -> Completion: ...
     async def close(self) -> None: ...
 
 
@@ -69,15 +69,16 @@ class _Backend:
     def likely_cold(self) -> bool:
         return False
 
-    async def complete(self, messages: list[dict]) -> Completion:
+    async def complete(self, messages: list[dict], thinking: bool | None = None) -> Completion:
+        """One completion. `thinking` overrides the backend-wide setting for this call (tool personas think)."""
         self.in_flight += 1
         try:
-            return await self._complete(messages)
+            return await self._complete(messages, self.thinking if thinking is None else thinking)
         finally:
             self.in_flight -= 1
             self._last_finished = time.monotonic()
 
-    async def _complete(self, messages: list[dict]) -> Completion:
+    async def _complete(self, messages: list[dict], thinking: bool) -> Completion:
         raise NotImplementedError
 
     async def close(self) -> None:
@@ -96,7 +97,7 @@ class LocalBackend(_Backend):
         # LM Studio serves one generation at a time; queue here rather than at the server.
         self._lock = asyncio.Lock()
 
-    async def _complete(self, messages: list[dict]) -> Completion:
+    async def _complete(self, messages: list[dict], thinking: bool) -> Completion:
         if self._client is None:
             self._client = AsyncOpenAI(base_url=self.settings.local_base_url, api_key=self.settings.local_api_key)
         async with self._lock:
@@ -106,7 +107,7 @@ class LocalBackend(_Backend):
                 temperature=self.temperature,
                 top_p=self.top_p,
                 max_tokens=self.output_limit,
-                extra_body={"top_k": self.settings.top_k, "chat_template_kwargs": {"enable_thinking": self.thinking}},
+                extra_body={"top_k": self.settings.top_k, "chat_template_kwargs": {"enable_thinking": thinking}},
             )
         text = (result.choices[0].message.content or "").strip() if result.choices else ""
         tokens = result.usage.completion_tokens if result.usage else None
@@ -144,7 +145,7 @@ class ModalBackend(_Backend):
         idle_limit = self.scaledown_seconds + 5
         return self._last_finished is None or time.monotonic() - self._last_finished > idle_limit
 
-    async def _complete(self, messages: list[dict]) -> Completion:
+    async def _complete(self, messages: list[dict], thinking: bool) -> Completion:
         # Imported lazily: on Windows, importing modal switches the default event loop
         # policy to one without subprocess support, which must not affect the bot's loop.
         import modal
@@ -152,7 +153,7 @@ class ModalBackend(_Backend):
         if self._worker is None:
             self._worker = modal.Cls.from_name(self.settings.modal_app, self.settings.modal_class)()
         args = (messages, self.label, self.output_limit, self.temperature, self.top_p)
-        options = {"thinking": self.thinking, "top_k": self.settings.top_k}
+        options = {"thinking": thinking, "top_k": self.settings.top_k}
         if self._legacy_worker:
             result = await self._worker.complete.remote.aio(*args)
         else:

@@ -23,6 +23,7 @@ class Settings:
     backend: str = "local"
     default_persona: str = "mochi"
     allowed_channels: tuple[str, ...] = ("shitpost", "sim-city", "little-st-james", "games")
+    tarot_channels: tuple[str, ...] = ()     # channels where only tarot works (/tarot, "draw a card", the right-click)
     db_path: Path = ROOT / "history.db"
     personas_dir: Path = ROOT / "personas"
     models_file: Path = ROOT / "models.json"
@@ -65,6 +66,9 @@ class Settings:
     # wasn't sent, at most once per channel per cooldown. /status turns it off per channel.
     ambient_reactions: bool = True
     ambient_cooldown_minutes: int = 20
+    # Mini Me's take: a line from the model under each tarot reading (one call per reading, at most one per person
+    # a minute). Admins can switch it with /bot tarot, which overrides this until switched back.
+    tarot_mini_me: bool = False
 
     # Jev (TypeSafe's System One model): fast typed decisions — tool routing, debate notes, verdict reading.
     jev_api_key: str = ""

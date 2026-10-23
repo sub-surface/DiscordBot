@@ -1,5 +1,10 @@
 {
  "source": "1909 Rider-Waite-Smith deck, public domain, via Wikimedia Commons; meanings after Waite, The Pictorial Key to the Tarot (1910)",
+ "back": {
+  "image": "https://upload.wikimedia.org/wikipedia/commons/f/fc/Waite%E2%80%93Smith_Tarot_Roses_and_Lilies_cropped.jpg",
+  "width": 825,
+  "height": 1425
+ },
  "cards": [
   {
    "key": "major-00",

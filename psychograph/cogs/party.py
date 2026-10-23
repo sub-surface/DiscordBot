@@ -131,6 +131,36 @@ async def reply_roll(bot: PsychographBot, message: discord.Message, notation: st
     act("@", message.channel, message.author, f"rolled {notation[:40]}")
 
 
+async def deal_tarot(bot: PsychographBot, reading: tarot.Reading, send, edit, asker_id: int | None) -> None:
+    """Deal a reading face down and turn it (tarot.deal), with Mini Me's take when it's on and the asker is due one."""
+    await tarot.deal(reading, send, edit, tarot.take(bot, reading) if tarot.wants_take(bot, asker_id) else None)
+
+
+async def answer_tarot(bot: PsychographBot, interaction: discord.Interaction, reading: tarot.Reading) -> None:
+    async def send(view):
+        await interaction.response.send_message(view=view, allowed_mentions=NO_PINGS)
+
+    async def edit(view):
+        await interaction.edit_original_response(view=view, allowed_mentions=NO_PINGS)
+
+    await deal_tarot(bot, reading, send, edit, interaction.user.id)
+
+
+async def reply_tarot(bot: PsychographBot, message: discord.Message, kind: str, question: str) -> None:
+    """A quick reading asked for in chat ("draw a card", "tarot: will I win"): see tarot.request."""
+    reading = tarot.reading(kind, message.guild.id if message.guild else None, _who(message.author), question)
+    sent: list[discord.Message] = []
+
+    async def send(view):
+        sent.append(await message.reply(view=view, mention_author=False, allowed_mentions=NO_PINGS))
+
+    async def edit(view):
+        await sent[0].edit(view=view, allowed_mentions=NO_PINGS)
+
+    act("@", message.channel, message.author, f"tarot {kind}")
+    await deal_tarot(bot, reading, send, edit, message.author.id)
+
+
 async def sheet_file(character: rules.Character, member: discord.abc.User) -> discord.File:
     portrait = None
     try:
@@ -371,6 +401,7 @@ class PartyCog(commands.Cog):
             app_commands.ContextMenu(name="Hand over an item", callback=self.give_item),
             app_commands.ContextMenu(name="Attack", callback=self.attack),
             app_commands.ContextMenu(name="Give a Chuckle", callback=self.give_chuckle),
+            app_commands.ContextMenu(name="Draw a tarot card", callback=self.card_for),
         ]
         for menu in self.menus:
             self.bot.tree.add_command(menu)
@@ -413,8 +444,16 @@ class PartyCog(commands.Cog):
         today = datetime.now().date().isoformat()
         if self.bot.store.state("tarot:day") != today and random.random() < 0.4:
             self.bot.store.set_state("tarot:day", today)
-            await channel.send(view=tarot.reading("today", channel.guild.id, ""), allowed_mentions=NO_PINGS)
             act(".", channel, "-", "the day's card")
+            sent: list[discord.Message] = []
+
+            async def send(view):
+                sent.append(await channel.send(view=view, allowed_mentions=NO_PINGS))
+
+            async def edit(view):
+                await sent[0].edit(view=view, allowed_mentions=NO_PINGS)
+
+            await tarot.deal(tarot.reading("today", channel.guild.id, ""), send, edit)  # nobody asked: no take
             return
         await channel.send(world.crier_line(), allowed_mentions=NO_PINGS)
         act(".", channel, "-", "the Crier spoke")
@@ -482,6 +521,12 @@ class PartyCog(commands.Cog):
         view = RerollView(self.bot, guild, attacker_id, resolve) if retry else discord.utils.MISSING
         await interaction.response.send_message(text, file=picture, view=view, allowed_mentions=discord.AllowedMentions(users=[member]))
         act("^", interaction.channel, interaction.user, f"attacked {_who(member)[:20]}")
+
+    async def card_for(self, interaction: discord.Interaction, message: discord.Message) -> None:
+        """Right-click a message → Apps → Draw a tarot card: one card for whoever wrote it, the message as the question."""
+        question = message.clean_content if isinstance(message.clean_content, str) else ""
+        act("^", interaction.channel, interaction.user, f"tarot for {_who(message.author)[:20]}")
+        await answer_tarot(self.bot, interaction, tarot.reading("one", interaction.guild_id, _who(message.author), question))
 
     async def give_chuckle(self, interaction: discord.Interaction, message: discord.Message) -> None:
         """Right-click a message → Apps → Give a Chuckle: its author's character earns one (up to three)."""
@@ -574,9 +619,8 @@ class PartyCog(commands.Cog):
         app_commands.Choice(name="Three cards: what was, what is, what's coming", value="three"),
     ])
     async def tarot_command(self, interaction: discord.Interaction, reading: str = "today", question: str = "") -> None:
-        await interaction.response.send_message(view=tarot.reading(reading, interaction.guild_id, _who(interaction.user), question),
-                                                allowed_mentions=NO_PINGS)
         act("^", interaction.channel, interaction.user, f"tarot {reading}")
+        await answer_tarot(self.bot, interaction, tarot.reading(reading, interaction.guild_id, _who(interaction.user), question))
 
     @character.command(name="pack", description="Everything your character is carrying")
     async def pack(self, interaction: discord.Interaction) -> None:

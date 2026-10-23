@@ -42,6 +42,9 @@ NO_DEBATE_REPLY = (
     "the court needs at least two people disagreeing. If the argument was further back, right-click "
     "its last message → **Apps → Review this debate**."
 )
+# Tool personas (debate review, judge…) think before answering whatever /bot thinking says: about 500 tokens, a few
+# seconds. Only with room for it, so the thinking can't eat the answer on a backend with a small output limit.
+TOOL_THINKING_MIN_OUTPUT = 1536
 RECENT_MESSAGES = 100   # one Discord history page: enough for any tool's transcript and for triage
 _SPEAKER = re.compile(r"^([^:\n]{1,40}):")
 
@@ -244,6 +247,12 @@ class Responder:
         """Tool personas need a model whose profile allows them (weaker models derail on long transcripts)."""
         return persona.group != "tools" or persona.mode != "chat" or self.bot.backend.profile.tools
 
+    def thinking_for(self, persona: Persona) -> bool | None:
+        """True for a tool persona when the output limit leaves room to think; None keeps the backend's setting."""
+        if persona.group == "tools" and self.bot.backend.output_limit >= TOOL_THINKING_MIN_OUTPUT:
+            return True
+        return None
+
     def tools_unavailable(self, persona: Persona) -> str:
         backend = self.bot.backend
         model = backend.profile.name.split(" (")[0] if backend.profile.key != "default" else backend.label
@@ -281,7 +290,7 @@ class Responder:
             async with ask.channel.typing():
                 prepared = await self.prepare(ask)
                 called = time.perf_counter()
-                completion = None if prepared.canned else await backend.complete(prepared.messages)
+                completion = None if prepared.canned else await backend.complete(prepared.messages, self.thinking_for(prepared.persona))
                 model_seconds = time.perf_counter() - called
             wall = time.perf_counter() - started
             if completion is not None and completion.cold is not None:
@@ -491,7 +500,7 @@ class Responder:
                     error=error,
                     model_seconds=round(model_seconds, 3) if model_seconds is not None else None,
                     boot_seconds=completion.boot_seconds if completion else None,
-                    thinking=getattr(backend, "thinking", None),
+                    thinking=(self.thinking_for(prepared.persona) if prepared else None) or getattr(backend, "thinking", None),
                 )
             )
         except Exception:

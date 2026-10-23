@@ -26,16 +26,26 @@ log = logging.getLogger("psychograph")
 QUOTE_SHARE = 0.5   # how often the hourly status line is a persona's line rather than the model
 
 
+TAROT_COMMANDS = frozenset({"tarot", "Draw a tarot card"})  # also allowed in settings.tarot_channels
+
+
+def _channel_key(name: str) -> str:
+    """Names compared without case, and with ’ and ' alike: Discord keeps whichever apostrophe was typed."""
+    return name.casefold().replace("\u2019", "'").replace("\u2018", "'")
+
+
 def is_allowed_channel(channel: object | None, allowed: tuple[str, ...]) -> bool:
     """Threads follow their parent channel; DMs have no name and are never allowed."""
     channel = getattr(channel, "parent", None) or channel
     name = getattr(channel, "name", None)
-    return isinstance(name, str) and name.casefold() in {item.casefold() for item in allowed}
+    return isinstance(name, str) and _channel_key(name) in {_channel_key(item) for item in allowed}
 
 
 class ChannelScopedCommandTree(app_commands.CommandTree):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         allowed = self.client.settings.allowed_channels
+        if getattr(getattr(interaction, "command", None), "qualified_name", None) in TAROT_COMMANDS:
+            allowed = allowed + self.client.settings.tarot_channels
         if is_allowed_channel(interaction.channel, allowed):
             user = getattr(interaction, "user", None)
             until = self.client.ignoring(getattr(interaction, "guild_id", None), user.id) if user else None

@@ -14,6 +14,7 @@ from pathlib import Path
 
 OUT = Path(__file__).resolve().parent.parent / "assets" / "tarot" / "deck.json"
 HEADERS = {"User-Agent": "PsychographDiscordBot/1.0 (tarot deck metadata)"}
+BACK = "File:Waite–Smith_Tarot_Roses_and_Lilies_cropped.jpg"  # the original 1909 back, the same scanned collection
 
 MAJORS = [  # (name, upright, reversed)
     ("The Fool", "a leap, beginnings, folly that turns out brave", "recklessness, a fall you could have seen"),
@@ -112,12 +113,13 @@ def main() -> None:
             index = RANKS.index(rank) + 1
             cards.append({"key": f"{suit.lower()}-{index:02d}", "name": f"{rank} of {suit}", "arcana": "minor", "suit": suit,
                           "domain": domain, "number": index, "file": f"File:{prefix}{index:02d}.jpg", "upright": up, "reversed": down})
-    urls = originals([card["file"] for card in cards])
+    urls = originals([card["file"] for card in cards] + [BACK])
     for card in cards:
         card["image"], card["width"], card["height"] = urls[card.pop("file")]
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps({"source": "1909 Rider-Waite-Smith deck, public domain, via Wikimedia Commons; meanings after "
-                                         "Waite, The Pictorial Key to the Tarot (1910)", "cards": cards}, indent=1), encoding="utf-8")
+                                         "Waite, The Pictorial Key to the Tarot (1910)",
+                               "back": dict(zip(("image", "width", "height"), urls[BACK])), "cards": cards}, indent=1), encoding="utf-8")
     print(f"{len(cards)} cards -> {OUT}")
 
 

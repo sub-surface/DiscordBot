@@ -80,6 +80,7 @@ def game_embed(bot: PsychographBot) -> discord.Embed:
         "Right-click a member → **Challenge to a contest** · **Pay keks** · **Hand over an item**",
         "`/character pack`: everything you carry · `/character log`: what has happened to you lately",
         "`/tarot`: Mini Me reads the deck: the day's card (the same for everyone), one card, or three",
+        "Or just type `draw a card`, `three cards`, `tarot: will I win` · right-click a post → **Draw a tarot card**",
         "Right-click a great post → **Give a Chuckle** (spend Chuckles for advantage or a reroll)",
     ), inline=False)
     embed.set_footer(text="Dice and sheets are instant · /help dice for the notation")
@@ -118,7 +119,7 @@ def help_embed(bot: PsychographBot, channel_id: int, guild_id: int | None) -> di
             f"{me} judge: is it wrong to *…*: a moral verdict",
             f"{me} minutes: what you missed",
             f"{me} steelman both sides: the best case for each",
-            "Right-click a message → Apps → **Review this debate** or **Judge this**",
+            "Right-click a message → Apps → **Review this debate**",
         )
         + "\nReplying to a tool's answer goes back to this channel's persona. Tools need a strong model (MiniCPM-V, MiMo).",
         inline=False,
@@ -161,7 +162,7 @@ def help_embed(bot: PsychographBot, channel_id: int, guild_id: int | None) -> di
             "`/persona` *name*: switch this channel's persona · `/persona-manage`: create, edit or picture one",
             "`/status`: channel settings and controls · `/verbosity` · `/reset`",
             "`/timeout` *member* *30m*: I ignore them for a while (moderators)",
-            "`/bot model` · `/bot stats` · `/bot cost` · `/bot thinking` · `/bot digest` · `/sound` · `/chess new`",
+            "`/bot model` · `/bot stats` · `/bot cost` · `/bot thinking` · `/bot tarot` · `/bot digest` · `/sound` · `/chess new`",
         ),
         inline=False,
     )

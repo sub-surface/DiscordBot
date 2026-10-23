@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from psychograph.backends import ModalBackend
 from psychograph.settings import Settings
 from psychograph.store import Store
-from tests.helpers import make_bot
+from tests.helpers import FakeBackend, make_bot
 
 
 class FakeRemote:
@@ -78,3 +78,25 @@ class ThinkingStateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ToolThinkingTests(unittest.TestCase):
+    def test_tool_personas_think_when_the_output_limit_has_room(self) -> None:
+        backend = FakeBackend()
+        bot = make_bot(backend)
+        tool, chat = SimpleNamespace(group="tools"), SimpleNamespace(group="chatters")
+        backend.output_limit = 512
+        self.assertIsNone(bot.responder.thinking_for(tool))  # a small budget: thinking could eat the answer
+        backend.output_limit = 2048
+        self.assertTrue(bot.responder.thinking_for(tool))
+        self.assertIsNone(bot.responder.thinking_for(chat))  # chat follows /bot thinking
+
+    def test_a_per_call_override_beats_the_backend_setting(self) -> None:
+        import asyncio
+
+        backend = ModalBackend(Settings())
+        remote = FakeRemote(WORKER_REPLY)
+        backend._worker = SimpleNamespace(complete=SimpleNamespace(remote=remote))
+        asyncio.run(backend.complete([], thinking=True))
+        asyncio.run(backend.complete([]))
+        self.assertEqual([call[5]["thinking"] for call in remote.calls], [True, False])
