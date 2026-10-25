@@ -12,7 +12,7 @@ import dataclasses
 import logging
 import os
 
-from common import ROOT
+from common import ROOT, TYPING
 
 os.environ["LLM_BACKEND"] = "local"
 
@@ -24,5 +24,15 @@ settings = dataclasses.replace(settings, allowed_channels=(settings.game_channel
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 actions.setup(ROOT / "actions.log")
 client = botmod.PsychographBot(settings)
+
+
+async def on_typing(channel, user, when) -> None:
+    """Touch data/dm_typing whenever a player types in the game channel, so watch.py holds the DM's next
+    event until the table has finished talking."""
+    if getattr(channel, "name", None) == settings.game_channel and not getattr(user, "bot", False):
+        TYPING.touch()
+
+
+client.add_listener(on_typing)
 logging.getLogger("psychograph").info("GAME BOT · backend %s · #%s only", client.backend.name, settings.game_channel)
 client.run(settings.discord_token, log_handler=None)

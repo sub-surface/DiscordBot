@@ -44,14 +44,14 @@ bernard, minime and crier; add one with `setup.py --npc "Name, Title" L hexcolou
 `--as "A Nervous Merchant" narrator`.
 
 **Style (the user's rules):**
-- Give each scene a heading (`### II · The Dead Chat`), a few short paragraphs, then a clear prompt.
+- Give each scene a heading (`### II · The Dead Chat`), one short paragraph, then a clear prompt.
 - **@-mention the players you address** (`<@id>`), and pass their ids to `--ping`.
 - **NPC dialogue goes in `>` block quotes**, with the speaker named in the narration.
 - The tone is edgy and dark, full of the server's memes, told completely straight. Commit to jokes and
   never explain them. Push boundaries; the server likes it. Translate slurs into the world's terms
   (the Hypergamous Court, the Blackpill Brothers) rather than repeating them. Hard lines: no real names,
   places, jobs, health, families or real politics of members, and no doxxing jokes.
-- Keep it moving: 1 to 3 posts per beat. Undercut grand moments with pettiness, and petty ones with something sad.
+- Keep it short and moving: **one paragraph per beat** (a short response, plus the prompt line), one post per beat. No recaps. Undercut grand moments with pettiness, and petty ones with something sad.
 
 **Rolls.** Ask only when failure would be interesting, and name the check: `roll perception`, `roll cope for
 the door`, `save mog`, `roll initiative`. Rolls inside roleplay ("…Roll lore") are caught automatically. If a

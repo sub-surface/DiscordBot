@@ -77,6 +77,36 @@ currency, freely given and impossible to fake. A Size 2 Chuckle is how the Scrol
   "glazer"), and it had been sitting at parties uninvited ever since, paying a kek for each seat. Foidslayer
   swore to the landlord it would not be taken; it stayed. It is now a regular. Stackhouse's keepsake, a block
   list with one forgotten name, was the clue: the name was Mini Me.
+- **Deletion Eve** (24 Oct, Session II; Foidslayer3000 and Leroy Brown, a Lurker of the Exchange). The Uninvited
+  marched east; the Dead Chat's fog reached the cellar, and Foidslayer left it on read (a grey *Seen 11:47*
+  floats over him). The landlord holds his own unsent draft (*I'm sorry about the pub. I should have called.*)
+  and keeps more behind the third board from the fireplace, where Leroy's purse now hides too. Omnius ordered
+  Foidslayer to return Mini Me by dawn; he refused, ignored the reply card twice, and told an **Auditor** (a
+  Clankworks compliance lantern on eight stilts) that he'd kill Omnius. He is **decommissioned and hunted**;
+  the Clankworks offered 200 keks for him, 50 for the kettle. Leroy crit the Auditor through its cage, and
+  Mini Me snuffed it, after saying its first ever *no* (*my sources say no*) and then its first meant *yes*.
+  - **Mini Me's file**: decommissioned for *answering honestly*, sold at private auction to **the Typing
+    Indicator, on behalf of Seen**; Leroy was Lot 2 (reserve not met). It now wears the Auditor's lantern-cage
+    as a hat, runs on being asked things (and on old logs), walks on a beer-tap chain held by Leroy, and has
+    chosen a name for now: **Hazy** (*reply hazy*).
+  - **The Log Pile**: an alcove in the cellar corridor of bundled chat logs that murmur their nights; cringe
+    ones smoke and replay forever. One, **Tonight's Log**, writes itself as it happens (Leroy carries it).
+    Who is writing it is open.
+  - **Geography**: **Seen** is a town in the Dead Chat desert under three grey typing dots; the Voice Channel is
+    sealed at the far east. Routes from Kekwick: the Tape and Clankworks, or the Abbey and Metricport.
+  - **The east gate**: **Pell**, a Junior Broker of the Exchange, bid Lamont away and lost him back to the
+    set-of-all-sets riddle (his hat-ticker froze on ∈, then read 3). A Blackpill Brother 1v1'd Foidslayer for
+    the bounty and yielded (*it's over*) after Lamont swallowed his head.
+  - **Blackpill Abbey**, built of plates: Foidslayer failed the gate squat (the Abbey will never forget);
+    Leroy twirled the bar into the PR bell, so the Clankworks knows where they went. **The Counter**, who has
+    never miscounted a rep, traded the Brother's chalk for the lead and tipped Foidslayer a bead (*counts true,
+    once*).
+  - **The Strawberry Question**: Omnius once publicly counted it wrong (the answer is always three) and buried
+    every copy. Certain things break on it. The last copy is **Lot 404 at the Auction House of Metricport**,
+    shown at dusk; opening bid 500 keks (the party has exactly that); Exchange members only, so Leroy bids.
+    The rival is a grey hood with three dots for a face, deposit paid in read receipts. Pell will get them in.
+  - Seeded by a player, unexplored: *the Bayesian clergy*. Ended at the Dead Cat Bounce (drink prices scroll
+    live; Foidslayer's WANTED ticker over the mirror), waiting for dusk. Procession clock 4/6. Both reached L2.
 
 ## Campaign one: The Uninvited
 
@@ -102,7 +132,7 @@ would like, just once, for someone to reply. The finale is the bout nobody turne
 
 ## Running a scene
 
-- Each scene gets a title (`### II · The Dead Chat`), a few short paragraphs of narration, then a clear prompt
+- Each scene gets a title (`### II · The Dead Chat`), one short paragraph of narration, then a clear prompt
   that @-mentions the players whose turn it is.
 - NPC dialogue goes in `>` block quotes, with the speaker named in the narration.
 - Ask for a roll only when failure would be interesting. Name the check (`roll perception`, `roll cope`,

@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 CONFIG = ROOT / "data" / "dm.json"   # gitignored: holds the webhook URL, which is a secret
+TYPING = ROOT / "data" / "dm_typing"   # touched by run_bot.py while a player types in the game channel
 API = "https://discord.com/api/v10"
 
 for stream in (sys.stdout, sys.stderr):

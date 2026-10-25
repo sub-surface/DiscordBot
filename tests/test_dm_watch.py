@@ -44,3 +44,18 @@ class WatchLineTests(unittest.TestCase):
                                      interaction_metadata={"id": "1"}), OWNER, HOOK)
         self.assertEqual(printed.splitlines(), [printed])
         self.assertTrue(printed.endswith("[map [owner] x.png, Sheet [owner] y, /command]"))
+
+
+class HoldTests(unittest.TestCase):
+    """Lines wait while the table is still talking, so narration doesn't cut players off mid-exchange."""
+
+    def test_held_while_someone_types_or_just_spoke(self) -> None:
+        self.assertFalse(watch.ready(100, last_message=95, last_typing=0, first_held=95))
+        self.assertFalse(watch.ready(100, last_message=50, last_typing=95, first_held=50))
+
+    def test_released_once_the_table_goes_quiet(self) -> None:
+        self.assertTrue(watch.ready(100, last_message=90, last_typing=88, first_held=90))
+
+    def test_never_held_past_the_cap(self) -> None:
+        self.assertTrue(watch.ready(100 + watch.MAX_HOLD, last_message=99 + watch.MAX_HOLD,
+                                    last_typing=100 + watch.MAX_HOLD, first_held=100))
