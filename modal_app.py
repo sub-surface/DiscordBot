@@ -91,6 +91,9 @@ def _post(path: str, body: dict, timeout: float) -> dict:
         "MODAL_ENABLE_THINKING": str(CAN_THINK).lower(),
         "MODAL_GPU_SNAPSHOT": str(GPU_SNAPSHOT).lower(),
     },
+    # A Hugging Face token, when .env has one, for faster and rate-limit-free weight downloads. Sent as a
+    # secret so it isn't baked into the app's visible config; hf_hub_download reads HF_TOKEN by itself.
+    secrets=[modal.Secret.from_dict({"HF_TOKEN": os.environ["HF_TOKEN"]})] if os.getenv("HF_TOKEN") else [],
     min_containers=0,
     max_containers=1,
     scaledown_window=SCALEDOWN_SECONDS,

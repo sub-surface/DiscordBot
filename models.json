@@ -67,6 +67,27 @@
       }
     },
     {
+      "key": "olmo-4chan",
+      "name": "Olmo 3.1 7B RL-Zero Code 4chan (Q8_0, 7.2 GB)",
+      "match": ["olmo-3.1-7b-rl-zero-code-4chan"],
+      "modal": {
+        "id": "mradermacher/Olmo-3.1-7B-RL-Zero-Code-4chan-GGUF",
+        "file": "Olmo-3.1-7B-RL-Zero-Code-4chan.Q8_0.gguf",
+        "gpu": "L4",
+        "thinking": false,
+        "context": 8192,
+        "storage_gib": 6.8
+      },
+      "chat": {
+        "context_mode": "compact",
+        "history_messages": 6,
+        "prompt_budget": 3072,
+        "max_output_tokens": 300,
+        "temperature": 0.8,
+        "top_p": 0.9
+      }
+    },
+    {
       "key": "epstein-llama-3b",
       "name": "Epstein Llama 3.2 3B v2 (Q4_K_M, 2.02 GB)",
       "match": ["epstein-llama"],

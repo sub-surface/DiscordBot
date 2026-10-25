@@ -211,6 +211,12 @@ class CleanReplyTests(unittest.TestCase):
         self.assertEqual(conversation.clean_reply("plan...</think>answer", "x"), "answer")
         self.assertEqual(conversation.clean_reply("<think>ran out of tokens", "x"), "")
 
+    def test_imageboard_output_is_one_post_without_reply_links(self) -> None:
+        thread = ">>1 (OP)\nthis is bait\n>be me<|start_header_id|>4<|end_header_id|>>>3\nkys"
+        self.assertEqual(conversation.clean_reply(thread, "x"), "this is bait\n>be me")
+        self.assertEqual(conversation.clean_reply("based >>8812 take", "x"), "based  take")
+        self.assertEqual(conversation.clean_reply(">implying", "x"), ">implying")
+
     def test_strips_the_personas_own_name_label(self) -> None:
         self.assertEqual(conversation.clean_reply("**Mochi**: hewwo~", "mochi"), "hewwo~")
         self.assertEqual(conversation.clean_reply("charlie: skill issue", "charlie"), "skill issue")

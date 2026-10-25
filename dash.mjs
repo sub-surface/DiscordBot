@@ -70,6 +70,7 @@ function saveEnv(name, value) {
 }
 
 process.env.LLM_MODEL ||= readEnv("LLM_MODEL", "")
+process.env.HF_TOKEN ||= readEnv("HF_TOKEN", "")  // handed to the worker as a Modal secret, for Hub downloads
 process.env.LLM_BACKEND ||= readEnv("LLM_BACKEND", "local")
 process.env.MODAL_MODEL_ID ||= readEnv("MODAL_MODEL_ID", modalModelPresets[0].id)
 process.env.MODAL_MODEL_FILE ||= readEnv("MODAL_MODEL_FILE", modalModelPresets[0].file)
@@ -369,7 +370,7 @@ while (true) {
     const confirmation = await ask(`\nRun one real completion on a ${process.env.MODAL_GPU}? Cold start and generation are billed. Type 'test' to confirm: `)
     if (confirmation.toLowerCase() === "test") {
       console.log("\nRunning one on-demand completion...\n")
-      await run(modal, ["run", "modal_app.py"])
+      await run(modal, ["run", "modal_app.py::smoke"])
     } else {
       console.log("\nTest cancelled.")
     }

@@ -415,6 +415,10 @@ def user_turn(
 # ── Cleaning model output ───────────────────────────────────────────
 
 _SPECIAL_TOKEN = re.compile(r"<\|[^|<>]{1,40}\|>")
+# Imageboard-trained models (the Olmo 4chan preset) write threads: a post header in plain text, then the next
+# post. Everything from the first header on is someone else's post. `>>123 (OP)` reply links point nowhere here.
+_NEXT_POST = re.compile(r"<\|start_header_id\|>.*", re.DOTALL)
+_POST_LINK = re.compile(r"^>>\d+(?: \(OP\))?[ \t]*\n?|>>\d+(?: \(OP\))?", re.MULTILINE)
 
 
 def clean_reply(text: str, persona_name: str, speakers: Sequence[str] = ()) -> str:
@@ -423,7 +427,8 @@ def clean_reply(text: str, persona_name: str, speakers: Sequence[str] = ()) -> s
     if re.search(r"</think>", text, re.IGNORECASE):
         text = re.split(r"</think>", text, flags=re.IGNORECASE)[-1]
     text = re.sub(r"^\s*<think>.*", "", text, flags=re.DOTALL | re.IGNORECASE)  # reasoning that never finished
-    text = _SPECIAL_TOKEN.sub("", text).strip()
+    text = _NEXT_POST.sub("", text)
+    text = _POST_LINK.sub("", _SPECIAL_TOKEN.sub("", text)).strip()
     text = re.sub(rf"^(?:\*\*)?{re.escape(persona_name)}(?:\*\*)?\s*:\s*", "", text, flags=re.IGNORECASE)
 
     others = {name for name in (*speakers, "User", "Assistant", "Human") if name and name.casefold() != persona_name.casefold()}
