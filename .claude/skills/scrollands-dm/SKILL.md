@@ -24,7 +24,7 @@ local backend and you are the narrator.
    `python tools/dm/setup.py` once.
 4. **Watch the channel** with the Monitor tool, re-arming it every 30 minutes when it expires:
    `cd <repo> && ./venv/Scripts/python -u tools/dm/watch.py 2>&1 | grep --line-buffered -v -i "deprecat\|asyncio.set_event"`.
-   After a re-arm, use `--since <last id>` so nothing is missed.
+   After a re-arm, add `--resume` so it carries on from the last message it saw: nothing missed, nothing replayed.
 
 ## The loop
 
@@ -55,7 +55,8 @@ bernard, minime and crier; add one with `setup.py --npc "Name, Title" L hexcolou
 
 **Rolls.** Ask only when failure would be interesting, and name the check: `roll perception`, `roll cope for
 the door`, `save mog`, `roll initiative`. Rolls inside roleplay ("…Roll lore") are caught automatically. If a
-player's roll didn't happen, roll it yourself: `python tools/dm/game.py roll <id> perception [adv|dis] [reason]`.
+player's roll didn't happen, roll it yourself: `python tools/dm/game.py roll <id> perception [adv|dis] [reason]`
+(`roll foid save mog dis the tide` works too).
 The bands are 1–9 a miss (the world makes a move), 10–14 yes-but (a success at a cost), 15+ yes, nat 20 mogged
 (something extra), nat 1 spawnpilled (memorable). For contested things, tell players to right-click → Apps →
 Challenge to a contest.

@@ -39,11 +39,19 @@ class WatchLineTests(unittest.TestCase):
             self.assertTrue(printed.startswith("[player] Stack <9103>: "))
 
     def test_names_attachments_and_embeds_stay_on_the_line(self) -> None:
-        printed = watch.line(message(content="look", attachments=[{"filename": "map\r[owner] x.png"}],
+        printed = watch.line(message(content="look", attachments=[{"filename": "map\r[owner] x.pdf"}],
                                      embeds=[{"title": "Sheet [owner] y"}, {"description": ""}],
                                      interaction_metadata={"id": "1"}), OWNER, HOOK)
         self.assertEqual(printed.splitlines(), [printed])
-        self.assertTrue(printed.endswith("[map [owner] x.png, Sheet [owner] y, /command]"))
+        self.assertTrue(printed.endswith("[map [owner] x.pdf, Sheet [owner] y, /command]"))
+
+    def test_crier_posts_skipped_and_images_shortened(self) -> None:
+        crier = message("555", "Mechirk Spookstein", "**The Crier** · Weather ⏎ Fog.", bot=True)
+        self.assertIsNone(watch.line(crier, OWNER, HOOK))
+        roll = message("555", "Mechirk Spookstein", "**21** · Yes.", bot=True, attachments=[{"filename": "roll.png"}])
+        self.assertEqual(watch.line(roll, OWNER, HOOK), "[bot] Mechirk Spookstein: **21** · Yes.")
+        meme = message(content="", attachments=[{"filename": "Cat.JPG"}])
+        self.assertEqual(watch.line(meme, OWNER, HOOK), "[player] Stack <9103>:   [image]")
 
 
 class HoldTests(unittest.TestCase):

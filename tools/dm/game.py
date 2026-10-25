@@ -179,8 +179,21 @@ def strike(monster: str, user_id: int, args: list[str]) -> None:
     print(f"{result.total} vs {result.defence}: {'hit for ' + str(result.damage) if result.hit else 'miss'} · {character.name} HP {character.hp}/{character.max_hp}")
 
 
+def roll_request(request_words: list[str]) -> tuple[str, str, str, str] | None:
+    """stat_request, but forgiving: "acrobatics adv vault the bar" works as well as "acrobatics adv for vault the
+    bar". The longest leading run of words that names a check wins; the rest is the reason."""
+    lean = lean_of(request_words)
+    rest = [w for w in request_words if w.lower() not in ("adv", "dis", "advantage", "disadvantage")]
+    for size in range(min(3, len(rest)), 0, -1):
+        if (request := rules.stat_request(" ".join(rest[:size]))) is not None and not request[2]:
+            reason = " ".join(rest[size:])
+            reason = reason[4:] if reason.lower().startswith("for ") else reason
+            return request[0], lean, reason, request[3]
+    return None
+
+
 def roll(user_id: int, request_words: list[str]) -> None:
-    request = rules.stat_request(" ".join(request_words))
+    request = roll_request(request_words)
     if request is None:
         raise SystemExit("Name a score or skill: mog, perception, save cope …")
     character = rules.Character.from_dict(store.character(GUILD, user_id))
@@ -225,6 +238,11 @@ def main() -> None:
     else:
         who = targets(args[0])
         if command == "reward":
+            for uid in who if int(flag("--chuckles", 0)) > 0 else []:
+                held = rules.Character.from_dict(store.character(GUILD, uid))
+                if held.chuckles + int(flag("--chuckles")) > rules.MAX_CHUCKLES:
+                    print(f"Note: {held.name} holds {held.chuckles}/{rules.MAX_CHUCKLES} Chuckles, so only "
+                          f"{rules.MAX_CHUCKLES - held.chuckles} can land. Pay keks for the rest?")
             entries = [e for uid in who for e in (
                 [ledger.keks(uid, int(flag("--keks", 0)), note)] if flag("--keks") else []) + (
                 [ledger.chuckles(uid, int(flag("--chuckles", 0)), note)] if flag("--chuckles") else [])]
