@@ -17,6 +17,7 @@ import math
 import random
 import re
 from dataclasses import dataclass
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from . import halloween
 ROOT = Path(__file__).resolve().parent.parent
 MATRIX_PATH = ROOT / "assets" / "numogram" / "pandemonium.json"
 BANK_PATH = ROOT / "data" / "quotes.json"
+WEEK_THEME_MIN = 30   # quotes a theme needs to be a week's theme: enough for 14 posts and the asking
 FONTS = ROOT / "assets" / "fonts"
 
 # ── AQ ──
@@ -224,7 +226,8 @@ class Quote:
     @property
     def source(self) -> str:
         page = f" · p. {self.page}" if self.page else ""
-        return f"{self.author} · *{self.title}* ({self.year}){page}"
+        year = f"c. {-self.year} BC" if self.year < 0 else self.year
+        return f"{self.author} · *{self.title}* ({year}){page}"
 
 
 class Bank:
@@ -278,6 +281,68 @@ class Bank:
         pool = [quote for quote in self.quotes if author is None or quote.author == author]
         return (rng or random.SystemRandom()).choice(pool) if pool else None
 
+    @property
+    def authors(self) -> list[str]:
+        """Each author once, the most quoted first."""
+        counts: dict[str, int] = {}
+        for quote in self.quotes:
+            counts[quote.author] = counts.get(quote.author, 0) + 1
+        return sorted(counts, key=lambda author: (-counts[author], author))
+
+    def author_named(self, text: str) -> str | None:
+        """The author `text` names: "hegel", "Deleuze", "nick land" (whole name or any part of it)."""
+        wanted = text.casefold().strip()
+        if not wanted:
+            return None
+        for author in self.authors:
+            if wanted == author.casefold() or wanted in author.casefold().split():
+                return author
+        return None
+
+    def search(self, text: str, author: str | None = None, rng: random.Random | None = None, top: int = 5) -> Quote | None:
+        """A quote about `text`: one of the `top` best BM25 matches (so asking twice can bring another), within
+        one author's when given. None when nothing shares a word with it. Looser than match(), which has to be sure."""
+        query = set(terms(text)) & self.idf.keys()
+        if not query:
+            return None
+        scored = []
+        for index, doc in enumerate(self.docs):
+            if author is not None and self.quotes[index].author != author:
+                continue
+            if shared := query.intersection(doc):
+                score = sum(self.idf[t] * doc.count(t) * (self.K1 + 1)
+                            / (doc.count(t) + self.K1 * (1 - self.B + self.B * len(doc) / self.avg)) for t in shared)
+                scored.append((score, index))
+        if not scored:
+            return None
+        best = sorted(scored, reverse=True)[:top]
+        return self.quotes[(rng or random.SystemRandom()).choice(best)[1]]
+
+    @staticmethod
+    def theme_of(quote: Quote) -> str:
+        """A curator's theme, folded so "The State" and "state" are one: lowercase, no leading article."""
+        return re.sub(r"^(?:the|a|an)\s+", "", quote.theme.lower().strip())
+
+    def themes(self, minimum: int = WEEK_THEME_MIN) -> dict[str, list[Quote]]:
+        """Themes with at least `minimum` quotes, each with its quotes."""
+        grouped: dict[str, list[Quote]] = {}
+        for quote in self.quotes:
+            if theme := self.theme_of(quote):
+                grouped.setdefault(theme, []).append(quote)
+        return {theme: quotes for theme, quotes in grouped.items() if len(quotes) >= minimum}
+
+    def week_theme(self, day: date) -> str | None:
+        """This week's theme: the same all week (and across restarts), chosen by the ISO week from the big themes."""
+        themes = sorted(self.themes())
+        if not themes:
+            return None
+        year, week, _ = day.isocalendar()
+        return random.Random(f"theme-{year}-{week}").choice(themes)
+
+    def fragment(self, about: str = "", author: str | None = None, rng: random.Random | None = None) -> Quote | None:
+        """What a request for a fragment brings: on `about` if given (falling back to chance), from `author` if given."""
+        return (self.search(about, author, rng) if about else None) or self.random(rng, author)
+
 
 # ── Asking for things in chat ──
 
@@ -285,11 +350,13 @@ _AQ_ASK = re.compile(r"^\s*aq\s*[:=]?\s+(?P<text>.+)$", re.IGNORECASE | re.DOTAL
 _TX_ASK = re.compile(r"^\s*tx\s*[:=]?\s*(?P<number>[\d,_ ]{1,20})\s*$", re.IGNORECASE)
 _SUMMON = re.compile(r"^\s*(?:summon(?:\s+(?:a|me\s+a)\s+demon)?|draw\s+(?:a|me\s+a)\s+demon)(?=\W|$)(?P<rest>.*)$",
                      re.IGNORECASE | re.DOTALL)
+_FRAGMENT = re.compile(r"^\s*(?:a\s+)?fragment(?:\s*[:—–-]\s*(?P<about>.+))?\s*$", re.IGNORECASE | re.DOTALL)
 _LEAD = re.compile(r"^\s*(?:[:,;—–-]|for\b)\s*", re.IGNORECASE)
 
 
 def request(text: str) -> tuple[str, str] | None:
-    """("aq", text), ("tx", number) or ("summon", text) for a message asking for one, else None."""
+    """("aq", text), ("tx", number), ("summon", text) or ("fragment", about) for a message asking for one, else None.
+    "fragment" alone or "fragment: time" / "fragment: hegel" (an author's name brings one of theirs)."""
     text = text.strip()
     if len(text) > 400:
         return None
@@ -297,6 +364,8 @@ def request(text: str) -> tuple[str, str] | None:
         return "tx", re.sub(r"[,_ ]", "", match["number"])
     if match := _AQ_ASK.match(text):
         return "aq", match["text"].strip()
+    if match := _FRAGMENT.match(text):
+        return "fragment", match["about"] or ""
     if match := _SUMMON.match(text):
         rest = match["rest"].strip()
         lead = _LEAD.match(rest)

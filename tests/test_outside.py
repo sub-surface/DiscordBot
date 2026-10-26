@@ -76,7 +76,10 @@ class RequestTests(unittest.TestCase):
         self.assertEqual(xeno.request("summon"), ("summon", ""))
         self.assertEqual(xeno.request("summon: will it work"), ("summon", "will it work"))
         self.assertEqual(xeno.request("draw a demon for Hugh"), ("summon", "Hugh"))
-        for chat in ("summon the council", "summoning", "aqua is a colour", "tx is short for transaction", "taxes"):
+        self.assertEqual(xeno.request("fragment"), ("fragment", ""))
+        self.assertEqual(xeno.request("Fragment: the death of god"), ("fragment", "the death of god"))
+        for chat in ("summon the council", "summoning", "aqua is a colour", "tx is short for transaction", "taxes",
+                     "fragmented thoughts tonight", "a fragment of the old wall fell"):
             self.assertIsNone(xeno.request(chat), chat)
 
 
@@ -99,6 +102,30 @@ class BankTests(unittest.TestCase):
         self.assertIsNone(self.bank.match("it's still pretty good even though I already said something else"))
         self.assertIsNone(self.bank.match("ok"))
 
+    def test_asking_about_a_subject_or_an_author(self) -> None:
+        hegel = xeno.Quote("ps-1", "The true is the whole.", "", "G. W. F. Hegel", "Phenomenology of Spirit", 1807, 11)
+        bank = xeno.Bank(self.bank.quotes + [hegel])
+        for _ in range(10):
+            self.assertIn(bank.fragment("tell me about desire").id, {"fn-3"})
+            self.assertEqual(bank.fragment(author="G. W. F. Hegel").id, "ps-1")
+        self.assertIsNotNone(bank.fragment("zzzz nothing shares this"))  # falls back to chance
+        self.assertEqual(bank.author_named("hegel"), "G. W. F. Hegel")
+        self.assertEqual(bank.author_named("Nick Land"), "Nick Land")
+        self.assertIsNone(bank.author_named("Kant"))
+        self.assertEqual(bank.authors[0], "Nick Land")  # the most quoted first
+
+    def test_a_week_has_one_theme_from_the_big_ones(self) -> None:
+        from datetime import date
+
+        quotes = [xeno.Quote(f"x-{n}", f"line {n}", "", "Plato", "Dialogues", -380, 1, theme)
+                  for n, theme in enumerate(["Death"] * 20 + ["the death"] * 15 + ["time"] * 40 + ["god"] * 5)]
+        bank = xeno.Bank(quotes)
+        self.assertEqual(set(bank.themes()), {"death", "time"})  # "Death" and "the death" fold together; god is too small
+        monday, sunday, next_week = date(2026, 10, 26), date(2026, 11, 1), date(2026, 11, 2)
+        self.assertEqual(bank.week_theme(monday), bank.week_theme(sunday))
+        self.assertIn(bank.week_theme(next_week), {"death", "time"})
+        self.assertIsNone(xeno.Bank([]).week_theme(monday))
+
     def test_an_unbuilt_bank_is_empty_not_broken(self) -> None:
         from pathlib import Path
 
@@ -106,6 +133,7 @@ class BankTests(unittest.TestCase):
         self.assertEqual(empty.quotes, [])
         self.assertIsNone(empty.match("the body without organs is the cosmic egg"))
         self.assertIsNone(empty.random())
+        self.assertIsNone(empty.fragment("anything"))
 
     def test_a_quote_card_cannot_ping(self) -> None:
         quote = xeno.Quote("fn-9", "@everyone the outside is coming", "", "Nick Land", "Fanged Noumena", 2011, 3)

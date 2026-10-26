@@ -1,10 +1,12 @@
 """The Outside: what the bot does in #nanospasm (settings.outside_channels), and nothing else of it there.
 
 Asked for:   "aq: Nick Land", "tx 2026", "summon" / "summon: <anything>" (a Pandemonium demon on the numogram, with its
-             ASCII likeness), and /numogram aq | tx | summon (which also work in the bot's ordinary channels).
+             ASCII likeness), "fragment" / "fragment: time" / "fragment: hegel" (a line from the bank), and
+             /numogram aq | tx | summon and /fragment [about] [author] (which also work in the bot's ordinary channels).
 Ambient:     the channel's AQ index notices when two people's messages sum the same; a message (or a posted tweet)
              that a line in the quote bank already said gets the eye, and clicking the eye brings the line; now and
              then, while people are around, a fragment from the bank, with "Deeper" for the paragraph around it.
+             Twice a day (10:00 and 22:00) the library posts a line on the week's theme, announced on Monday morning.
 Not in /help (look here): a message whose AQ equals the bot's current name's gets the eye; something posted at 03:33 hears
              from the Warp; "the future" is sometimes received early; summoning the bot by name summons nothing.
 
@@ -20,7 +22,7 @@ import random
 import re
 import time
 from collections import deque
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time as dt_time, timedelta, timezone
 from functools import lru_cache
 
 import aiohttp
@@ -44,6 +46,8 @@ AQ_FLOOR = 150                    # below this, sums collide too easily to be wo
 COINCIDENCE_EVERY = timedelta(hours=3)
 SAID_EVERY = timedelta(minutes=40)  # per channel, between "already said this" eyes
 FRAGMENT_EVERY = timedelta(hours=8)
+# The library's own posts, twice a day on the machine's clock, from the week's theme (as the 03:33 secret, local time).
+LIBRARY_TIMES = tuple(dt_time(hour, tzinfo=datetime.now().astimezone().tzinfo) for hour in (10, 22))
 FUTURE_EVERY = timedelta(days=1)
 _TWEET = re.compile(r"https?://(?:www\.)?(?:x|twitter|fxtwitter|vxtwitter|fixupx|fixvx)\.com/(\w+)/status/(\d+)", re.IGNORECASE)
 
@@ -148,6 +152,7 @@ class OutsideCog(commands.Cog):
 
     async def cog_unload(self) -> None:
         self.fragments.cancel()
+        self.library.cancel()
         if self._session is not None:
             await self._session.close()
 
@@ -155,6 +160,8 @@ class OutsideCog(commands.Cog):
     async def on_ready(self) -> None:
         if not self.fragments.is_running():
             self.fragments.start()
+        if not self.library.is_running():
+            self.library.start()
 
     # ── Helpers ──
 
@@ -198,6 +205,14 @@ class OutsideCog(commands.Cog):
         await self._secrets(message)
 
     async def _answer(self, message: discord.Message, kind: str, text: str) -> None:
+        if kind == "fragment":
+            author = self.bank.author_named(text)
+            quote = self.bank.fragment("" if author else text, author)
+            if quote is None:
+                return  # no bank built: the word was just a word
+            await message.reply(view=quote_view(quote), mention_author=False, allowed_mentions=NO_PINGS)
+            act("@", message.channel, message.author, f"fragment {quote.id}")
+            return
         if kind == "aq":
             reply = self.aq_line(text)
         elif kind == "tx":
@@ -364,6 +379,34 @@ class OutsideCog(commands.Cog):
                 await channel.send(view=quote_view(quote), allowed_mentions=NO_PINGS)
                 act(".", channel, "-", f"fragment {quote.id}")
 
+    @tasks.loop(time=LIBRARY_TIMES)
+    async def library(self) -> None:
+        """Twice a day, a line on the week's theme, whoever is around. Each channel walks its own shuffle of the
+        theme's quotes, so nothing repeats within a week; Monday morning's post says what the week is."""
+        now = datetime.now().astimezone()
+        theme = self.bank.week_theme(now.date())
+        pool = self.bank.themes().get(theme, []) if theme else []
+        year, week, weekday = now.isocalendar()
+        slot = (weekday - 1) * 2 + (now.hour >= 12)
+        for guild in self.bot.guilds:
+            for channel in guild.text_channels:
+                if not self._outside(channel):
+                    continue
+                if pool:
+                    order = random.Random(f"{year}-{week}-{channel.id}").sample(pool, len(pool))
+                    quote = order[slot % len(order)]
+                else:
+                    quote = self.bank.random()
+                if quote is None:
+                    return
+                heading = f"### This week in the library: {theme}" if pool and slot == 0 else ""
+                try:
+                    await channel.send(view=quote_view(quote, heading), allowed_mentions=NO_PINGS)
+                except discord.HTTPException:
+                    continue
+                self._mark("fragment", channel.id)  # the ambient fragment waits its eight hours after this
+                act(".", channel, "-", f"library {quote.id} ({theme or 'any'})")
+
     # ── /numogram ──
 
     @numogram.command(name="summon", description="Call a demon of Pandemonium: at random, or by the AQ of what you write")
@@ -372,6 +415,26 @@ class OutsideCog(commands.Cog):
         view, file = self.summoning(by, interaction.user, interaction.guild_id)
         await interaction.response.send_message(view=view, file=file, allowed_mentions=NO_PINGS)
         act("^", interaction.channel, interaction.user, f"summoned {by[:30] or 'at random'}")
+
+    @app_commands.command(name="fragment", description="A line from the Outside's library: at random, on a subject, or by one author")
+    @app_commands.describe(about="A subject, a question, a word: the closest lines to it (empty: chance)",
+                           author="Only this author's lines")
+    async def fragment_command(self, interaction: discord.Interaction, about: str = "", author: str = "") -> None:
+        named = self.bank.author_named(author) if author else None
+        if author and named is None:
+            await interaction.response.send_message(f"-# Nobody called {_clip(author, 40)} in the library.", ephemeral=True)
+            return
+        quote = self.bank.fragment(about, named)
+        if quote is None:
+            await interaction.response.send_message("-# The library is dark: no quote bank has been built.", ephemeral=True)
+            return
+        await interaction.response.send_message(view=quote_view(quote), allowed_mentions=NO_PINGS)
+        act("^", interaction.channel, interaction.user, f"fragment {quote.id}")
+
+    @fragment_command.autocomplete("author")
+    async def _authors(self, _interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        wanted = current.casefold()
+        return [app_commands.Choice(name=author, value=author) for author in self.bank.authors if wanted in author.casefold()][:25]
 
     @numogram.command(name="aq", description="Anglossic Qabbala: 0-9 at face value, A=10 … Z=35, summed")
     async def aq_command(self, interaction: discord.Interaction, text: str) -> None:

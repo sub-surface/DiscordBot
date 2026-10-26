@@ -154,6 +154,7 @@ def help_embed(bot: PsychographBot, channel_id: int, guild_id: int | None) -> di
             "`/scores debates`: the debate leaderboard",
             "React 🔮 on a message to log it as a prediction · `/scores predictions` to settle them",
             "`/numogram summon` · `aq` · `tx`: the Ccru's demons, Anglossic Qabbala, Tic-Xenotation (and more in #nanospasm)",
+            "`/fragment` *about* *author*: a line from the philosophers' library, on a subject or by one of them",
         )
         + "\nOn my own I sometimes react to a message that lands, drop into a live chat or pick up a question "
         "nobody answered, and post the week's digest on Mondays."
