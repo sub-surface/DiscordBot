@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs"
+import { appendFileSync, copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs"
 import { spawn, spawnSync } from "node:child_process"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -42,7 +42,15 @@ const modalModelPresets = JSON.parse(readFileSync(join(root, "models.json"), "ut
     storageGiB: model.modal.storage_gib ?? modelStorageGiB,
     contextMode: model.chat?.context_mode ?? "full",
   }))
+// /neuron's worker and notebook live next door in the hub (ml/mechinterp); its zoo.json is the bot's live zoo.
+const mechinterp = join(root, "..", "ml", "mechinterp")
+const neuronWorker = join(mechinterp, "neuron_worker.py")
+const hubZoo = join(mechinterp, "zoo.json")
+const bundledZoo = join(root, "data", "neurons.json")
+const neuronApp = "psychograph-neurons"
+const ourApps = new Set(["psychograph", neuronApp])
 const mint = "\x1b[38;5;121m"
+const amber = "\x1b[33m"
 const reset = "\x1b[0m"
 
 function readEnv(name, fallback = "") {
@@ -248,7 +256,7 @@ function showModalBudget() {
     console.log("\nBy app (through yesterday):")
     Object.entries(apps)
       .sort(([, a], [, b]) => b - a)
-      .forEach(([name, cost]) => console.log(`  ${name === "psychograph" ? mint : ""}${name.padEnd(32)} $${cost.toFixed(2)}${reset}`))
+      .forEach(([name, cost]) => console.log(`  ${ourApps.has(name) ? mint : ""}${name.padEnd(32)} $${cost.toFixed(2)}${reset}`))
     const rates = readModalRates()
     const storage = storageGiB * Number(rates.volume_storage_gib_month_cost)
     const hourly = Object.keys(gpus).map((gpu) => `${gpu} $${Number(rates[rateKey(gpu)]).toFixed(2)}`)
@@ -321,6 +329,70 @@ function tailModalLogs() {
   })
 }
 
+function zooNames(path) {
+  try {
+    return Object.keys(JSON.parse(readFileSync(path, "utf8")).neurons)
+  } catch {
+    return null
+  }
+}
+
+function neuronStatus() {
+  try {
+    const app = modalJson(["app", "list"]).find((entry) => entry.description === neuronApp && entry.state === "deployed")
+    if (!app) return "not deployed"
+    const warm = Number(app.tasks) > 0
+    return `deployed ${app.created_at.slice(0, 16)} · ${warm ? `${mint}GPU warm${reset} (billed until it idles out)` : "scaled to zero"}`
+  } catch (error) {
+    return `couldn't ask Modal: ${error.message.split("\n")[0]}`
+  }
+}
+
+async function neuronRig() {
+  const hub = zooNames(hubZoo)
+  const bundled = zooNames(bundledZoo)
+  const inSync = hub && bundled && readFileSync(hubZoo, "utf8") === readFileSync(bundledZoo, "utf8")
+  console.log(`\n${mint}Neuron rig${reset}  ·  /neuron on Qwen3.5-4B (L4, scales to zero after 5 idle minutes)`)
+  console.log(`Worker: ${neuronStatus()}`)
+  console.log(`Zoo: ${hub ? `${hub.length} neurons in ml/mechinterp/zoo.json, read live by the bot` : "ml/mechinterp/zoo.json not found"}`)
+  console.log(`Bundled copy (data/neurons.json): ${bundled ? `${bundled.length} neurons, ${inSync ? "in sync" : `${amber}out of date: s to sync${reset}`}` : "missing"}`)
+  console.log("")
+  console.log("d  Deploy the neuron worker  ·  no GPU starts during deploy")
+  console.log("m  Open the marimo notebook  ·  steer, see what fires, save finds to the zoo (Ctrl+C closes it)")
+  console.log("t  Smoke test  ·  baseline vs Cookie, ALL CAPS, Jesus (billed, ~2 GPU-min)")
+  console.log("b  Benchmark decode speed  ·  and check the push hooks still bite (billed, ~2 GPU-min)")
+  console.log("s  Sync the bundled zoo copy from ml/mechinterp/zoo.json")
+  console.log("l  Follow the worker's logs")
+  console.log("x  Stop the neuron worker deployment")
+  const choice = (await ask("> ")).toLowerCase()
+  if (["d", "t", "b"].includes(choice) && !existsSync(neuronWorker)) {
+    console.log(`\n${neuronWorker} isn't there.`)
+  } else if (choice === "d") {
+    await run(modal, ["deploy", neuronWorker])
+  } else if (choice === "m") {
+    await run("marimo", ["edit", join(mechinterp, "notebook.py")])
+  } else if (choice === "t") {
+    if ((await ask("Type 'test' to run it on a GPU: ")).toLowerCase() === "test") await run(modal, ["run", neuronWorker])
+    else console.log("Cancelled.")
+  } else if (choice === "b") {
+    if ((await ask("Type 'bench' to run it on a GPU: ")).toLowerCase() === "bench") await run(modal, ["run", `${neuronWorker}::bench`])
+    else console.log("Cancelled.")
+  } else if (choice === "s") {
+    if (!hub) console.log("\nNothing to sync from.")
+    else {
+      copyFileSync(hubZoo, bundledZoo)
+      console.log(`\nCopied ${hub.length} neurons to data/neurons.json.`)
+    }
+  } else if (choice === "l") {
+    await run(modal, ["app", "logs", neuronApp, "--follow"])
+  } else if (choice === "x") {
+    if ((await ask("Type 'stop' to stop it: ")) === "stop") await run(modal, ["app", "stop", neuronApp, "--yes"])
+    else console.log("Cancelled.")
+  } else {
+    console.log("Choose d, m, t, b, s, l or x.")
+  }
+}
+
 while (true) {
   console.clear()
   console.log(`${mint}(｡•̀ᴗ-)✧  PSYCHOGRAPH${reset}`)
@@ -338,6 +410,7 @@ while (true) {
   console.log("8  Config  ·  backend and context")
   console.log("9  Bot stats  ·  replies, speed, cold starts")
   console.log(`b  Benchmark ${process.env.MODAL_GPU}  ·  one cold boot + 4 fixed prompts, ~1-2 GPU-min`)
+  console.log("n  Neuron rig  ·  /neuron's Qwen3.5-4B worker, notebook and zoo")
   console.log("t  Run tests")
   console.log("q  Quit\n")
 
@@ -386,11 +459,13 @@ while (true) {
     const confirmation = await ask(`\nBenchmark on a ${process.env.MODAL_GPU} as a temporary app (billed, a few cents)? Type 'bench' to confirm: `)
     if (confirmation.toLowerCase() === "bench") await run(modal, ["run", "modal_app.py::bench"])
     else console.log("\nBenchmark cancelled.")
+  } else if (choice === "n") {
+    await neuronRig()
   } else if (choice === "t") {
     console.log("")
     await run(python, [...pythonPrefix, "-m", "unittest", "discover", "-s", "tests", "-t", "."])
   } else {
-    console.log("\nChoose 1 through 9, b, t, or q.")
+    console.log("\nChoose 1 through 9, b, n, t, or q.")
   }
 
   await ask("\nPress Enter to return to the menu.")

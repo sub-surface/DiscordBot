@@ -40,7 +40,7 @@ class BotTests(unittest.TestCase):
         self.assertEqual(
             names,
             {"ask", "quick", "persona", "persona-manage", "status", "verbosity", "reset", "timeout", "bot", "scores",
-             "sound", "chess", "help", "duel", "santi-slop", "roll", "character", "world", "tarot", "numogram", "fragment"},
+             "sound", "chess", "help", "duel", "santi-slop", "roll", "character", "world", "tarot", "numogram", "fragment", "neuron"},
         )
         self.assertEqual(
             {c.name for c in self.bot.tree.get_commands(type=discord.AppCommandType.message)},
@@ -185,7 +185,7 @@ class BotTests(unittest.TestCase):
 
         self.assertIn("mochi", embed.description)
         self.assertIn("🔁", "".join(field.value for field in embed.fields))
-        self.assertEqual([field.name for field in embed.fields], ["Chat (the model)", "Tools (checked instantly, written by the model)", "Quick (instant, no model)", "Party (instant, no model)", "Duels and scores", "Personas and settings", "Reactions"])
+        self.assertEqual([field.name for field in embed.fields], ["Chat (the model)", "Tools (checked instantly, written by the model)", "Quick (instant, no model)", "Party (instant, no model)", "Duels and scores", "Neurons (Qwen3.5-4B, its own GPU)", "Personas and settings", "Reactions"])
         self.assertNotIn("Psychograph", str(embed.to_dict()))
         self.assertTrue(all(len(field.value) <= 1024 for field in embed.fields))
 

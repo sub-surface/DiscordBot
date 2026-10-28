@@ -6,7 +6,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from .. import halloween
+from .. import halloween, neurons
 from ..bot import PsychographBot
 from ..render import EMBED_COLOR, model_summary
 
@@ -88,6 +88,37 @@ def game_embed(bot: PsychographBot) -> discord.Embed:
     return embed
 
 
+def neurons_embed() -> discord.Embed:
+    """The /neuron cheat sheet: what a push is, how to write one, and the named neurons (read live from the zoo)."""
+    embed = discord.Embed(
+        title="Neurons",
+        description=(
+            "`/neuron` asks **Qwen3.5-4B**, a small open model, with some of its 294,912 MLP neurons turned up or down, "
+            "or in a thinker's voice. Push the right one and it gets a one-track mind: every answer turns to cookies, aliens or ALL CAPS."
+        ),
+        color=EMBED_COLOR,
+    )
+    embed.add_field(name="Ask", value=_lines(
+        "`/neuron ask prompt:` *what's for dinner?* `zoo:` *Cookie*: a named neuron (pick from the suggestions)",
+        "`push:` *L24 N3102 +0.8*: any neuron: **L**ayer 0–31, **N**euron 0–9215, then the dose (±"
+        f"{neurons.MAX_DOSE} at most; + and − do different things). Several with `;`",
+        "`voice:` *Heidegger*: hold it in a thinker's voice. Works alone or with neurons",
+    ), inline=False)
+    embed.add_field(name="Then play with it", value=_lines(
+        "🎲 again · 🔉🔊 softer, harder · 🔃 flip the poles · ⚖️ compare with no push · 🧩 stack another neuron · 🔍 the neurons' cards",
+        "⚡ marks a lever: a neuron whose words tend to show up in the reply. Press someone else's buttons to fork a rig of your own",
+    ), inline=False)
+    embed.add_field(name="Explore", value=_lines(
+        "`/neuron dip`: a lucky dip, a random sharp neuron with its word hidden. Guess, then peek",
+        "`/neuron zoo`: browse the named neurons · `/neuron card` *24 3102*: what one reads and writes, instantly",
+    ), inline=False)
+    zoo = neurons.load_zoo()
+    if zoo:
+        embed.add_field(name=f"The zoo ({len(zoo)})", value=", ".join(zoo)[:1024], inline=False)
+    embed.set_footer(text="/neuron runs on its own GPU: the first ask after a quiet spell takes 1–2 minutes · atlas: neurons.subsurfaces.net")
+    return embed
+
+
 def help_embed(bot: PsychographBot, channel_id: int, guild_id: int | None) -> discord.Embed:
     """The /help card: what to type, grouped by what answers it (the model, tools, or instantly)."""
     persona = bot.personas.for_channel(channel_id, guild_id)
@@ -162,6 +193,13 @@ def help_embed(bot: PsychographBot, channel_id: int, guild_id: int | None) -> di
         inline=False,
     )
     embed.add_field(
+        name="Neurons (Qwen3.5-4B, its own GPU)",
+        value=_lines(
+            "`/neuron ask` *prompt* `zoo:` *Cookie*: a small model with a neuron turned up or down · `/neuron dip` · **`/help neurons`**",
+        ),
+        inline=False,
+    )
+    embed.add_field(
         name="Personas and settings",
         value=_lines(
             "`/persona` *name*: switch this channel's persona · `/persona-manage`: create, edit or picture one",
@@ -213,9 +251,10 @@ class HelpCommands(commands.Cog):
 
     @app_commands.command(name="help", description="What I can do and how to use it")
     @app_commands.describe(topic="A cheat sheet for one feature")
-    @app_commands.choices(topic=[app_commands.Choice(name="dice", value="dice"), app_commands.Choice(name="game", value="game")])
+    @app_commands.choices(topic=[app_commands.Choice(name=name, value=name) for name in ("dice", "game", "neurons")])
     async def help(self, interaction: discord.Interaction, topic: str = "") -> None:
         embed = (dice_embed(self.bot) if topic == "dice" else game_embed(self.bot) if topic == "game"
+                 else neurons_embed() if topic == "neurons"
                  else help_embed(self.bot, interaction.channel_id, interaction.guild_id))
         await interaction.response.send_message(embed=embed, ephemeral=True)
 

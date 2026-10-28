@@ -118,9 +118,9 @@ class PsychographBot(commands.Bot):
             self.dispatch("model_warm")
 
     async def load_cogs(self) -> None:
-        from .cogs import chat, chess, fun, halloween as spooky, help, ops, outside, party, personas, quick, settings, slop, soundboard, tools
+        from .cogs import chat, chess, fun, halloween as spooky, help, neurons, ops, outside, party, personas, quick, settings, slop, soundboard, tools
 
-        for module in (chat, chess, fun, spooky, help, ops, outside, party, personas, quick, settings, slop, soundboard, tools):
+        for module in (chat, chess, fun, spooky, help, neurons, ops, outside, party, personas, quick, settings, slop, soundboard, tools):
             await module.setup(self)
 
     def ignoring(self, guild_id: int | None, user_id: int) -> float | None:
